@@ -10,6 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 oj-diag = { path = "crates/diag" }
+oj-lexer = { path = "crates/lexer" }
 oj-source = { path = "crates/source" }
 oj-testsupport = { path = "crates/testsupport" }
 

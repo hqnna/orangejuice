@@ -1,9 +1,11 @@
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::error::ErrorKind;
 use clap::{ArgAction, Args, Parser, Subcommand};
+use oj_diag::SourceMap;
+use oj_lexer::Interner;
 
 pub const VERSION_LINE: &str = concat!(
   "orangejuice ",
@@ -181,12 +183,40 @@ fn execute(cli: &Cli) -> u8 {
     Some(Command::Build(_)) => not_implemented("oj build", "M5"),
     Some(Command::Run(_)) => not_implemented("oj run", "M5"),
     Some(Command::Dump { stage }) => match stage {
-      DumpStage::Tokens { .. } => not_implemented("oj dump tokens", "M1"),
+      DumpStage::Tokens { file } => dump_tokens(file),
       DumpStage::Ast { .. } => not_implemented("oj dump ast", "M2"),
       DumpStage::Ir { .. } => not_implemented("oj dump ir", "M5"),
       DumpStage::Asm { .. } => not_implemented("oj dump asm", "M5"),
     },
     None => EXIT_USAGE,
+  }
+}
+
+/// `oj dump tokens`: lexes one file and prints its token stream. Diagnostics go
+/// to stderr in the reference layout; only an error makes the command fail.
+fn dump_tokens(path: &Path) -> u8 {
+  let sources = SourceMap::new();
+  let id = match oj_source::load_file(&sources, path) {
+    Ok(id) => id,
+    Err(error) => {
+      eprintln!("error: could not read {}: {error}", path.display());
+      return EXIT_FAILURE;
+    }
+  };
+
+  let file = sources.file(id);
+  let interner = Interner::new();
+  let lexed = oj_lexer::tokenize(file.bytes(), id, &interner);
+
+  print!("{}", oj_lexer::dump_tokens(&lexed.tokens, &file, &interner));
+  for diagnostic in &lexed.diagnostics {
+    eprint!("{}", oj_diag::render(diagnostic, &file));
+  }
+
+  if lexed.has_errors() {
+    EXIT_FAILURE
+  } else {
+    EXIT_SUCCESS
   }
 }
 
@@ -243,10 +273,36 @@ mod tests {
   #[test]
   fn unimplemented_stages_fail_rather_than_pretending_to_work() {
     assert_eq!(exit_code(["oj", "build", "first.jai"]), EXIT_FAILURE);
+    assert_eq!(exit_code(["oj", "dump", "ast", "first.jai"]), EXIT_FAILURE);
+  }
+
+  fn dump_tokens_of(source: &str) -> (u8, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("input.jai");
+    std::fs::write(&path, source).expect("the input should be writable");
+    (
+      exit_code(["oj", "dump", "tokens", path.to_str().unwrap()]),
+      dir,
+    )
+  }
+
+  #[test]
+  fn dump_tokens_succeeds_on_a_well_formed_file() {
+    assert_eq!(dump_tokens_of("main :: () {}\n").0, EXIT_SUCCESS);
+  }
+
+  #[test]
+  fn dump_tokens_fails_on_a_lexer_error_or_a_missing_file() {
+    assert_eq!(dump_tokens_of("x :: 1.2.3;\n").0, EXIT_FAILURE);
     assert_eq!(
-      exit_code(["oj", "dump", "tokens", "first.jai"]),
+      exit_code(["oj", "dump", "tokens", "no/such/file.jai"]),
       EXIT_FAILURE
     );
+  }
+
+  #[test]
+  fn dump_tokens_tolerates_a_file_that_only_warns() {
+    assert_eq!(dump_tokens_of("x :: \"a\\q\";\n").0, EXIT_SUCCESS);
   }
 
   #[test]

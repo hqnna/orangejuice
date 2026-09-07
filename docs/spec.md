@@ -138,7 +138,7 @@ Environment: `OJ_JAI_DIR` (base path containing `modules/`, default: `vendor/jai
 ### 6.1 Data model
 
 - **Source**: files are memory-mapped; `SourceId`/`Span` (byte offsets) with lazily computed line/column; `Source_Code_Location`s use 1-based line and character numbers like jai.
-- **Tokens**: `oj-lexer` produces the token kinds of `Jai_Lexer.Token_Type` with the same numeric values (so `Jai_Lexer` and `Program_Print` agree with us), plus value flags (`HERE_STRING`, `HEX`, `BINARY`, `FLOAT`, `REQUIRES_FLOAT64`, `DEFAULTS_TO_FLOAT64`, `OVERFLOWED`) and the backtick flag; identifiers interned in a global `Symbol` table.
+- **Tokens**: `oj-lexer` produces the token kinds of `Jai_Lexer.Token_Type` with the same numeric values (so `Jai_Lexer` and `Program_Print` agree with us), plus value flags (`HERE_STRING`, `HEX`, `BINARY`, `FLOAT`, `REQUIRES_FLOAT64`, `DEFAULTS_TO_FLOAT64`, `OVERFLOWED`) and the backtick flag; identifier and note names interned as `Symbol`s in the compilation-wide `oj-lexer::Interner` (names are bytes, since a note is whatever `@` was followed by).
 - **AST**: arena-allocated nodes with `NodeId`s; node kinds mirror `Code_Node.Kind` values (**C§5.3**) so that exporting to `Code_*` structs is a projection, not a translation; every node stores `Span`, `node_flags`, and a `TypeId` slot filled by sema; declarations are `NodeId`s owned by scopes.
 - **Types**: interned `TypeId`s in `oj-types` with structural hashing for pointers/arrays/procedures and nominal identity for structs/enums/variants; layout computed on demand (sizes/alignment per **L§3.14**, `#place`, `#align`, `#no_padding`, unions); `Type_Info` objects materialized into the compile-time read-only segment on first `type_info()` use (transitively), giving stable addresses used both by the JIT and by the emitted executable (relocated on write).
 - **Scopes**: `oj-scope` implements the tree of **L§4.2** with per-scope hash maps from `Symbol` to declaration lists (overload sets), the import/`using`/`#insert` "pending providers" mechanism used for lookup waits, and `#scope_*` state per file.
@@ -191,7 +191,7 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 ## 8. Testing strategy
 
 1. **Unit tests** in every crate (lexer token tables, number parsing edge cases from **L§2.6**, here-strings, backslash identifiers; parser precedence/`<<` ambiguity/all statement forms; layout computations against sizes recorded from the vendor modules; Match rules; constant folding; overload scoring; polymorph solving cases from `how_to/100–120`; IR passes; ABI classification; link-line construction).
-2. **Corpus tests** (`tests/corpus`): `oj dump tokens` and `oj dump ast` over all 702 `.jai` files under `vendor/jai` must succeed; AST round-trips through the Program_Print-style printer and re-parses to an identical tree (snapshot with `insta`).
+2. **Corpus tests** (`crates/<owning crate>/tests/corpus.rs`, skipped with a message when `vendor/jai` is absent): `oj dump tokens` and `oj dump ast` over all 702 `.jai` files under `vendor/jai` must succeed; AST round-trips through the Program_Print-style printer and re-parses to an identical tree (snapshot with `insta`).
 3. **how_to suite**: every `how_to/*.jai` compiles and runs; expected stdout captured as golden files (generated once with `nix run ./vendor/jai` when the distribution is present, otherwise reviewed by hand) — this is the primary acceptance test.
 4. **Examples suite**: `examples/*` that are Linux-buildable (`hash_table_test`, `reduce`, `code_type`, `self_inspect`, `here_string_detector`, `runtime_global_data_search`, `import_replacement`, `add_build_string_into_specific_scope`, `output_types`, `dll`, `module_info`, `dump_binary_file`, `find_symbol`, `treemap`, `subtitles`, `system_info`, `invaders`/`skeletal-animation`/`codex_view` when X11/GL are available in the sandbox).
 5. **Metaprogram/ABI tests**: struct layouts of `Compiler` types compared against `size_of`/`offset_of` computed by the compiled vendor module; message sequences for a small program compared with the documented order (FILE before code, IMPORT once per instantiation, phases).
@@ -203,7 +203,7 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 | # | Milestone | Acceptance |
 |---|---|---|
 | M0 | Scaffold: workspace, crates, `oj` CLI skeleton (`help`, `version`), nix flake, CI check script | `nix flake check` green; `oj version` prints |
-| M1 | Lexer | `oj dump tokens` on all vendor files; token stream equals `Jai_Lexer` output for the vendor corpus (cross-checked once the JIT exists, snapshot until then) |
+| M1 | Lexer | **done.** `oj dump tokens` lexes all 702 vendor files without an error; the token stream is byte-identical to `Jai_Lexer`'s on 691 of them, and the 11 that differ are the exponent literals `Jai_Lexer` gets wrong (**C§5.1**), where orangejuice matches the reference compiler |
 | M2 | Parser + AST + printer | `oj dump ast` on all vendor files; round-trip snapshots |
 | M3 | Scopes, imports, `#load`, `#scope_*`, module resolution, `#if` on constants | resolves every file of the vendor tree into scope trees; undeclared identifier diagnostics batch |
 | M4 | Types & layout, constants, Match, casts, overloads, structs/enums/variants, Preload types | `how_to/001–030` typecheck |
@@ -221,6 +221,7 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 - `#asm` is supported on x86-64 only (the only target); the register allocator follows **L§15** rules (no spilling; lifetime-based; pinning).
 - Overload scoring uses the documented ordering; all vendor call sites are regression tests.
 - Reverse `for` ranges without `#v2` are errors (jai warns); `?`/`.?` are errors; bare expression statements warn.
+- The lexer follows the reference *compiler*, not the shipped `Jai_Lexer` module, wherever the two disagree (**C§5.1** lists the two cases: exponent literals and the token order after `#`). Token spans are half-open byte ranges over the whole text a token was made from — including a leading backtick and the `#string IDENT … IDENT` framing of a here-string — rather than the reference's `l0,c0`–`l1,c1` pairs, which line and column are derived from on demand.
 - The default `import_path` is `[<first file dir>/modules, $OJ_JAI_DIR/modules]`; `-import_dir` prepends.
 - Threads: the compiler is multi-threaded from the start (scheduler + JIT threads + metaprogram thread); all shared structures are `Send + Sync` by design (arenas behind `RwLock`s or per-phase ownership).
 - Error text matches jai where documented; otherwise the same information (wanted/given types, sites, chains) is presented.

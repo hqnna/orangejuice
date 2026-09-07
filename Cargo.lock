@@ -226,6 +226,10 @@ name = "oj-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "oj-diag",
+ "oj-lexer",
+ "oj-source",
+ "tempfile",
 ]
 
 [[package]]

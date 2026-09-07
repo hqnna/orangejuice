@@ -12,3 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+oj-diag.workspace = true
+oj-lexer.workspace = true
+oj-source.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

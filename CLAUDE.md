@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 orangejuice (`oj`) is a cleanroom reimplementation of the **Jai** programming language (reference beta 0.2.009) in Rust nightly, targeting **Linux x86_64 only**, with a single LLVM 19 backend via `inkwell` and LLVM ORC JIT for compile-time execution.
 
-**Current state: M0 (scaffold) has landed.** The nix flake, the cargo workspace and the sixteen crates of `docs/spec.md` §4 exist. `oj version` and `oj help` work; every other subcommand exits 1 with a "not implemented yet" message naming the milestone that will implement it. Apart from `crates/cli` (the clap CLI) and `crates/testsupport` (vendor discovery) the crates are still empty — M1 (lexer) is next.
+**Current state: M1 (lexer) has landed.** The nix flake, the cargo workspace and the sixteen crates of `docs/spec.md` §4 exist. `oj version`, `oj help` and `oj dump tokens` work; every other subcommand exits 1 with a "not implemented yet" message naming the milestone that will implement it. Filled in so far: `crates/cli` (the clap CLI), `crates/testsupport` (vendor discovery), `crates/diag` (spans, source map, diagnostics and their reference-format rendering), `crates/source` (memory-mapped loading) and `crates/lexer` (tokens, the lexer, the name interner, the token dump). The rest are still empty — M2 (parser + AST) is next.
+
+The lexer follows the reference *compiler*; where the shipped `Jai_Lexer` module disagrees with it, **C§5.1** says which of the two is right. `crates/lexer/tests/corpus.rs` lexes all 702 vendor files, and setting `OJ_TOKEN_STREAM_DIR` makes it write a per-file cross-check dump to compare against a `Jai_Lexer`-based dumper.
 
 
 ## The specs are the source of truth
