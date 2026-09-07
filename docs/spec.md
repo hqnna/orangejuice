@@ -1,0 +1,180 @@
+# orangejuice — Project Specification
+
+orangejuice (`oj`) is a cleanroom implementation of the Jai programming language (beta 0.2.009 semantics) written in Rust nightly, targeting Linux x86_64 with a single LLVM backend (via `inkwell`) and LLVM ORC JIT for compile-time execution. It is built and developed with a Nix flake (flake-parts + fenix + crane). This document defines goals, constraints, architecture, the CLI, the build/test workflow, and the milestone plan. The language it implements is specified in `docs/language.md` (**L**); the behavior of the reference compiler it must be compatible with is specified in `docs/compiler.md` (**C**).
+
+---
+
+## 1. Goals
+
+1. **Compatibility with the reference module tree.** orangejuice must compile the unmodified `modules/` tree shipped with jai beta 0.2.009 (`vendor/jai/modules`, git-ignored): `Preload`, `Runtime_Support`, `Default_Allocator`, `Basic`, `String`, `Math`, `Hash_Table`, `Compiler`, `Default_Metaprogram`, `Metaprogram_Plugins`, `Check`, `Program_Print`, `Code_Visit`, `Jai_Lexer`, `File`, `File_Utilities`, `Process`, `System`, `Thread`, `Atomics`, `Bit_Operations`, `Hash`, `Random`, `Sort`, `Command_Line`, `Text_File_Handler`, `Pool`, `Flat_Pool`, `Bucket_Array`, `Bit_Array`, `Reflection`, `Machine_X64`, `POSIX`, `Linux`, `Socket`, `Window_Creation`/`X11`/`GL`/`Simp`/`Input`/`GetRect` (Linux paths), `Bindings_Generator`, `BuildCpp`, `executable_formats`, `debug_info`, and the rest, using only the language features documented in **L**.
+2. **Compatibility with metaprograms.** Programs drive the build the same way as with jai: the default metaprogram (`Default_Metaprogram.jai`) runs first, plugins work (`-plug Check`, `Program_Print`, `Iprof`...), `#import "Compiler"` exposes the same `Build_Options`, messages and `Code_*` structures with identical layouts, and `#run`/`#insert`/`add_build_string`/`compiler_get_nodes` behave as specified.
+3. **Full language.** Everything in **L**, including polymorphism, macros, `#modify`, `#insert`, `#asm` (x86-64), operator overloading, `#c_call`/`#foreign`/`#library` FFI, context arguments, type variants, `#no_reset`, global data injection, and the three cast syntaxes.
+4. **Correct runtime semantics** on Linux x86_64: System V ABI, the fixed Preload/Runtime_Support layouts, checks and panic messages, stack traces, entry point sequence, linking against system and user libraries.
+5. **Quality.** Every crate unit-tested; `cargo check`, `cargo fmt --check`, `cargo clippy` (no warnings) and `cargo test` pass before every commit; conventional, incremental commits.
+
+## 2. Non-goals (for now)
+
+- Targets other than Linux x86_64 (no Windows/macOS/Android/iOS/WASM/ARM64 output; `Build_Options.os_target`/`cpu_target` other than LINUX/X64 produce a clear error). The `OS`/`CPU` constants are `.LINUX`/`.X64`.
+- The native x64 backend (`backend = .X64` is accepted and mapped to LLVM with a warning).
+- A bytecode interpreter; compile-time execution uses ORC JIT (see §6.5 for the consequences).
+- The interactive bytecode debugger (`-debugger` prints a stack trace and exits).
+- CodeView debug info; `use_visual_studio_message_format`/`natvis` are accepted no-ops.
+- `#dynamic_specialize`, `#cpp_method`/`#cpp_return_type_is_non_pod` beyond Itanium-ABI passthrough, relative pointers (removed from the language anyway).
+- Performance parity with the reference compiler in the first releases (correctness first; architecture must not preclude it).
+
+## 3. Project constraints
+
+| Area | Rule |
+|---|---|
+| Language | Rust nightly (pinned via fenix in the flake); edition 2024 |
+| Toolchain | Nix flake with `flake-parts`, `fenix` (nightly toolchain incl. `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`) and `crane` (builds, checks, tests); exactly three Nix files: `flake.nix` (+ generated `flake.lock`), `nix/shell.nix`, `nix/package.nix`; no Nix formatter; the nix files land in the first code commit |
+| LLVM | LLVM 19 from nixpkgs (`llvmPackages_19`), `inkwell` with the matching `llvm19-1` feature; the `llvm-sys` build uses `LLVM_SYS_191_PREFIX` exported by the dev shell and package |
+| Style | 2-space indentation everywhere (Rust via `rustfmt.toml` `tab_spaces = 2`, Nix, Markdown, JSON, TOML); avoid comments in code (names and tests carry the meaning); doc comments only on public crate APIs where a name cannot |
+| Workspace | Cargo workspace; crates under `crates/<name>` (directory has no prefix), Cargo package names `oj-<name>`; the binary crate is `crates/cli` producing the `oj` executable |
+| Dependencies | prefer well-maintained latest crates over hand-rolled code: `clap` (derive), `inkwell`, `cc` (link driver), `pkg-config`, `libloading` (dlopen for compile-time FFI), `memmap2`, `rayon`/`crossbeam` (scheduler), `thiserror`/`miette`-style diagnostics (own crate `oj-diag`), `indexmap`, `smallvec`, `bumpalo`/`typed-arena`, `insta` (snapshot tests), `pretty_assertions`, `tempfile`, `walkdir`, `object` (inspecting outputs in tests) |
+| Linking | drive the system linker through the `cc` crate's tool discovery (`cc`/`clang` as the link driver); `#library,system` names resolved with the `pkg-config` crate when a `.pc` file exists, else by `-l<name>`; no bundled LLD |
+| Commits | conventional commits (`feat(lexer): …`, `fix(sema): …`, `docs: …`, `chore: …`, `test: …`, `build: …`); one logical change per commit; `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` must pass first |
+| License | MIT (`LICENSE` at the root; crate manifests `license = "MIT"`) |
+| Vendor | `vendor/jai/` is git-ignored and required for integration tests (`OJ_JAI_DIR` overrides the location) |
+
+## 4. Repository layout
+
+```
+flake.nix  flake.lock  nix/shell.nix  nix/package.nix
+Cargo.toml  Cargo.lock  rustfmt.toml  clippy.toml  LICENSE  README.md
+docs/language.md  docs/compiler.md  docs/spec.md
+crates/
+  cli/        oj           clap-derive CLI (help, version, build, run, dump)
+  driver/     oj-driver    workspaces, Build_Options, default metaprogram bootstrap, link step, message loop plumbing
+  diag/       oj-diag      diagnostics: source map, spans, rendering (ANSI / VS format), error codes, collection
+  source/     oj-source    source loading, file/module resolution, import paths, `.added_strings` writing
+  lexer/      oj-lexer     tokens (mirrors Jai_Lexer.Token_Type), lexer, here-strings, notes, backslash identifiers
+  syntax/     oj-syntax    AST (arena, mirrors Code_Node kinds), parser (precedence climbing), pretty printer for `dump ast`
+  scope/      oj-scope     scope tree, declarations, name lookup with dependency waits, `using`, `#scope_*`, placeholders
+  types/      oj-types     type representation, interning, Type_Info construction and layout (sizes/alignment), ABI classification
+  sema/       oj-sema      typechecker: Match/inference, constants and folding, polymorph solver, `#modify`, overload resolution, casts, `#if`, macros/`#insert`/for_expansion expansion, the work-item scheduler
+  ir/         oj-ir        the compiler IR (SSA-like, typed, backend-independent "bytecode"): lowering from checked AST, inliner, deduplicator, DCE, check insertion, desugaring of calling conventions
+  codegen/    oj-codegen   inkwell lowering of IR to LLVM modules, target machine, object emission, DWARF, split modules, `#asm`/`#bytes` via module-level asm / raw bytes, intrinsics
+  jit/        oj-jit       ORC JIT for compile-time execution: symbol resolution into compiler-owned data segments, `#compiler` procedure trampolines, dlopen'd `#foreign` symbols (libloading), stack-trace/crash capture
+  runtime/    oj-runtime   compile-time data segments (writable/no-reset/read-only/bss/user), global data reset, pointer remapping, type table, Runtime_Info, `#no_reset`
+  meta/       oj-meta      the `Compiler` module surface: message structs (layout-identical to Compiler.jai), Code_* export/import (AST ↔ Code_Node), `compiler_*` procedures, workspaces, plugins glue
+  link/       oj-link      object collection, library resolution (`#library`, `#system_library`, pkg-config), link line construction with `cc`, custom link command support
+  testsupport/ oj-testsupport  shared helpers for integration tests (vendor discovery, golden files)
+tests/        workspace-level integration tests (compile how_to/ and examples/ from the vendor tree; golden outputs)
+```
+
+Each crate has its own `tests/` and `#[cfg(test)]` modules; no functionality lands without unit tests.
+
+## 5. Command-line interface (`oj`)
+
+`oj` is a clap-derive CLI with subcommands. Every subcommand accepts jai-compatible metaprogram options after the file, so existing invocations translate 1:1 (`jai first.jai - -android` → `oj build first.jai - -android`).
+
+```
+oj help                                  # clap help (also `oj --help`, `oj <cmd> --help`)
+oj version                               # prints "orangejuice <semver> (jai beta 0.2.009 compatible, LLVM 19)"; also `--version`
+oj build <file.jai> [jai-style options]  # compile: runs the default metaprogram unless the file's #run sets up its own workspaces (metaprograms override the default build exactly as in jai)
+oj run   <file.jai> [jai-style options] [-- <program args>]   # build, then execute the produced executable with the given args
+oj dump tokens <file.jai>                # lexer output (one token per line: kind, span, value/flags), for the file only
+oj dump ast    <file.jai>                # parsed AST (Program_Print-compatible source form, plus a tree form with --tree)
+oj dump ir     <file.jai> [--proc NAME]  # oj-ir listing for all (or one) live procedures after typechecking
+oj dump asm    <file.jai> [--proc NAME]  # LLVM IR (--llvm) or target assembly of the generated modules
+```
+
+jai-style options supported by `build`/`run` (parsed by orangejuice's Rust reimplementation of the argument handling that `Default_Metaprogram.jai` performs, then forwarded to the real `Default_Metaprogram` module which runs as the metaprogram): `-` (user args → `compile_time_command_line`), `-plug NAME`, `-no_check`, `-no_check_bindings`, `-check_bindings`, `-release`, `-very_debug`, `-no_inline`, `-quiet`, `-x64` (warning: LLVM used), `-llvm`, `-no_cwd`, `-no_dce`, `-no_split`, `-output_ir`, `-debug_for`, `-msvc_format`, `-natvis`, `-no_backtrace_on_crash`, `-version`, `-exe NAME`, `-output_path P`, `-add CODE`, `-run EXPR`, `-debugger`, `-context_size N`, `-import_dir DIR`, `-no_color`, `-verbose`, `-help`; compiler-level `--- meta MODULE` / `-- meta` and `--- import_dir DIR` select an alternative metaprogram. Unknown options are passed to plugins. `oj build` with no file prints usage. Exit codes: 0 success, 1 compilation/link failure, 2 usage error. Diagnostics go to stderr in the reference format (**C§12**), colored when stderr is a TTY unless `-no_color`.
+
+Environment: `OJ_JAI_DIR` (base path containing `modules/`, default: `vendor/jai` relative to the current working directory or the path baked in at build time via nix), `OJ_LOG` (tracing filter), `OJ_THREADS` (scheduler threads, default = cores).
+
+## 6. Architecture
+
+### 6.1 Data model
+
+- **Source**: files are memory-mapped; `SourceId`/`Span` (byte offsets) with lazily computed line/column; `Source_Code_Location`s use 1-based line and character numbers like jai.
+- **Tokens**: `oj-lexer` produces the token kinds of `Jai_Lexer.Token_Type` with the same numeric values (so `Jai_Lexer` and `Program_Print` agree with us), plus value flags (`HERE_STRING`, `HEX`, `BINARY`, `FLOAT`, `REQUIRES_FLOAT64`, `DEFAULTS_TO_FLOAT64`, `OVERFLOWED`) and the backtick flag; identifiers interned in a global `Symbol` table.
+- **AST**: arena-allocated nodes with `NodeId`s; node kinds mirror `Code_Node.Kind` values (**C§5.3**) so that exporting to `Code_*` structs is a projection, not a translation; every node stores `Span`, `node_flags`, and a `TypeId` slot filled by sema; declarations are `NodeId`s owned by scopes.
+- **Types**: interned `TypeId`s in `oj-types` with structural hashing for pointers/arrays/procedures and nominal identity for structs/enums/variants; layout computed on demand (sizes/alignment per **L§3.14**, `#place`, `#align`, `#no_padding`, unions); `Type_Info` objects materialized into the compile-time read-only segment on first `type_info()` use (transitively), giving stable addresses used both by the JIT and by the emitted executable (relocated on write).
+- **Scopes**: `oj-scope` implements the tree of **L§4.2** with per-scope hash maps from `Symbol` to declaration lists (overload sets), the import/`using`/`#insert` "pending providers" mechanism used for lookup waits, and `#scope_*` state per file.
+- **Constants**: `ConstValue` (integers with width/signedness or *unhardened* literal, float64 with defaulting flags, bool, string, pointer-to-global+offset, Type, Code, procedure, struct/array aggregates); folding rules in **L§5.11**.
+
+### 6.2 Scheduler (`oj-sema`)
+
+Work items (declarations, headers, bodies, structs, enums, `#run`s, `#if`s, imports, inserts, placeholders, polymorph instantiations) run on a thread pool. An item that hits an unresolved dependency records the dependency (declaration id, struct completeness, `#run` result, placeholder, or "any provider of name X in scope S") and suspends; completion of a dependency re-queues waiters. Deadlock/quiescence detection produces circular-dependency errors listing the cycle, and batched undeclared-identifier errors. The message loop with the metaprogram (**C§3**) is integrated as back-pressure: `TYPECHECKED` batches are queued to the metaprogram thread and the compiler waits for `compiler_wait_for_message` to consume them before continuing to the next batch, exactly as the reference does.
+
+### 6.3 Typechecker (`oj-sema`)
+
+Implements **L§5.10** Match, the downward inference passes (integer literals, unknown-enum unary dots, untyped literals, `null`), casts (**L§5.6**) with all modifiers and the three syntaxes, overload resolution (**L§7.5**, **C§6.4**) with scored candidates and ambiguity errors that print argument types, polymorph solving/instantiation/dedup (**C§6.3**) with a program-wide cache keyed by (source header, constants), `#modify` execution through the JIT, `#if`/`#ifx` evaluation, macro expansion (hygiene + backticks + `#insert` variants + loop-control remapping + `#caller_code`/`#caller_location`), `for_expansion` lookup, `using`/`#as` conversions, `,,` context arguments, `#discard`, `#must` (checked in IR generation), quick lambdas, struct literal/array literal typing, `#place`/`#align` layout, enum value assignment, `#specified`/`#complete`, struct initializers, variants, `Any` boxing, `#exists`, `#this`, `#procedure_name`, `#compile_time`, notes attachment, and every diagnostic string listed in **C§12**.
+
+### 6.4 IR (`oj-ir`)
+
+A typed, backend-neutral instruction set that plays the role of jai's bytecode: virtual registers, explicit memory ops with sizes, calls with the Jai convention (hidden context pointer, hidden return pointers, big args by pointer), `#c_call` marshalling markers, string-compare, bounds/cast/null/overflow check instructions (lowered to calls into Runtime_Support), stack-trace node push/pop, `defer` expansion, `push_context` copy/pop, `#asm` and `#bytes` blobs, intrinsics. Passes: DCE (**L§11.6**), inliner (`inline`/`no_inline`, never across `#asm`), deduplication by IR hash (polymorph merge), initializer emission policy (`max_bytecode_instructions_for_inlined_initializer`), `#dump` printing (`oj dump ir` and `Message_Debug_Dump`).
+
+### 6.5 Compile-time execution (`oj-jit`, `oj-runtime`)
+
+- Each `#run`/`#assert`/`#modify`/metaprogram procedure is lowered to IR → LLVM → ORC JIT (`LLJIT` with a per-workspace dylib), lazily materialized per procedure. Globals referenced by JIT code resolve to the compiler-owned **data segments** (`oj-runtime`): writable, writable-no-reset, read-only (literals, type table, `Source_Code_Location`s), BSS, user segments; the same bytes are written into the executable at the end (writable data restored from a pre-`#run` backup except `#no_reset`; pointers remapped by relocation tables recorded when literals/globals are placed). `add_global_data`/`add_data_segment` allocate in these segments.
+- `#foreign` procedures with a library are `dlopen`ed (`libloading`) and bound by symbol; library-less `#foreign`/`#elsewhere` are not callable at compile time (error as in jai). `#compiler` procedures bind to Rust trampolines in `oj-meta`. `#asm` blocks are assembled by LLVM's integrated assembler through module-level inline asm and are callable at compile time.
+- **Stalls**: the reference interpreter can suspend a `#run` mid-execution when it touches an unresolved declaration. orangejuice computes the transitive dependency closure of a `#run`'s procedure before JIT-compiling it and schedules the run only when the closure is complete; a `#run` whose closure cannot complete is reported as a circular dependency (with the chain). `#run,stallable` is treated identically but is scheduled after non-stallable runs of the same scope. `compiler_wait_for_message` blocks the metaprogram thread on a channel instead of stalling. This is the one documented semantic deviation; it does not change the outcome of any program in the vendor tree.
+- Checks and panics inside JIT code use the same Runtime_Support procedures as runtime code (compiled from the vendor module into the JIT dylib), so messages are identical; a crash (SIGSEGV etc.) inside JIT code is caught by a signal handler that unwinds to the scheduler and reports a user-level stack trace using the Stack_Trace_Node chain, failing the workspace.
+- The metaprogram itself (`Default_Metaprogram` or `--- meta X`) is JIT-compiled and runs on its own OS thread; workspaces it creates are compiled by the shared scheduler.
+
+### 6.6 Code generation (`oj-codegen`)
+
+inkwell/LLVM 19: one LLVM module per split (procedure batches, `enable_split_modules`), `x86_64-unknown-linux-gnu` target machine with `target_system_cpu`/`features`, data layout consistent with `oj-types`, DWARF 5 debug info (`emit_debug_info`), frame pointers/red zone options, optimization pipelines mapped from `Llvm_Options` (bitcode `O0…OZ`, machine-code `NONE…AGGRESSIVE`, inlining/vectorization/unrolling/tail-call/merge flags), `#intrinsic "llvm.*"` passthrough, `#asm` → module-level assembly functions (or inline asm with the register constraints computed by the `#asm` allocator), `#bytes` → raw byte functions, `#program_export` visibility, `#elsewhere` externs, sections for user data segments, `.o` emission into `.build/`. `oj dump asm` prints the IR or assembly.
+
+### 6.7 Linking (`oj-link`)
+
+Builds the link line of **C§11** using the `cc` crate to locate the driver (`cc`/`clang`): objects + Runtime_Support/Default_Allocator objects (compiled from the vendor modules like any other code) + user libraries (`#library` → path search for `lib<name>.so`/`.a` relative to the declaring file; flags `,no_dll`/`,no_static_library`/`,link_always`) + system libraries (`#system_library`/`#library,system` → `pkg-config --libs <name>` when available, else `-l<name>`; culled when unreferenced) + `additional_linker_arguments` + `append_linker_arguments` + `-rpath '$ORIGIN' -export-dynamic`; output types EXECUTABLE (`-o name`, no extension), DYNAMIC_LIBRARY (`-shared -o lib<name>.so`), STATIC_LIBRARY (`ar rcs`), OBJECT_FILE, NO_OUTPUT; `use_custom_link_command` → `READY_FOR_CUSTOM_LINK_COMMAND` + `compiler_custom_link_command_is_complete`. `OUTPUT_LINK_LINE` echoes the command; the linker exit code is reported in `Message_Phase`.
+
+### 6.8 The `Compiler` module surface (`oj-meta`)
+
+`vendor/jai/modules/Compiler/Compiler.jai` is compiled unmodified; its structs (`Build_Options`, `Message*`, `Code_*`, `Runtime_Info`...) are the ABI between orangejuice and metaprograms. `oj-meta` contains Rust mirrors with `#[repr(C)]` layouts asserted equal (size/offset tests generated from the module by `oj dump`), exports AST nodes to `Code_*` graphs on demand (allocated in the compile-time heap, addresses stable for the workspace), imports modified graphs back (`compiler_modify_procedure`, `compiler_get_code`, `add_build_string` with `#code` scopes), implements every `#compiler` procedure in **C§3.3**, `Intercept_Flags` filtering, phase messages with the object/library lists, `provide_import`/`remap_import`, `compiler_set_type_info_flags`, `get_runtime_info` (also linked into runtime programs through `__runtime_info`), and the plugin bootstrap used by `Metaprogram_Plugins`.
+
+### 6.9 Diagnostics (`oj-diag`)
+
+Error/warning/info with spans, source excerpts with multi-line highlighting, ANSI colors, `use_visual_studio_message_format`, `shorten_filenames_in_error_messages`, `compiler_report` from metaprograms, batched undeclared-identifier reports, polymorph/import/macro chains as "Info:" trailers, and stable error identifiers for tests. Messages match the reference wording wherever it is documented in **C§12** and **L**.
+
+## 7. Nix and build workflow
+
+- `flake.nix`: `flake-parts` `mkFlake`; inputs `nixpkgs`, `flake-parts`, `fenix`, `crane`; `perSystem` for `x86_64-linux`: `packages.default = import ./nix/package.nix { inherit pkgs craneLib llvm; }`, `devShells.default = import ./nix/shell.nix { ... }`, `checks` (crane `cargoClippy`, `cargoFmt`, `cargoTest`, `cargoDoc`), `apps.default` running `oj`. No `formatter` output.
+- `nix/shell.nix`: the fenix nightly toolchain (`rustc`, `cargo`, `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`), `llvmPackages_19.llvm`/`libllvm`/`lld` and `clang` (link driver), `pkg-config`, `zlib`, `libffi`, `libxml2`, `ncurses` (LLVM link deps), `gdb`, `valgrind`; environment: `LLVM_SYS_191_PREFIX`, `OJ_JAI_DIR` default, `RUST_BACKTRACE=1`.
+- `nix/package.nix`: crane `buildPackage` with `src = craneLib.cleanCargoSource ./.`, `buildInputs` LLVM + zlib + libffi + ncurses + libxml2, `nativeBuildInputs` pkg-config, `cargoArtifacts` from `buildDepsOnly`, `doCheck = true`, `meta.license = mit`, `meta.mainProgram = "oj"`.
+- Developer loop: `nix develop` → `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (also exposed as `nix flake check`). `cargo test` includes integration tests that require `vendor/jai` (skipped with a clear message when absent).
+
+## 8. Testing strategy
+
+1. **Unit tests** in every crate (lexer token tables, number parsing edge cases from **L§2.6**, here-strings, backslash identifiers; parser precedence/`<<` ambiguity/all statement forms; layout computations against sizes recorded from the vendor modules; Match rules; constant folding; overload scoring; polymorph solving cases from `how_to/100–120`; IR passes; ABI classification; link-line construction).
+2. **Corpus tests** (`tests/corpus`): `oj dump tokens` and `oj dump ast` over all 702 `.jai` files under `vendor/jai` must succeed; AST round-trips through the Program_Print-style printer and re-parses to an identical tree (snapshot with `insta`).
+3. **how_to suite**: every `how_to/*.jai` compiles and runs; expected stdout captured as golden files (generated once from the reference compiler when available, otherwise reviewed by hand) — this is the primary acceptance test.
+4. **Examples suite**: `examples/*` that are Linux-buildable (`hash_table_test`, `reduce`, `code_type`, `self_inspect`, `here_string_detector`, `runtime_global_data_search`, `import_replacement`, `add_build_string_into_specific_scope`, `output_types`, `dll`, `module_info`, `dump_binary_file`, `find_symbol`, `treemap`, `subtitles`, `system_info`, `invaders`/`skeletal-animation`/`codex_view` when X11/GL are available in the sandbox).
+5. **Metaprogram/ABI tests**: struct layouts of `Compiler` types compared against `size_of`/`offset_of` computed by the compiled vendor module; message sequences for a small program compared with the documented order (FILE before code, IMPORT once per instantiation, phases).
+6. **Runtime tests**: panic messages (bounds/cast/null/overflow), stack traces, `#no_reset`, global data reset, `Runtime_Info` segments, FFI round trips with a C test library built by `cc`, `#asm` (cpuid/rdtsc/syscall write).
+7. **Negative tests**: each documented error message has a test that triggers it and asserts the wording/location.
+
+## 9. Milestones
+
+| # | Milestone | Acceptance |
+|---|---|---|
+| M0 | Scaffold: workspace, crates, `oj` CLI skeleton (`help`, `version`), nix flake, CI check script | `nix flake check` green; `oj version` prints |
+| M1 | Lexer | `oj dump tokens` on all vendor files; token stream equals `Jai_Lexer` output for the vendor corpus (cross-checked once the JIT exists, snapshot until then) |
+| M2 | Parser + AST + printer | `oj dump ast` on all vendor files; round-trip snapshots |
+| M3 | Scopes, imports, `#load`, `#scope_*`, module resolution, `#if` on constants | resolves every file of the vendor tree into scope trees; undeclared identifier diagnostics batch |
+| M4 | Types & layout, constants, Match, casts, overloads, structs/enums/variants, Preload types | `how_to/001–030` typecheck |
+| M5 | IR + LLVM codegen + link: hello world through Runtime_Support/Default_Allocator/Basic `print` | `how_to/001` produces a running executable; `oj run` works |
+| M6 | ORC JIT compile-time execution: `#run`, `#assert`, `#if #run`, `#modify`, `#insert -> string`, data segments, `#no_reset` | `how_to/500–560`, `Basic` module compiles with its `#run`s |
+| M7 | Polymorphism, macros, for_expansion, `#caller_code`, quick lambdas, bakes | `how_to/100–120, 170, 730`, `Hash_Table`, `Bucket_Array`, `Math` |
+| M8 | Metaprogram support: `Compiler` module ABI, workspaces, messages, `Default_Metaprogram` as the driver, `Check` plugin | `how_to/400–499`, `examples/output_types`, `import_replacement`, `add_build_string_into_specific_scope` |
+| M9 | FFI, `#library`/pkg-config, `#asm`, threads, `#c_call` callbacks, POSIX/Socket/File modules | `how_to/900+`, `Thread`, `Process`, `File_Watcher`, `Socket` examples |
+| M10 | Full how_to and examples suites green; DWARF debug info; optimization levels; release quality | all suites; `-release` builds of invaders/codex_view run |
+
+## 10. Design decisions and deviations (summary)
+
+- JIT instead of interpreter (§6.5): `#run` stalls become closure-scheduling; `-debugger` is a stack-trace dump.
+- `Type` values at runtime are `*Type_Info` (as in jai); the read-only segment is shared between JIT and output.
+- `#asm` is supported on x86-64 only (the only target); the register allocator follows **L§15** rules (no spilling; lifetime-based; pinning).
+- Overload scoring uses the documented ordering; all vendor call sites are regression tests.
+- Reverse `for` ranges without `#v2` are errors (jai warns); `?`/`.?` are errors; bare expression statements warn.
+- The default `import_path` is `[<first file dir>/modules, $OJ_JAI_DIR/modules]`; `-import_dir` prepends.
+- Threads: the compiler is multi-threaded from the start (scheduler + JIT threads + metaprogram thread); all shared structures are `Send + Sync` by design (arenas behind `RwLock`s or per-phase ownership).
+- Error text matches jai where documented; otherwise the same information (wanted/given types, sites, chains) is presented.
+
+## 11. Definition of done for each change
+
+A change is complete when: the code follows the style rules; unit tests cover it; `cargo check`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` pass inside `nix develop`; affected corpus/how_to tests are updated; the commit message is conventional and describes one logical change; documentation (`docs/*.md`) is updated when behavior or architecture changes.
