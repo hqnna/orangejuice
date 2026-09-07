@@ -5,3 +5,14 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+indexmap.workspace = true
+oj-diag.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+oj-source.workspace = true
+oj-testsupport.workspace = true
+walkdir.workspace = true

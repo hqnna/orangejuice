@@ -1,14 +1,17 @@
 { pkgs, craneLib, llvm }:
 
 let
-  # cleanCargoSource drops rustfmt.toml and clippy.toml, which the fmt and
-  # clippy checks need in order to see the workspace style rules.
+  # cleanCargoSource keeps only Rust sources, dropping rustfmt.toml and
+  # clippy.toml, which the fmt and clippy checks need in order to see the
+  # workspace style rules, and the .jai fixtures and insta snapshots the tests
+  # read.
   src = pkgs.lib.cleanSourceWith {
     src = ../.;
     name = "orangejuice-source";
     filter = path: type:
       craneLib.filterCargoSources path type
-      || builtins.match ".*/(rustfmt|clippy)\\.toml$" path != null;
+      || builtins.match ".*/(rustfmt|clippy)\\.toml$" path != null
+      || builtins.match ".*/tests/.*\\.(jai|snap)$" path != null;
   };
 
   commonArgs = {

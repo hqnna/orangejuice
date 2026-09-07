@@ -71,7 +71,7 @@ Tokens, longest match first:
 Notes:
 
 - `<<` is lexed as one token that the parser disambiguates between binary shift-left and the (deprecated) prefix pointer dereference.
-- `<<<` / `>>>` are rotates; the lexer may produce them as `<<` `<` sequences, and the parser reassembles them.
+- `<<<` / `>>>` are rotates and are single tokens; the lexer emits them directly (`Jai_Lexer` produces `ROTATE_LEFT` / `ROTATE_RIGHT`), so the parser never has to reassemble a `<<` `<` sequence.
 - `.*` is the postfix dereference; `.{` begins a struct literal; `.[` begins an array literal; `..` is the range / spread token; `,,` introduces context arguments. `.` followed by a digit starts a number (`.5`).
 - `?` is reserved and produces an error if used as an operator. `'` is a single-character token that is not used by the grammar (the old infix-call syntax was removed).
 - `---` is the uninitialized-value marker; `--` is not an operator (no increment/decrement operators exist).
@@ -90,7 +90,7 @@ Notes:
 
 #### Floating-point literals
 
-- Forms: `1.0`, `.5`, `2340.`, `1e10`, `1.5e-3`, `6E+2`. The exponent sign is optional; a capital `E` is accepted. A literal of the form `6e1` (no decimal point) is **not** parsed as a float by the reference compiler and must be written `6.0e1`. There is no `f` suffix (using one is an error).
+- Forms: `1.0`, `.5`, `2340.`, `1.5e-3`, `1.5e3`, `6.0E+2`. The exponent sign is optional; a capital `E` is accepted. An exponent is only recognised after a decimal point: `1e10` and `6E+2` are **not** floats (they lex as the integer followed by an identifier) and must be written `1.0e10` and `6.0E+2`. There is no `f` suffix (using one is an error, "In this language, we don't suffix our float constants with f."); an `e` not followed by a sign or a digit is the error "'e' in a float literal must be followed by + or - or a numerical digit.".
 - Hex-float: `0h` / `0H` followed by exactly 4, 8 or 16 hex digits (underscores allowed) giving the IEEE bit pattern: 8 digits produce a `float32` (`0hff80_0000` is float32 −inf), 16 produce a `float64` (`0h7FF00000_00000000` is float64 +inf), 4 produce a 16-bit pattern reinterpreted through a 32-bit value.
 - Default type: `float32` (`float`). The literal is stored with full float64 precision internally. A literal *requires* `float64` (and will not convert to `float32`) if it has more than 8 significant decimal digits after stripping leading/trailing zeros, or if its exponent is out of the float32 range (> 127 or < −126). A literal with exactly 8 significant digits *defaults* to `float64` but still converts to `float32` when the context demands it.
 - Float literals convert implicitly to any float type subject to the above. A float literal never converts to an integer type. An integer literal converts implicitly to a float type when the context requires one (`f: float = 1;` is allowed; `f := 1;` infers `int`).

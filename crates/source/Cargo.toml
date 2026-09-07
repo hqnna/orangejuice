@@ -1,7 +1,14 @@
 [package]
 name = "oj-source"
-description = "source loading, module resolution and import paths for orangejuice"
+description = "source loading and module resolution for orangejuice"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
+[dependencies]
+memmap2.workspace = true
+oj-diag.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

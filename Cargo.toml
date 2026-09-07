@@ -9,6 +9,14 @@ authors = ["hanna"]
 license = "MIT"
 
 [workspace.dependencies]
-clap = { version = "4", features = ["derive"] }
-tempfile = "3"
+oj-diag = { path = "crates/diag" }
+oj-source = { path = "crates/source" }
+oj-testsupport = { path = "crates/testsupport" }
 
+bitflags = "2"
+clap = { version = "4", features = ["derive"] }
+indexmap = "2"
+insta = "1"
+memmap2 = "0.9"
+tempfile = "3"
+walkdir = "2"

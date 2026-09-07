@@ -1,6 +1,6 @@
 [package]
 name = "oj-diag"
-description = "diagnostics: source map, spans, rendering and error collection for orangejuice"
+description = "diagnostics, spans and the source map for orangejuice"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
