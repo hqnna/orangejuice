@@ -1,0 +1,7 @@
+[package]
+name = "oj-jit"
+description = "ORC JIT compile-time execution for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

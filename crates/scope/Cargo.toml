@@ -1,0 +1,7 @@
+[package]
+name = "oj-scope"
+description = "scope trees, declarations and name lookup for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

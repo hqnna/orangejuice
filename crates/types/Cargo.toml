@@ -1,0 +1,7 @@
+[package]
+name = "oj-types"
+description = "type representation, interning and layout for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

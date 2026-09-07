@@ -1,0 +1,7 @@
+[package]
+name = "oj-runtime"
+description = "compile-time data segments and runtime info for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

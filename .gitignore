@@ -1,1 +1,5 @@
 vendor/jai/
+/target/
+/result
+/result-*
+/.build/

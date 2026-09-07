@@ -1,0 +1,14 @@
+[package]
+name = "oj-cli"
+description = "the oj command line interface"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "oj"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true

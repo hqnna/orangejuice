@@ -1,0 +1,7 @@
+[package]
+name = "oj-driver"
+description = "workspaces, build options, metaprogram bootstrap and the link step for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

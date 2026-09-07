@@ -1,0 +1,7 @@
+[package]
+name = "oj-link"
+description = "object collection, library resolution and link lines for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

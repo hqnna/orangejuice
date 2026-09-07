@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 orangejuice (`oj`) is a cleanroom reimplementation of the **Jai** programming language (reference beta 0.2.009) in Rust nightly, targeting **Linux x86_64 only**, with a single LLVM 19 backend via `inkwell` and LLVM ORC JIT for compile-time execution.
 
-**Current state: specification-only.** `docs/` holds the three specs; there is no Rust code, no `flake.nix`, and no `Cargo.toml` yet. Milestone M0 (workspace + crate skeleton + nix flake + `oj help`/`oj version`) has not landed. The build/test commands below describe the workflow the spec mandates once the scaffold exists.
+**Current state: M0 (scaffold) has landed.** The nix flake, the cargo workspace and the sixteen crates of `docs/spec.md` §4 exist. `oj version` and `oj help` work; every other subcommand exits 1 with a "not implemented yet" message naming the milestone that will implement it. Apart from `crates/cli` (the clap CLI) and `crates/testsupport` (vendor discovery) the crates are still empty — M1 (lexer) is next.
+
 
 ## The specs are the source of truth
 

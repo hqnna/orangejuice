@@ -1,0 +1,10 @@
+[package]
+name = "oj-testsupport"
+description = "shared helpers for orangejuice integration tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

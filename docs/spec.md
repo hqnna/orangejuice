@@ -43,6 +43,7 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 flake.nix  flake.lock  nix/shell.nix  nix/package.nix
 Cargo.toml  Cargo.lock  rustfmt.toml  clippy.toml  LICENSE  README.md
 docs/language.md  docs/compiler.md  docs/spec.md
+scripts/check.sh
 crates/
   cli/        oj           clap-derive CLI (help, version, build, run, dump)
   driver/     oj-driver    workspaces, Build_Options, default metaprogram bootstrap, link step, message loop plumbing
@@ -135,8 +136,8 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 
 - `flake.nix`: `flake-parts` `mkFlake`; inputs `nixpkgs`, `flake-parts`, `fenix`, `crane`; `perSystem` for `x86_64-linux`: `packages.default = import ./nix/package.nix { inherit pkgs craneLib llvm; }`, `devShells.default = import ./nix/shell.nix { ... }`, `checks` (crane `cargoClippy`, `cargoFmt`, `cargoTest`, `cargoDoc`), `apps.default` running `oj`. No `formatter` output.
 - `nix/shell.nix`: the fenix nightly toolchain (`rustc`, `cargo`, `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`), `llvmPackages_19.llvm`/`libllvm`/`lld` and `clang` (link driver), `pkg-config`, `zlib`, `libffi`, `libxml2`, `ncurses` (LLVM link deps), `gdb`, `valgrind`; environment: `LLVM_SYS_191_PREFIX`, `OJ_JAI_DIR` default, `RUST_BACKTRACE=1`.
-- `nix/package.nix`: crane `buildPackage` with `src = craneLib.cleanCargoSource ./.`, `buildInputs` LLVM + zlib + libffi + ncurses + libxml2, `nativeBuildInputs` pkg-config, `cargoArtifacts` from `buildDepsOnly`, `doCheck = true`, `meta.license = mit`, `meta.mainProgram = "oj"`.
-- Developer loop: `nix develop` → `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (also exposed as `nix flake check`). `cargo test` includes integration tests that require `vendor/jai` (skipped with a clear message when absent).
+- `nix/package.nix`: crane `buildPackage` with `src` = the cargo sources plus `rustfmt.toml`/`clippy.toml` (the fmt and clippy checks need the style rules, which `cleanCargoSource` filters out), `buildInputs` LLVM + zlib + libffi + ncurses + libxml2, `nativeBuildInputs` pkg-config, `cargoArtifacts` from `buildDepsOnly`, `doCheck = true`, `meta.license = mit`, `meta.mainProgram = "oj"`.
+- Developer loop: `nix develop` → `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (also exposed as `scripts/check.sh` and as `nix flake check`). `cargo test` includes integration tests that require `vendor/jai` (skipped with a clear message when absent).
 
 ## 8. Testing strategy
 

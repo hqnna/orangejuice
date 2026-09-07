@@ -1,0 +1,7 @@
+[package]
+name = "oj-ir"
+description = "the backend-independent typed IR for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

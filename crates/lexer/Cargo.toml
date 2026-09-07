@@ -1,0 +1,7 @@
+[package]
+name = "oj-lexer"
+description = "the Jai lexer and token model for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true

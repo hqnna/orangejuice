@@ -1,0 +1,7 @@
+[package]
+name = "oj-source"
+description = "source loading, module resolution and import paths for orangejuice"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
