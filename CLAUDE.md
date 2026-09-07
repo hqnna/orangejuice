@@ -23,9 +23,18 @@ Before implementing anything, read the relevant **L** and **C** sections. `docs/
 
 ## The vendored Jai distribution
 
-`vendor/jai/` is **git-ignored** and holds the beta 0.2.009 reference distribution: `modules/` (the module tree orangejuice must compile unmodified), `how_to/` (the primary acceptance suite), `examples/`, `bin/jai-linux` (the reference compiler, usable to generate golden outputs). 702 `.jai` files total. `OJ_JAI_DIR` overrides the location; integration tests that need it must skip with a clear message when it is absent.
+`vendor/jai/` is **git-ignored** and holds the beta 0.2.009 reference distribution: `modules/` (the module tree orangejuice must compile unmodified), `how_to/` (the primary acceptance suite), `examples/`, `bin/jai-linux` (the reference compiler, usable to generate golden outputs, run with `nix run ./vendor/jai`). 702 `.jai` files total. `OJ_JAI_DIR` overrides the location; integration tests that need it must skip with a clear message when it is absent.
 
 The vendor tree is both the spec's evidence base and the test corpus — when a question about semantics is not answered by **L**/**C**, read the relevant module under `vendor/jai/modules/` or how_to file rather than guessing.
+
+**Run the reference compiler through its flake**, never `vendor/jai/bin/jai-linux` directly: the binary resolves `#library,system` names and the `-L` flags it hands to `lld` from `/etc/ld.so.conf`, `/lib`, `/usr/lib` and `/usr/lib64` — honouring neither `LD_LIBRARY_PATH` nor an rpath — so on NixOS it fails to load `libc`. `vendor/jai/flake.nix` wraps the distribution in an FHS sandbox where it works:
+
+```
+nix run ./vendor/jai -- hello.jai              # jai options verbatim; the executable lands beside the source
+nix run ./vendor/jai#shell                     # a shell where jai-linux and the programs it builds run
+```
+
+The wrapper locates the distribution the way `oj-testsupport` does, from `OJ_JAI_DIR` or the nearest enclosing `vendor/jai`, so it works from any directory in the checkout. The flakeref needs its `./` — a bare `vendor/jai` is looked up in the flake registry. `flake.nix` and `flake.lock` are the only tracked files in the otherwise git-ignored vendor tree; the rest of a re-unpacked distribution must not clobber them.
 
 ## Build and test workflow
 
@@ -44,7 +53,7 @@ cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
 
 Running one test: `cargo test -p oj-<crate> <test_name>`, or `cargo test -p oj-lexer -- --nocapture` for a single crate. Snapshot tests use `insta` (`cargo insta review` to accept changes).
 
-Nix files are exactly three and no more: `flake.nix`, `nix/shell.nix`, `nix/package.nix`. There is no Nix formatter.
+Nix files are exactly four and no more: `flake.nix`, `nix/shell.nix`, `nix/package.nix` and `vendor/jai/flake.nix` (the reference-compiler wrapper). There is no Nix formatter.
 
 ## CLI surface
 

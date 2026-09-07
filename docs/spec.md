@@ -27,7 +27,7 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 | Area | Rule |
 |---|---|
 | Language | Rust nightly (pinned via fenix in the flake); edition 2024 |
-| Toolchain | Nix flake with `flake-parts`, `fenix` (nightly toolchain incl. `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`) and `crane` (builds, checks, tests); exactly three Nix files: `flake.nix` (+ generated `flake.lock`), `nix/shell.nix`, `nix/package.nix`; no Nix formatter; the nix files land in the first code commit |
+| Toolchain | Nix flake with `flake-parts`, `fenix` (nightly toolchain incl. `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`) and `crane` (builds, checks, tests); exactly four Nix files: `flake.nix` (+ generated `flake.lock`), `nix/shell.nix`, `nix/package.nix` and `vendor/jai/flake.nix` (+ its lock, the FHS wrapper for the reference compiler); no Nix formatter; the nix files land in the first code commit |
 | LLVM | LLVM 19 from nixpkgs (`llvmPackages_19`), `inkwell` with the matching `llvm19-1` feature; the `llvm-sys` build uses `LLVM_SYS_191_PREFIX` exported by the dev shell and package |
 | Style | 2-space indentation everywhere (Rust via `rustfmt.toml` `tab_spaces = 2`, Nix, Markdown, JSON, TOML); avoid comments in code (names and tests carry the meaning); doc comments only on public crate APIs where a name cannot |
 | Workspace | Cargo workspace; crates under `crates/<name>` (directory has no prefix), Cargo package names `oj-<name>`; the binary crate is `crates/cli` producing the `oj` executable |
@@ -35,12 +35,13 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 | Linking | drive the system linker through the `cc` crate's tool discovery (`cc`/`clang` as the link driver); `#library,system` names resolved with the `pkg-config` crate when a `.pc` file exists, else by `-l<name>`; no bundled LLD |
 | Commits | conventional commits (`feat(lexer): …`, `fix(sema): …`, `docs: …`, `chore: …`, `test: …`, `build: …`); one logical change per commit; `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` must pass first |
 | License | MIT (`LICENSE` at the root; crate manifests `license = "MIT"`) |
-| Vendor | `vendor/jai/` is git-ignored and required for integration tests (`OJ_JAI_DIR` overrides the location) |
+| Vendor | `vendor/jai/` is git-ignored (except its `flake.nix`/`flake.lock`) and required for integration tests (`OJ_JAI_DIR` overrides the location); the reference compiler runs as `nix run ./vendor/jai -- <jai options>`, never as `vendor/jai/bin/jai-linux` |
 
 ## 4. Repository layout
 
 ```
 flake.nix  flake.lock  nix/shell.nix  nix/package.nix
+vendor/jai/flake.nix  vendor/jai/flake.lock   the reference compiler in an FHS sandbox; the rest of vendor/jai is git-ignored
 Cargo.toml  Cargo.lock  rustfmt.toml  clippy.toml  LICENSE  README.md
 docs/language.md  docs/compiler.md  docs/spec.md
 scripts/check.sh
@@ -184,13 +185,14 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 - `flake.nix`: `flake-parts` `mkFlake`; inputs `nixpkgs`, `flake-parts`, `fenix`, `crane`; `perSystem` for `x86_64-linux`: `packages.default = import ./nix/package.nix { inherit pkgs craneLib llvm; }`, `devShells.default = import ./nix/shell.nix { ... }`, `checks` (crane `cargoClippy`, `cargoFmt`, `cargoTest`, `cargoDoc`), `apps.default` running `oj`. No `formatter` output.
 - `nix/shell.nix`: the fenix nightly toolchain (`rustc`, `cargo`, `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`), `llvmPackages_19.llvm`/`libllvm`/`lld` and `clang` (link driver), `pkg-config`, `zlib`, `libffi`, `libxml2`, `ncurses` (LLVM link deps), `gdb`, `valgrind`; environment: `LLVM_SYS_191_PREFIX`, `OJ_JAI_DIR` default, `RUST_BACKTRACE=1`.
 - `nix/package.nix`: crane `buildPackage` with `src` = the cargo sources plus `rustfmt.toml`/`clippy.toml` (the fmt and clippy checks need the style rules, which `cleanCargoSource` filters out), `buildInputs` LLVM + zlib + libffi + ncurses + libxml2, `nativeBuildInputs` pkg-config, `cargoArtifacts` from `buildDepsOnly`, `doCheck = true`, `meta.license = mit`, `meta.mainProgram = "oj"`.
+- `vendor/jai/flake.nix`: a self-contained flake (its own `nixpkgs` input, pinned to the same revision as the root lock) wrapping the git-ignored reference distribution in `buildFHSEnv`, because `jai-linux` resolves `#library,system` names and its linker `-L` flags from `/etc/ld.so.conf`, `/lib`, `/usr/lib` and `/usr/lib64` and honours neither `LD_LIBRARY_PATH` nor an rpath. `nix run ./vendor/jai -- <jai options>` compiles in the current directory; `nix run ./vendor/jai#shell` opens a shell where `jai-linux` and the programs it links run. Both locate the distribution at runtime from `OJ_JAI_DIR` or the nearest enclosing `vendor/jai`, since the flake source cannot contain a git-ignored tree.
 - Developer loop: `nix develop` → `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (also exposed as `scripts/check.sh` and as `nix flake check`). `cargo test` includes integration tests that require `vendor/jai` (skipped with a clear message when absent).
 
 ## 8. Testing strategy
 
 1. **Unit tests** in every crate (lexer token tables, number parsing edge cases from **L§2.6**, here-strings, backslash identifiers; parser precedence/`<<` ambiguity/all statement forms; layout computations against sizes recorded from the vendor modules; Match rules; constant folding; overload scoring; polymorph solving cases from `how_to/100–120`; IR passes; ABI classification; link-line construction).
 2. **Corpus tests** (`tests/corpus`): `oj dump tokens` and `oj dump ast` over all 702 `.jai` files under `vendor/jai` must succeed; AST round-trips through the Program_Print-style printer and re-parses to an identical tree (snapshot with `insta`).
-3. **how_to suite**: every `how_to/*.jai` compiles and runs; expected stdout captured as golden files (generated once from the reference compiler when available, otherwise reviewed by hand) — this is the primary acceptance test.
+3. **how_to suite**: every `how_to/*.jai` compiles and runs; expected stdout captured as golden files (generated once with `nix run ./vendor/jai` when the distribution is present, otherwise reviewed by hand) — this is the primary acceptance test.
 4. **Examples suite**: `examples/*` that are Linux-buildable (`hash_table_test`, `reduce`, `code_type`, `self_inspect`, `here_string_detector`, `runtime_global_data_search`, `import_replacement`, `add_build_string_into_specific_scope`, `output_types`, `dll`, `module_info`, `dump_binary_file`, `find_symbol`, `treemap`, `subtitles`, `system_info`, `invaders`/`skeletal-animation`/`codex_view` when X11/GL are available in the sandbox).
 5. **Metaprogram/ABI tests**: struct layouts of `Compiler` types compared against `size_of`/`offset_of` computed by the compiled vendor module; message sequences for a small program compared with the documented order (FILE before code, IMPORT once per instantiation, phases).
 6. **Runtime tests**: panic messages (bounds/cast/null/overflow), stack traces, `#no_reset`, global data reset, `Runtime_Info` segments, FFI round trips with a C test library built by `cc`, `#asm` (cpuid/rdtsc/syscall write).

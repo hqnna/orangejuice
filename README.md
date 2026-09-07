@@ -19,6 +19,17 @@ nix run . -- version        # run oj without installing it
 
 Inside the dev shell, `scripts/check.sh` runs the same gate locally.
 
+## The reference compiler
+
+The beta 0.2.009 distribution lives in the git-ignored `vendor/jai/` (`OJ_JAI_DIR`
+overrides the location). Its `jai-linux` binary expects an FHS system to find
+`libc`, so it is run through the flake that lives beside it rather than directly:
+
+```
+nix run ./vendor/jai -- hello.jai   # jai options verbatim, output beside the source
+nix run ./vendor/jai#shell          # a shell where jai and its output run
+```
+
 ## Documentation
 
 | File | Contents |
