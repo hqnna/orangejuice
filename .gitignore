@@ -1,4 +1,6 @@
-vendor/jai/
+vendor/jai/*
+!vendor/jai/flake.nix
+!vendor/jai/flake.lock
 /target/
 /result
 /result-*
