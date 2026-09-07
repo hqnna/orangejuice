@@ -81,7 +81,54 @@ oj dump ir     <file.jai> [--proc NAME]  # oj-ir listing for all (or one) live p
 oj dump asm    <file.jai> [--proc NAME]  # LLVM IR (--llvm) or target assembly of the generated modules
 ```
 
-jai-style options supported by `build`/`run` (parsed by orangejuice's Rust reimplementation of the argument handling that `Default_Metaprogram.jai` performs, then forwarded to the real `Default_Metaprogram` module which runs as the metaprogram): `-` (user args → `compile_time_command_line`), `-plug NAME`, `-no_check`, `-no_check_bindings`, `-check_bindings`, `-release`, `-very_debug`, `-no_inline`, `-quiet`, `-x64` (warning: LLVM used), `-llvm`, `-no_cwd`, `-no_dce`, `-no_split`, `-output_ir`, `-debug_for`, `-msvc_format`, `-natvis`, `-no_backtrace_on_crash`, `-version`, `-exe NAME`, `-output_path P`, `-add CODE`, `-run EXPR`, `-debugger`, `-context_size N`, `-import_dir DIR`, `-no_color`, `-verbose`, `-help`; compiler-level `--- meta MODULE` / `-- meta` and `--- import_dir DIR` select an alternative metaprogram. Unknown options are passed to plugins. `oj build` with no file prints usage. Exit codes: 0 success, 1 compilation/link failure, 2 usage error. Diagnostics go to stderr in the reference format (**C§12**), colored when stderr is a TTY unless `-no_color`.
+Two option vocabularies meet on this command line and must not be mixed:
+
+- **`oj`'s own options are double-dash and clap-owned** (`--help`, `--version`, `--tree`, `--proc`, `--llvm`). New ones may be added freely; they never take a single-dash spelling.
+- **Single-dash options belong to the reference compiler** and are reproduced, not designed. Their names, arity, argument order, side effects and error wording come from **C§2.1** and, as the evidence base, from `vendor/jai/modules/Default_Metaprogram.jai`: pass 1 scans for `-plug`/`-plugin`/`-ps5` and the `Check` switches so plugins can claim later options, pass 2 handles the rest, a lone `-` ends option processing, and any argument not starting with `-` before that point is a source file. orangejuice reimplements this parsing in Rust and then forwards to the real module, so an option must behave identically whichever side reads it. Never invent a single-dash name, an alias, or a `--long` form of one of these.
+
+### 5.1 Metaprogram options accepted by `build` and `run`
+
+Effects name `Build_Options` fields (**C§4**) on the target workspace unless stated otherwise.
+
+| Option | Argument | Effect |
+|---|---|---|
+| `-` | — | the rest of the command line becomes `compile_time_command_line` (user args, also visible to `#run`s); option processing stops |
+| `-plug NAME`, `-plugin NAME` | required | import `NAME` as a metaprogram plugin; `NAME(param=value)` is allowed |
+| `-ps5` | — | adds the `ps5_build` plugin |
+| `-no_check` | — | do not add the `Check` plugin (pass 1 only) |
+| `-no_check_bindings`, `-check_bindings` | — | select `Check(CHECK_BINDINGS=false)` or `Check` (pass 1 only; `Check` is the default) |
+| `-release` | — | `set_optimization(.OPTIMIZED)`, `stack_trace = false` |
+| `-very_debug` | — | `set_optimization(.VERY_DEBUG)` |
+| `-no_inline` | — | `enable_bytecode_inliner = false` |
+| `-quiet` | — | `text_output_flags = 0` |
+| `-x64` | — | `backend = .X64`; orangejuice warns and uses LLVM (§2) |
+| `-llvm` | — | `backend = .LLVM` |
+| `-no_cwd` | — | skip the initial `set_working_directory` to the first file's directory |
+| `-no_dce` | — | `dead_code_elimination = .NONE` |
+| `-no_split` | — | `llvm_options.enable_split_modules = false` |
+| `-output_ir` | — | `llvm_options.output_llvm_ir` and `output_llvm_ir_before_optimizations` |
+| `-debug_for` | — | `debug_for_expansions = true` |
+| `-msvc_format` | — | `use_visual_studio_message_format = true` |
+| `-natvis` | — | `use_natvis_compatible_types = true` (accepted no-op, §2) |
+| `-no_backtrace_on_crash` | — | `backtrace_on_crash = .OFF` |
+| `-no_color` | — | `use_ansi_color = false` |
+| `-verbose` | — | the metaprogram logs what it is doing |
+| `-version` | — | print `compiler_get_version_info`; exits 0 when no input follows |
+| `-help`, `-?` | — | print the metaprogram's `HELP_STRING` — that text is the vendored module's, never ours |
+| `-exe NAME` | required | `output_executable_name` |
+| `-output_path P` | required | `output_path` |
+| `-add CODE` | required | `add_build_string("CODE;")` into the target workspace |
+| `-run EXPR` | required | `add_build_string("#run EXPR;")` |
+| `-import_dir DIR` | required | prepended to `import_path`, relative to the first file's directory |
+| `-context_size N` | required | `context_size_max`; must be ≥ `size_of(Context_Base)` and ≤ `0x4_0000` |
+| `-debugger` | — | reference: interactive bytecode debugger; orangejuice: stack-trace dump (§2) |
+| anything else | — | offered to each plugin's `handle_one_option`, then `Unknown argument '%'.` and exit 1 |
+
+Missing arguments are reported as `Command line: Missing argument to <option>.` and exit 1; the other command-line diagnostics (`-context_size` out of range, plugin lists disagreeing between the two passes, no input files) are quoted in **C§2.1** and each gets a negative test.
+
+Compiler-level options precede the files and are separated by `---` or `--`: `--- meta MODULE` / `-- meta X` selects an alternative metaprogram, `--- import_dir DIR` adds a directory to find it in, and `-- help` lists the developer options (`import_dir`, `meta`, `no_jobs`, `randomize`, `seed N`, `extra`, `chaos`).
+
+`oj build` with no file prints usage. Exit codes: 0 success, 1 compilation/link failure, 2 usage error. Diagnostics go to stderr in the reference format (**C§12**), colored when stderr is a TTY unless `-no_color`.
 
 Environment: `OJ_JAI_DIR` (base path containing `modules/`, default: `vendor/jai` relative to the current working directory or the path baked in at build time via nix), `OJ_LOG` (tracing filter), `OJ_THREADS` (scheduler threads, default = cores).
 

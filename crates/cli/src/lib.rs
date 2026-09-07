@@ -16,7 +16,9 @@ pub const EXIT_FAILURE: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
 
 /// The `oj` command line, mirroring the jai driver so that `jai a.jai - -x`
-/// translates to `oj build a.jai - -x`.
+/// translates to `oj build a.jai - -x`. The single-dash options of `build` and
+/// `run` are the reference compiler's: `docs/spec.md` §5.1 tables them, and
+/// `vendor/jai/modules/Default_Metaprogram.jai` defines them.
 #[derive(Debug, Parser)]
 #[command(
   name = "oj",

@@ -59,6 +59,9 @@ oj version                             oj dump ir  <file.jai> [--proc NAME]
 
 Exit codes: 0 success, 1 compile/link failure, 2 usage error. Env: `OJ_JAI_DIR`, `OJ_LOG` (tracing filter), `OJ_THREADS`.
 
+**Single-dash options are the reference compiler's, not ours.** Before adding or changing any option on `build`/`run`, read `docs/spec.md` §5.1 (the full table: name, arity, `Build_Options` effect), **C§2.1** (invocation, compiler-level `---`/`--` options, the exact command-line error wording) and the evidence behind both, `vendor/jai/modules/Default_Metaprogram.jai` — its `case "-…"` labels in pass 1 (lines ~65–99, plugins and the `Check` switches) and pass 2 (lines ~112–308) are the definition, and `HELP_STRING` at the end of that file is the help text `-help` must print. Names, arity, argument order, effects and error strings are copied from there; never invent a single-dash name, an alias or a `--long` form of one. `oj`'s own options are double-dash and clap-owned (`--help`, `--version`, `--tree`, `--proc`, `--llvm`) and may be added freely. A lone `-` ends option processing and sends the rest to `compile_time_command_line`; `oj run`'s `--` (program arguments) is split off before clap sees the line, since the jai-style option list accepts hyphenated values.
+
+
 ## Architecture
 
 Cargo workspace; directories are `crates/<name>`, package names are `oj-<name>`, the binary crate is `crates/cli` producing `oj`. The pipeline mirrors the reference compiler's (`docs/spec.md` §6 is the detailed version):

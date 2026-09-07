@@ -43,7 +43,7 @@ The compiler itself understands very few options (all others belong to the metap
 
 - `--- meta Module_Name` / `-- meta X`: use `Module_Name` as the metaprogram instead of `Default_Metaprogram` (`Minimal_Metaprogram` is the shipped minimal one).
 - `--- import_dir Folder` (also `-- import_dir`): extra module directory, used so the metaprogram module itself can be found.
-- `-version`, `-help` at the compiler level; `jai -- help` lists compiler-level options.
+- `-version`, `-help` at the compiler level; `jai -- help` lists the developer options: `import_dir name`, `meta metaprogram_name`, `no_jobs`, `randomize`, `seed some_number`, `extra`, `chaos`.
 - The delimiter of compiler-internal options is `---` or `--`; the Default_Metaprogram recognizes only `-` (a lone `-` starts the user arguments list) and ignores `--`.
 
 Everything else, in order, is handled by the Default_Metaprogram (pass 1 collects plugin names; pass 2 handles options; non-dash arguments are source files):
@@ -73,6 +73,20 @@ Everything else, in order, is handled by the Default_Metaprogram (pass 1 collect
 | `-context_size N` | `context_size_max` (≥ `size_of(Context_Base)`, ≤ 0x4_0000) |
 | `-import_dir DIR` | prepend to `import_path` (relative to the first file's directory) |
 | `-verbose`, `-help` / `-?`, `-ps5` | misc; unknown options are offered to plugins' `handle_one_option`, else "Unknown argument" and exit |
+
+
+Options taking a value consume the next argument; `-help`/`-?` print `HELP_STRING` (the help text lives in `Default_Metaprogram.jai`, not in the compiler) and deliberately fall through so that module help prints too. Command-line diagnostics, all `log_error` followed by `exit(1)`:
+
+| Situation | Message |
+|---|---|
+| `-exe`, `-output_path`, `-add`, `-run`, `-plug`/`-plugin`, `-context_size`, `-import_dir` without a value | `Command line: Missing argument to <option>.` |
+| `-context_size` above `CONTEXT_SIZE_MAX` (`0x4_0000`) | `Command line: Invalid argument to -context_size. The context must be less than or equal to CONTEXT_SIZE_MAX, which is % (but the value provided was %). ...` |
+| `-context_size` below `size_of(Context_Base)` | `Command line: Invalid argument to -context_size. The context must be at least as large as size_of(Context_Base), which is %.` |
+| `-context_size` not an integer | `Command line: Unable to parse an integer argument to context size; got '%'.` |
+| an option no plugin claims | `Unknown argument '%'.` then `Exiting.` |
+| a plugin's `handle_one_option` returning a smaller index | `Plugin % decreased argument index. That is illegal!` |
+| `-plug` consumed as another option's value (the two passes disagree) | `Plugins in pass 1 and pass 2 do not match, meaning that -plug was used as an argument to another option. This is an error.` |
+| no files, `-add` or `-run` | `You need to provide an argument telling the compiler what to compile! Sorry. Pass -help for help.` |
 
 Default_Metaprogram behavior: `#run,stallable build();` — sets `output_path` to the first file's directory (absolute), `output_executable_name` to its basename (extension appended unless `append_executable_filename_extension = false`; a directory separator in the name is rejected), calls `set_working_directory` to that directory (unless `-no_cwd`; since 0.0.046 the compiler changes to the first file's directory if it is not the CWD), makes file paths absolute, `set_build_options(options, w, loc)` with a fake location so that relative `import_path` entries resolve, then `plugin.before_intercept(&flags)` → `compiler_begin_intercept(w, flags)` → `plugin.add_source()` → `add_build_file`/`add_build_string` for each file / `-add` / `-run` → message loop (forwarding every message to each plugin's `message`) until `COMPLETE` → `compiler_end_intercept(w)` → `plugin.finish()` → `plugin.shutdown()` → `set_build_options_dc(.{do_output=false, write_added_strings=false})` for the metaprogram's own workspace.
 
