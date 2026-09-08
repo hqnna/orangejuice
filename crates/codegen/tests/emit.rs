@@ -111,7 +111,9 @@ fn a_string_literal_is_read_only_data_and_the_two_words_of_a_view() {
     return;
   };
   assert!(module.contains("private"), "{module}");
-  assert!(module.contains("c\"hi\""), "{module}");
+  // The bytes carry a trailing zero the count does not include, so a literal
+  // handed to a C procedure is the string it expects (**L§3.4**).
+  assert!(module.contains("c\"hi\\00\""), "{module}");
   assert!(module.contains("{ i64 2, ptr"), "{module}");
 }
 

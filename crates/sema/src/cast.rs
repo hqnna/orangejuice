@@ -97,14 +97,36 @@ impl Checker<'_> {
       return;
     }
 
-    if from == TypeId::STRING && self.types().is_numeric(target) {
-      let target = self.type_name(target);
-      self.error(
-        source,
-        span,
-        format!("String cannot cast to this type (the target type is {target}.)"),
-      );
-      return;
+    // A string literal is bytes the compiler laid down, so it casts to a
+    // pointer and to a number; a string a program computed is a count and a
+    // pointer, and casts to neither (**L§3.4**, **L§5.6**).
+    if from == TypeId::STRING && !is_string_literal(value) {
+      if self.types().is_numeric(target) {
+        let target = self.type_name(target);
+        self.error(
+          source,
+          span,
+          format!("String cannot cast to this type (the target type is {target}.)"),
+        );
+        return;
+      }
+      if self
+        .types()
+        .pointee(target)
+        .is_some_and(|pointee| matches!(pointee, TypeId::U8 | TypeId::S8))
+      {
+        let target = self.type_name(target);
+        self.error(
+          source,
+          span,
+          format!(
+            "string does not implicitly convert to {target}. If the {target} is a C-style \
+             zero-terminated string, you could call Basic.to_c_string to allocate a \
+             zero-terminated copy; otherwise, dereference the string's data field."
+          ),
+        );
+        return;
+      }
     }
 
     // Reinterpreting one struct as another needs the intent spelled out; a
@@ -132,4 +154,13 @@ impl Checker<'_> {
       );
     }
   }
+}
+
+/// Whether an expression is a string the compiler laid the bytes of down,
+/// rather than one a program computed (**L§3.4**).
+fn is_string_literal(value: &Expr) -> bool {
+  value
+    .constant
+    .as_ref()
+    .is_some_and(|constant| matches!(constant.value, crate::constants::Value::String(_)))
 }

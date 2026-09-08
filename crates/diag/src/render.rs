@@ -11,6 +11,12 @@ const EXCERPT_INDENT: &str = "    ";
 ///
 /// Colors, multi-line highlighting, `use_visual_studio_message_format` and the
 /// "Info:" trailers of **C§12** are not implemented yet.
+/// A diagnostic that is about the program rather than about a place in it:
+/// the reference writes those as a bare `Error: …` line (**C§12**).
+pub fn render_unplaced(diagnostic: &Diagnostic) -> String {
+  format!("{}: {}\n", diagnostic.severity, diagnostic.message)
+}
+
 pub fn render(diagnostic: &Diagnostic, file: &SourceFile) -> String {
   let location = file.location(diagnostic.span.start);
   let line = String::from_utf8_lossy(file.line_text(location.line));

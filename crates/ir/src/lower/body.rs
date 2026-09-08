@@ -172,9 +172,21 @@ impl Lowering<'_, '_> {
     self.defers.push(Vec::new());
     self.statement(block);
     let scope = self.defers.pop().unwrap_or_default();
-    if !self.terminated() {
+    let fell_through = (!self.terminated()).then_some(self.current);
+    if let Some(end) = fell_through {
       self.run_defers(&scope);
       self.implicit_return(&body);
+      // A body whose end control can reach, in a procedure that was declared
+      // to return something (**C§12**). The end of a body is a block like any
+      // other, and an `if` whose branches all return leaves it behind
+      // unreachable, so it is the graph that says whether it can be got to.
+      if !signature.returns.is_empty() && self.reaches(end) {
+        let span = match key {
+          ProcKey::Decl(decl) => self.checker.program().tree().decl(decl).span,
+          _ => self.span_of(body.source, body.header),
+        };
+        self.warn(body.source, span, "Not all control paths return a value.");
+      }
     }
 
     let procedure = &mut self.procedures[id.0 as usize];
@@ -184,6 +196,37 @@ impl Lowering<'_, '_> {
     procedure.value_types = std::mem::take(&mut self.value_types);
     procedure.entry = BlockId(0);
     leave(self);
+  }
+
+  /// Whether control can get from the entry block to `target`. A block the
+  /// lowering left behind — the join of an `if` whose branches all return —
+  /// is in the list but nothing jumps to it.
+  fn reaches(&self, target: BlockId) -> bool {
+    let mut seen = vec![false; self.blocks.len()];
+    let mut queue = vec![BlockId(0)];
+    while let Some(block) = queue.pop() {
+      let index = block.0 as usize;
+      if index >= seen.len() || seen[index] {
+        continue;
+      }
+      seen[index] = true;
+      if block == target {
+        return true;
+      }
+      match &self.blocks[index].terminator {
+        Terminator::Jump(next) => queue.push(*next),
+        Terminator::Branch {
+          then_block,
+          else_block,
+          ..
+        } => {
+          queue.push(*then_block);
+          queue.push(*else_block);
+        }
+        Terminator::Return(_) | Terminator::Unreachable => {}
+      }
+    }
+    false
   }
 
   /// Falling off the end of a body returns the named return values, or
@@ -808,7 +851,13 @@ impl Lowering<'_, '_> {
         }
       }
     }
-    self.terminate(Terminator::Jump(join));
+    // `#complete` says the cases cover every value, so falling past the last
+    // comparison is not something that happens (**L§6.4**) — which is what
+    // lets a switch whose arms all return be the end of a body.
+    match payload.if_flags.contains(IfFlags::MARKED_AS_COMPLETE) {
+      true => self.terminate(Terminator::Unreachable),
+      false => self.terminate(Terminator::Jump(join)),
+    }
 
     let breaks = Loop {
       break_block: join,

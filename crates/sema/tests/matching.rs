@@ -45,7 +45,11 @@ fn a_declaration_reports_the_type_it_could_not_convert() {
   );
   assert_eq!(
     errors("f :: () { a: s32 = 3; b: s8 = a; }"),
-    vec!["Type mismatch. Type wanted: s8; type given: s32.".to_string()]
+    vec![
+      "Loss of information (trying to fit 32 bits into 8 bits). Can't do this without an \
+     explicit cast. Type wanted: s8; type given: s32."
+        .to_string()
+    ]
   );
   assert_eq!(
     errors("f :: () { a: s64 = 3; b: u64 = a; }"),
@@ -95,11 +99,15 @@ fn a_literal_converts_when_it_fits_and_not_when_it_does_not() {
   accepts("f :: () { a: s32 = 5; b: u8 = 255; c: float64 = 1; d: float = 2; }");
   assert_eq!(
     errors("f :: () { a: u8 = 256; }"),
-    vec!["Type mismatch. Type wanted: u8; type given: s64.".to_string()]
+    vec!["Number signedness mismatch. Type wanted: u8; type given: s64.".to_string()]
   );
   assert_eq!(
     errors("f :: () { a: s32 = 0x0001_0203_0405_0600; }"),
-    vec!["Type mismatch. Type wanted: s32; type given: s64.".to_string()]
+    vec![
+      "Loss of information (trying to fit 64 bits into 32 bits). Can't do this without an \
+     explicit cast. Type wanted: s32; type given: s64."
+        .to_string()
+    ]
   );
   // A hexadecimal literal is a bit pattern, so it only has to fit the width.
   accepts("f :: () { b: s64 = 0xcafebabe00c0ffee; }");
@@ -117,7 +125,7 @@ fn a_constant_adapts_to_the_type_that_asks_for_it() {
   accepts("f :: (n: s32) { a: s32 = size_of(s64) * n; }");
   assert_eq!(
     errors("BIG :: 100000;\nf :: () { a: u8 = BIG; }"),
-    vec!["Type mismatch. Type wanted: u8; type given: s64.".to_string()]
+    vec!["Number signedness mismatch. Type wanted: u8; type given: s64.".to_string()]
   );
 }
 
@@ -275,7 +283,11 @@ fn a_return_is_matched_against_the_declared_return_types() {
   );
   assert_eq!(
     errors("f :: (a: u64) -> u32 { return a; }"),
-    vec!["Type mismatch. Type wanted: u32; type given: u64.".to_string()]
+    vec![
+      "Loss of information (trying to fit 64 bits into 32 bits). Can't do this without an \
+     explicit cast. Type wanted: u32; type given: u64."
+        .to_string()
+    ]
   );
 }
 
@@ -378,7 +390,11 @@ fn a_bitwise_operator_keeps_an_explicitly_cast_left_operand() {
   accepts("f :: (a: u64, b: u64) -> u32 { return cast,trunc(u32) a ^ b; }");
   assert_eq!(
     errors("f :: (a: u64, b: u64) -> u32 { return cast,trunc(u32) a + b; }"),
-    vec!["Type mismatch. Type wanted: u32; type given: u64.".to_string()]
+    vec![
+      "Loss of information (trying to fit 64 bits into 32 bits). Can't do this without an \
+     explicit cast. Type wanted: u32; type given: u64."
+        .to_string()
+    ]
   );
 }
 
@@ -579,4 +595,49 @@ fn a_designated_array_literal_checks_its_elements() {
   // `*u8.[…]` is an array of `*u8`, not the address of an array of `u8`
   // (**L§5.8**).
   accepts("f :: (p: *u8) { a: [2] *u8 = *u8.[p, p]; }");
+}
+
+/// The wordings of **C§12**, measured against the reference: a narrowing
+/// integer conversion names the widths it could not fit, a string that is not
+/// a literal has no bytes for a `*u8` to point at, and anything else is a
+/// plain mismatch.
+#[test]
+fn a_conversion_reports_the_wording_the_reference_uses() {
+  assert_eq!(
+    errors("main :: () { x: s8 = 300; }\n"),
+    vec![
+      "Loss of information (trying to fit 64 bits into 8 bits). Can't do this without an \
+       explicit cast. Type wanted: s8; type given: s64."
+        .to_string()
+    ]
+  );
+  assert_eq!(
+    errors("main :: () { s := \"hi\"; p: *u8 = s; }\n"),
+    vec!["Dynamically-computed strings do not cast to *u8; only literals do.".to_string()]
+  );
+  assert_eq!(
+    errors("S :: struct { x: s64; }\nmain :: () { s: S; n: s64 = s; }\n"),
+    vec!["Type mismatch. Type wanted: s64; type given: S.".to_string()]
+  );
+}
+
+/// A string the compiler laid the bytes of down casts to a pointer and to a
+/// number; one a program computed casts to neither (**L§3.4**, **L§5.6**).
+#[test]
+fn only_a_string_literal_casts_to_a_pointer_or_a_number() {
+  assert!(errors("main :: () { p := cast(*u8) \"hi\"; }\n").is_empty());
+  assert!(errors("main :: () { n := cast(s64) \"hi\"; }\n").is_empty());
+  assert_eq!(
+    errors("main :: () { s := \"hi\"; n := cast(s64) s; }\n"),
+    vec!["String cannot cast to this type (the target type is s64.)".to_string()]
+  );
+  assert_eq!(
+    errors("main :: () { s := \"hi\"; p := cast(*u8) s; }\n"),
+    vec![
+      "string does not implicitly convert to *u8. If the *u8 is a C-style zero-terminated \
+       string, you could call Basic.to_c_string to allocate a zero-terminated copy; otherwise, \
+       dereference the string's data field."
+        .to_string()
+    ]
+  );
 }

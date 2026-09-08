@@ -395,7 +395,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     if let Some(existing) = self.strings.get(text) {
       return *existing;
     }
-    let data = self.context.const_string(text, false);
+    // A literal's bytes carry a trailing zero the count does not include, so
+    // that one handed to a C procedure is the string it expects (**L§3.4**).
+    let data = self.context.const_string(text, true);
     let global = self.module.add_global(
       data.get_type(),
       Some(AddressSpace::default()),

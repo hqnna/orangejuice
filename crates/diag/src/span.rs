@@ -5,6 +5,12 @@ use std::ops::Range;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceId(pub u32);
 
+impl SourceId {
+  /// A diagnostic about the program rather than about a place in it: the
+  /// reference writes those without a location (**C§12**).
+  pub const NONE: Self = Self(u32::MAX);
+}
+
 /// A half-open byte range inside one source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span {

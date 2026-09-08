@@ -2038,6 +2038,26 @@ impl Lowering<'_, '_> {
     let from_kind = types.kind(from).clone();
     let to_kind = types.kind(to).clone();
 
+    // A string literal casts to the bytes the compiler laid down and to the
+    // count it wrote beside them; only a literal reaches here, since the
+    // checker rejects a string a program computed (**L§3.4**, **L§5.6**).
+    if from == TypeId::STRING && (matches!(to_kind, TypeKind::Pointer(_)) || types.is_numeric(to)) {
+      let (count, data) = self.string_words(value);
+      let word = match matches!(to_kind, TypeKind::Pointer(_)) {
+        true => data,
+        false => count,
+      };
+      let word = Val {
+        id: word,
+        type_id: match matches!(to_kind, TypeKind::Pointer(_)) {
+          true => self.pointer_to(TypeId::U8),
+          false => TypeId::S64,
+        },
+        indirect: false,
+      };
+      return self.convert(source, node, word, target);
+    }
+
     // `[N] T` becomes a `[] T` by building the two words a view is
     // (**L§3.3**).
     if let (

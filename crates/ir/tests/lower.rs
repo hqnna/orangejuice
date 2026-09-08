@@ -13,6 +13,7 @@ use oj_testsupport::jai_dir_or_skip;
 struct Lowered {
   listing: String,
   errors: Vec<String>,
+  warnings: Vec<String>,
 }
 
 fn lower(source: &str) -> Option<Lowered> {
@@ -48,6 +49,12 @@ fn lower_file(path: &Path, jai_dir: &Path) -> Lowered {
       .filter(|diagnostic| diagnostic.is_error())
       .map(|diagnostic| diagnostic.message.clone())
       .collect(),
+    warnings: lowered
+      .diagnostics
+      .iter()
+      .filter(|diagnostic| !diagnostic.is_error())
+      .map(|diagnostic| diagnostic.message.clone())
+      .collect(),
   }
 }
 
@@ -68,7 +75,7 @@ fn a_program_without_a_main_is_reported() {
   };
   assert_eq!(
     lowered.errors,
-    ["No entry point was found. The program has no 'main'."]
+    ["No program entry point was found. (The designated entry point name is 'main'.)"]
   );
 }
 
@@ -250,7 +257,7 @@ fn every_how_to_program_reports_only_milestones_it_does_not_own() {
   // `docs/spec.md` §10 already documents, rather than crashing or hanging.
   let documented = [
     "A reverse 'for' over a range does not iterate backwards",
-    "No entry point was found",
+    "No program entry point was found",
     "'context' is not available here",
   ];
   for path in entries {
@@ -263,4 +270,33 @@ fn every_how_to_program_reports_only_milestones_it_does_not_own() {
       );
     }
   }
+}
+
+#[test]
+fn a_body_that_can_reach_its_end_without_returning_is_a_warning() {
+  let warnings = |source: &str| -> Vec<String> {
+    lower(source).map_or_else(Vec::new, |lowered| {
+      lowered
+        .warnings
+        .iter()
+        .filter(|message| message.contains("control paths"))
+        .cloned()
+        .collect()
+    })
+  };
+  let expected = vec![String::from("Not all control paths return a value.")];
+  assert_eq!(
+    warnings("f :: () -> int { }\nmain :: () { f(); }\n"),
+    expected
+  );
+  assert_eq!(
+    warnings("f :: (x: bool) -> int { if x return 1; }\nmain :: () { f(true); }\n"),
+    expected
+  );
+  // Both branches return, so the join the lowering left behind is unreachable.
+  assert!(
+    warnings("f :: (x: bool) -> int { if x return 1; else return 2; }\nmain :: () { f(true); }\n")
+      .is_empty()
+  );
+  assert!(warnings("f :: () { }\nmain :: () { f(); }\n").is_empty());
 }

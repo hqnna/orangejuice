@@ -517,18 +517,48 @@ impl Checker<'_> {
     if wanted == TypeId::OVERLOAD_SET || given == TypeId::OVERLOAD_SET {
       return;
     }
-    // Two integers that differ only in signedness get their own wording
-    // (**C§12**).
-    let signedness = match (
-      self.types().integer_kind(wanted),
-      self.types().integer_kind(given),
-    ) {
+    // Two integers get their own wording: one that differs in signedness, and
+    // one that would not fit (**C§12**).
+    // A string that is not a literal has bytes the compiler did not lay down,
+    // so there is nothing for a `*u8` to point at (**L§3.4**, **C§12**).
+    if given == TypeId::STRING
+      && self
+        .types()
+        .pointee(wanted)
+        .is_some_and(|pointee| matches!(pointee, TypeId::U8 | TypeId::S8))
+    {
+      let wanted = self.type_name(wanted);
+      self.error(
+        source,
+        span,
+        format!("Dynamically-computed strings do not cast to {wanted}; only literals do."),
+      );
+      return;
+    }
+    // An untyped literal is reported as what it defaults to, so its width is
+    // that type's (**L§5.10**).
+    let (wanted_type, given_type) = (self.harden(wanted), self.harden(given));
+    let kinds = (
+      self.types().integer_kind(wanted_type),
+      self.types().integer_kind(given_type),
+    );
+    let signedness = match kinds {
       (Some(left), Some(right)) => left.is_signed() != right.is_signed(),
       _ => false,
     };
+    let narrowing = match kinds {
+      (Some(left), Some(right)) => (!signedness).then(|| (right.size() * 8, left.size() * 8)),
+      _ => None,
+    }
+    .filter(|(from, to)| from > to);
     let (wanted, given) = (self.type_name(wanted), self.type_name(given));
     let message = if signedness {
       format!("Number signedness mismatch. Type wanted: {wanted}; type given: {given}.")
+    } else if let Some((from, to)) = narrowing {
+      format!(
+        "Loss of information (trying to fit {from} bits into {to} bits). Can't do this without \
+         an explicit cast. Type wanted: {wanted}; type given: {given}."
+      )
     } else {
       format!("Type mismatch. Type wanted: {wanted}; type given: {given}.")
     };

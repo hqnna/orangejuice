@@ -914,10 +914,7 @@ impl<'a> Program<'a> {
       self.error(
         source,
         span,
-        format!(
-          "Redeclared identifier '{}'.",
-          self.interner.resolve_lossy(ident)
-        ),
+        format!("Redeclaration of '{}'.", self.interner.resolve_lossy(ident)),
       );
       if let Some(other) = previous.source {
         self.report(Diagnostic::info(
@@ -1058,10 +1055,7 @@ impl<'a> Program<'a> {
             self.error(
               source,
               span,
-              format!(
-                "Redeclared identifier '{}'.",
-                self.interner.resolve_lossy(name)
-              ),
+              format!("Redeclaration of '{}'.", self.interner.resolve_lossy(name)),
             );
           }
         }

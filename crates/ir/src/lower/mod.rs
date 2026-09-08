@@ -224,18 +224,12 @@ impl<'c, 'p> Lowering<'c, 'p> {
 
   fn run(&mut self) {
     let Some(main) = self.find_entry() else {
-      let span = Span::at(0);
-      let source = self
-        .checker
-        .program()
-        .units()
-        .next()
-        .map(|unit| unit.source)
-        .unwrap_or(SourceId(0));
+      // The reference names the entry point it looked for and gives no place
+      // in the program, since the program is what is missing it (**C§12**).
       self.diagnostics.push(Diagnostic::error(
-        source,
-        span,
-        "No entry point was found. The program has no 'main'.",
+        SourceId::NONE,
+        Span::at(0),
+        "No program entry point was found. (The designated entry point name is 'main'.)",
       ));
       return;
     };
@@ -948,6 +942,31 @@ impl<'c, 'p> Lowering<'c, 'p> {
       .tree_of(source)
       .map_or(Span::at(0), |ast| ast.node(node).span);
     self.report(source, span, message);
+  }
+
+  /// The span a node was written at, for a diagnostic that names a place
+  /// rather than a node.
+  fn span_of(&self, source: SourceId, node: NodeId) -> Span {
+    self
+      .checker
+      .tree_of(source)
+      .map_or(Span::at(0), |ast| ast.node(node).span)
+  }
+
+  /// A warning, deduplicated the way an error is: one instantiation per
+  /// specialization would otherwise repeat it.
+  fn warn(&mut self, source: SourceId, span: Span, message: impl Into<String>) {
+    let message = message.into();
+    if self
+      .diagnostics
+      .iter()
+      .any(|entry| entry.source == source && entry.span == span && entry.message == message)
+    {
+      return;
+    }
+    self
+      .diagnostics
+      .push(Diagnostic::warning(source, span, message));
   }
 
   fn report(&mut self, source: SourceId, span: Span, message: impl Into<String>) {

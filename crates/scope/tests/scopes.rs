@@ -292,7 +292,7 @@ fn redeclaring_a_name_in_one_scope_is_an_error_that_points_at_the_first_one() {
   fixture.write("main.jai", "x := 1;\nx := 2;\n");
 
   resolve(&fixture, "main.jai", |program, _| {
-    assert_eq!(errors(program), ["Redeclared identifier 'x'."]);
+    assert_eq!(errors(program), ["Redeclaration of 'x'."]);
     assert!(
       program
         .diagnostics()

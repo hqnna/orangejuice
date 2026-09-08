@@ -124,6 +124,12 @@ pub fn run_input(
   };
   let render = |diagnostics: &[oj_diag::Diagnostic], report: &mut Report| {
     for diagnostic in diagnostics {
+      if diagnostic.source == oj_diag::SourceId::NONE {
+        report
+          .diagnostics
+          .push(oj_diag::render_unplaced(diagnostic));
+        continue;
+      }
       let file = sources.file(diagnostic.source);
       report.diagnostics.push(oj_diag::render(diagnostic, &file));
     }
