@@ -68,7 +68,7 @@ impl Checker<'_> {
     let mut found = None;
     let mut current = Some(scope);
     while let Some(id) = current {
-      let used: Vec<oj_scope::UsedValue> = self.program().tree().scope(id).used_values.to_vec();
+      let used: Vec<oj_scope::UsedValue> = self.program().tree().used_values(id).to_vec();
       for value in used {
         if !value.admits(name) {
           continue;
@@ -81,7 +81,7 @@ impl Checker<'_> {
       if found.is_some() {
         break;
       }
-      current = self.program().tree().scope(id).parent;
+      current = self.program().tree().parent(id);
     }
     self.leave();
     found

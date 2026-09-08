@@ -314,7 +314,7 @@ impl Checker<'_> {
         return Some(self.declarations_type(&candidates));
       };
       let owner = self.program().tree().decl(shadowed).scope;
-      scope = self.program().tree().scope(owner).parent?;
+      scope = self.program().tree().parent(owner)?;
     }
   }
 
@@ -331,7 +331,7 @@ impl Checker<'_> {
     }
     let mut live = Vec::with_capacity(candidates.len());
     for id in candidates {
-      let decl = self.program().tree().decl(*id).clone();
+      let decl = self.program().tree().decl(*id);
       let Some(branch) = decl.branch else {
         live.push(*id);
         continue;
@@ -372,7 +372,7 @@ impl Checker<'_> {
   fn shadowed_declaration(&self, candidates: &[DeclId]) -> Option<DeclId> {
     let tree = self.program().tree();
     let all_pending = candidates.iter().all(|id| {
-      self.is_resolving(*id) && tree.scope(tree.decl(*id).scope).kind == ScopeKind::Imperative
+      self.is_resolving(*id) && tree.scope_kind(tree.decl(*id).scope) == ScopeKind::Imperative
     });
     (all_pending && !candidates.is_empty()).then(|| candidates[0])
   }
@@ -411,7 +411,7 @@ impl Checker<'_> {
     if let Some(denoted) = resolved.denoted {
       return Expr::type_expression(denoted);
     }
-    let decl = self.program().tree().decl(only).clone();
+    let decl = self.program().tree().decl(only);
     if decl
       .flags
       .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)

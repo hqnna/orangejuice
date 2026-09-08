@@ -35,6 +35,7 @@ impl Checker<'_> {
     let units: Vec<(SourceId, ScopeId, NodeId)> = self
       .program()
       .units()
+      .collect::<Vec<_>>()
       .iter()
       .map(|unit| (unit.source, unit.scope, unit.parsed.root))
       .collect();
@@ -114,7 +115,7 @@ impl Checker<'_> {
   }
 
   fn check_procedure(&mut self, procedure: DeclId) {
-    let decl = self.program().tree().decl(procedure).clone();
+    let decl = self.program().tree().decl(procedure);
     let (Some(node), Some(source)) = (decl.node, decl.source) else {
       return;
     };

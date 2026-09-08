@@ -187,13 +187,13 @@ impl Checker<'_> {
     let mut pending = vec![root];
     while let Some(scope) = pending.pop() {
       let tree = self.program().tree();
-      for id in &tree.scope(scope).declarations {
+      for id in &tree.declarations(scope) {
         let decl = tree.decl(*id);
         if decl.name == name && decl.flags.contains(DeclarationFlags::HAS_SCOPE_MODIFIER) {
           return Some(*id);
         }
       }
-      pending.extend(tree.scope(scope).children.iter().copied());
+      pending.extend(tree.children(scope).iter().copied());
     }
     None
   }

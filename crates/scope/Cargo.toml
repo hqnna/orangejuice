@@ -7,6 +7,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+boxcar.workspace = true
 oj-diag.workspace = true
 oj-lexer.workspace = true
 oj-source.workspace = true

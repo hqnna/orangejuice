@@ -76,14 +76,13 @@ impl Checker<'_> {
   ) -> DeclType {
     // An enum member's value is decided by the enum, not by its own
     // expression, so asking for one builds the whole enum (**L§9**).
-    if self.program().tree().scope(decl_scope).kind == ScopeKind::Enum
+    if self.program().tree().scope_kind(decl_scope) == ScopeKind::Enum
       && let Some((owner_source, owner_node)) = self.aggregate_owner(decl_scope)
     {
       let outer = self
         .program()
         .tree()
-        .scope(decl_scope)
-        .parent
+        .parent(decl_scope)
         .unwrap_or(decl_scope);
       self.build_enum(None, None, owner_source, owner_node, outer);
       if let Some(resolved) = self.resolved(id) {

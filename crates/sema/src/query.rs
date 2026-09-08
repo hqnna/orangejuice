@@ -125,7 +125,7 @@ impl Checker<'_> {
     let Some(scope) = self.program().loop_scope(source, loop_node) else {
       return (None, None);
     };
-    let declarations = &self.program().tree().scope(scope).declarations;
+    let declarations = &self.program().tree().declarations(scope);
     (declarations.first().copied(), declarations.get(1).copied())
   }
 
@@ -193,7 +193,7 @@ impl Checker<'_> {
 
   /// Where a procedure was written, and what its parameters are declared as.
   pub fn procedure_body(&mut self, procedure: DeclId) -> Option<ProcedureBody> {
-    let decl = self.program().tree().decl(procedure).clone();
+    let decl = self.program().tree().decl(procedure);
     let (node, source) = (decl.node?, decl.source?);
     let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
       return None;

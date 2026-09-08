@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -154,61 +155,59 @@ pub struct Program<'a> {
   options: Options,
   import_path: ImportPath,
   tree: ScopeTree,
-  units: Vec<Unit>,
-  unit_of_source: HashMap<SourceId, usize>,
-  modules: HashMap<ModuleKey, ScopeId>,
-  loaded: HashSet<(ScopeId, PathBuf)>,
+  units: boxcar::Vec<Unit>,
+  unit_of_source: RefCell<HashMap<SourceId, usize>>,
+  modules: RefCell<HashMap<ModuleKey, ScopeId>>,
+  loaded: RefCell<HashSet<(ScopeId, PathBuf)>>,
   /// The member scope of each struct and enum definition, so that a `using` of
   /// a type declaration can widen the scope around it without waiting for
   /// types (**L§6.8**).
-  aggregate_scopes: HashMap<(SourceId, NodeId), ScopeId>,
+  aggregate_scopes: RefCell<HashMap<(SourceId, NodeId), ScopeId>>,
   /// The scope a `for` loop declares its `it` and `it_index` in, by the loop
   /// node: an implicit one has no identifier to be found through (**L§6.5**).
-  loop_scopes: HashMap<(SourceId, NodeId), ScopeId>,
+  loop_scopes: RefCell<HashMap<(SourceId, NodeId), ScopeId>>,
   /// The scopes every procedure header opened, by the header node. An
   /// instantiation binds the `$T`s declared in the constants block, so it
   /// needs a way in that does not go through a name (**L§7.8**).
-  procedure_scopes: HashMap<(SourceId, NodeId), ProcedureScopes>,
+  procedure_scopes: RefCell<HashMap<(SourceId, NodeId), ProcedureScopes>>,
   /// The constants scope of every polymorphic procedure and macro. Nothing
   /// inside one of those exists until an instantiation makes it exist, so a
   /// `#run` written there waits for an instantiation rather than running (**L§12.1**).
-  uninstantiated_scopes: HashSet<ScopeId>,
+  uninstantiated_scopes: RefCell<HashSet<ScopeId>>,
   /// The constants scope of every macro. A name that misses inside one of
   /// these is a wait for the expansion, not an error: the macro's body sees
   /// the caller's locals (**L§7.13**).
-  macro_scopes: HashSet<ScopeId>,
-  builtins: HashMap<DeclId, ConstValue>,
-  references: Vec<Reference>,
+  macro_scopes: RefCell<HashSet<ScopeId>>,
+  builtins: RefCell<HashMap<DeclId, ConstValue>>,
+  references: RefCell<Vec<Reference>>,
   /// Names some macro declares with a backtick, which land in whatever block
   /// the macro expands into rather than where they are written (**L§7.13**).
   /// A miss on one of these is a wait for the expansion, not an error.
-  macro_injected: HashSet<Symbol>,
-  diagnostics: Vec<Diagnostic>,
-  pending_ifs: Vec<PendingIf>,
+  macro_injected: RefCell<HashSet<Symbol>>,
+  diagnostics: RefCell<Vec<Diagnostic>>,
+  pending_ifs: RefCell<Vec<PendingIf>>,
   /// Nonzero while the branches of an undecidable `#if` are being admitted, so
   /// nothing reached from there is known to be real: its diagnostics are held
   /// back until the condition can be decided (M6 runs the `#run`s most of them
   /// wait on).
-  speculative: u32,
+  speculative: Cell<u32>,
   /// Nonzero while declarations belong to one branch of an undecidable `#if`.
   /// Unlike `speculative` this stops at a module boundary: a module is loaded
   /// once however it was reached, so its own declarations are not conditional.
-  conditional: u32,
+  conditional: Cell<u32>,
   /// The branch of an undecidable `#if` whose statements are being admitted
   /// right now, so that whoever can fold the condition later knows which
   /// declarations to drop (**L§6.10**).
-  branch: Option<Branch>,
-  unshared_instances: u32,
+  branch: Cell<Option<Branch>>,
+  unshared_instances: Cell<u32>,
   preload: ScopeId,
   main: ScopeId,
 }
 
 impl AstSource for Program<'_> {
   fn ast_of(&self, source: SourceId) -> Option<&oj_syntax::ast::Ast> {
-    self
-      .unit_of_source
-      .get(&source)
-      .map(|index| &self.units[*index].parsed.ast)
+    let index = *self.unit_of_source.borrow().get(&source)?;
+    Some(&self.units[index].parsed.ast)
   }
 }
 
@@ -233,34 +232,34 @@ impl<'a> Program<'a> {
       import_path.prepend(directory.clone());
     }
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let preload = tree.push_scope(ScopeKind::Preload, None);
     let main = tree.push_scope(ScopeKind::Module, Some(preload));
 
-    let mut program = Self {
+    let program = Self {
       sources,
       interner,
       options,
       import_path,
       tree,
-      units: Vec::new(),
-      unit_of_source: HashMap::new(),
-      modules: HashMap::new(),
-      loaded: HashSet::new(),
-      aggregate_scopes: HashMap::new(),
-      loop_scopes: HashMap::new(),
-      procedure_scopes: HashMap::new(),
-      uninstantiated_scopes: HashSet::new(),
-      macro_scopes: HashSet::new(),
-      builtins: HashMap::new(),
-      references: Vec::new(),
-      macro_injected: HashSet::new(),
-      diagnostics: Vec::new(),
-      pending_ifs: Vec::new(),
-      speculative: 0,
-      conditional: 0,
-      branch: None,
-      unshared_instances: 0,
+      units: boxcar::Vec::new(),
+      unit_of_source: RefCell::default(),
+      modules: RefCell::default(),
+      loaded: RefCell::default(),
+      aggregate_scopes: RefCell::default(),
+      loop_scopes: RefCell::default(),
+      procedure_scopes: RefCell::default(),
+      uninstantiated_scopes: RefCell::default(),
+      macro_scopes: RefCell::default(),
+      builtins: RefCell::default(),
+      references: RefCell::default(),
+      macro_injected: RefCell::default(),
+      diagnostics: RefCell::default(),
+      pending_ifs: RefCell::default(),
+      speculative: Cell::new(0),
+      conditional: Cell::new(0),
+      branch: Cell::new(None),
+      unshared_instances: Cell::new(0),
       preload,
       main,
     };
@@ -278,21 +277,25 @@ impl<'a> Program<'a> {
     &self.tree
   }
 
-  pub fn units(&self) -> &[Unit] {
-    &self.units
+  pub fn units(&self) -> impl Iterator<Item = &Unit> + '_ {
+    self.units.iter().map(|(_, unit)| unit)
   }
 
-  pub fn references(&self) -> &[Reference] {
-    &self.references
+  pub fn unit_count(&self) -> usize {
+    self.units.count()
+  }
+
+  pub fn references(&self) -> std::cell::Ref<'_, Vec<Reference>> {
+    self.references.borrow()
   }
 
   /// Whether `name` is one a macro injects into its caller's block.
   pub fn is_macro_injected(&self, name: Symbol) -> bool {
-    self.macro_injected.contains(&name)
+    self.macro_injected.borrow().contains(&name)
   }
 
-  pub fn diagnostics(&self) -> &[Diagnostic] {
-    &self.diagnostics
+  pub fn diagnostics(&self) -> std::cell::Ref<'_, Vec<Diagnostic>> {
+    self.diagnostics.borrow()
   }
 
   pub fn interner(&self) -> &'a Interner {
@@ -317,7 +320,7 @@ impl<'a> Program<'a> {
   /// at `node`. The typechecker reads the members from it in declaration
   /// order, which is the order they are laid out in (**L§3.14**).
   pub fn aggregate_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
-    self.aggregate_scopes.get(&(source, node)).copied()
+    self.aggregate_scopes.borrow().get(&(source, node)).copied()
   }
 
   /// Every recorded aggregate body, as `(source, node, members scope)`. The
@@ -326,12 +329,16 @@ impl<'a> Program<'a> {
   /// loop that did not name them has no identifier to find them through, so
   /// this is the only way in.
   pub fn loop_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
-    self.loop_scopes.get(&(source, node)).copied()
+    self.loop_scopes.borrow().get(&(source, node)).copied()
   }
 
   /// The scopes a procedure header opened (**L§7.8**).
   pub fn procedure_scopes(&self, source: SourceId, header: NodeId) -> Option<ProcedureScopes> {
-    self.procedure_scopes.get(&(source, header)).copied()
+    self
+      .procedure_scopes
+      .borrow()
+      .get(&(source, header))
+      .copied()
   }
 
   /// Whether a scope lies inside a polymorphic procedure or a macro, whose
@@ -340,10 +347,10 @@ impl<'a> Program<'a> {
   pub fn is_uninstantiated(&self, scope: ScopeId) -> bool {
     let mut current = Some(scope);
     while let Some(id) = current {
-      if self.uninstantiated_scopes.contains(&id) {
+      if self.uninstantiated_scopes.borrow().contains(&id) {
         return true;
       }
-      current = self.tree.scope(id).parent;
+      current = self.tree.parent(id);
     }
     false
   }
@@ -354,26 +361,28 @@ impl<'a> Program<'a> {
   pub fn is_in_macro(&self, scope: ScopeId) -> bool {
     let mut current = Some(scope);
     while let Some(id) = current {
-      if self.macro_scopes.contains(&id) {
+      if self.macro_scopes.borrow().contains(&id) {
         return true;
       }
-      current = self.tree.scope(id).parent;
+      current = self.tree.parent(id);
     }
     false
   }
 
-  pub fn aggregate_scopes(&self) -> impl Iterator<Item = (SourceId, NodeId, ScopeId)> + '_ {
+  pub fn aggregate_scopes(&self) -> Vec<(SourceId, NodeId, ScopeId)> {
     self
       .aggregate_scopes
+      .borrow()
       .iter()
       .map(|((source, node), scope)| (*source, *node, *scope))
+      .collect()
   }
 
   pub fn has_errors(&self) -> bool {
-    self.diagnostics.iter().any(Diagnostic::is_error)
+    self.diagnostics.borrow().iter().any(Diagnostic::is_error)
   }
 
-  fn declare_builtins(&mut self) {
+  fn declare_builtins(&self) {
     for name in BASIC_TYPE_NAMES {
       self.declare_builtin(name, None);
     }
@@ -392,7 +401,7 @@ impl<'a> Program<'a> {
     self.declare_builtin(b"MACHINE_OPTIONS_SIZE", Some(ConstValue::Int(256)));
   }
 
-  fn declare_builtin(&mut self, name: &[u8], value: Option<ConstValue>) {
+  fn declare_builtin(&self, name: &[u8], value: Option<ConstValue>) {
     let name = self.interner.intern(name);
     let scope = self.preload;
     let id = self
@@ -412,11 +421,11 @@ impl<'a> Program<'a> {
       })
       .unwrap_or_else(|previous| previous);
     if let Some(value) = value {
-      self.builtins.insert(id, value);
+      self.builtins.borrow_mut().insert(id, value);
     }
   }
 
-  fn load_preload(&mut self) {
+  fn load_preload(&self) {
     let Some(jai_dir) = self.options.jai_dir.clone() else {
       return;
     };
@@ -434,7 +443,7 @@ impl<'a> Program<'a> {
 
   /// Instantiates a module the compiler imports on the program's behalf, with
   /// no parameters, and makes its exports visible in `into`.
-  fn import_module_by_name(&mut self, name: &str, into: ScopeId) {
+  fn import_module_by_name(&self, name: &str, into: ScopeId) {
     let Ok(resolved) = oj_source::resolve_module(name, &self.import_path) else {
       return;
     };
@@ -443,11 +452,12 @@ impl<'a> Program<'a> {
       parameters: String::new(),
       instance: 0,
     };
-    let module = match self.modules.get(&key) {
-      Some(existing) => *existing,
+    let existing = self.modules.borrow().get(&key).copied();
+    let module = match existing {
+      Some(existing) => existing,
       None => {
         let module = self.tree.push_scope(ScopeKind::Module, Some(self.preload));
-        self.modules.insert(key, module);
+        self.modules.borrow_mut().insert(key, module);
         self.load_module_files(module, &resolved.entry, None);
         module
       }
@@ -469,9 +479,9 @@ impl<'a> Program<'a> {
 
   /// Parses `path` as a new file scope under `module` and walks it. `origin`
   /// is the `#load`/`#import` site a read error is reported at.
-  fn load_file_into(&mut self, module: ScopeId, path: &Path, origin: Option<(SourceId, Span)>) {
+  fn load_file_into(&self, module: ScopeId, path: &Path, origin: Option<(SourceId, Span)>) {
     let key = (module, path.to_path_buf());
-    if !self.loaded.insert(key) {
+    if !self.loaded.borrow_mut().insert(key) {
       if let Some((source, span)) = origin {
         self.error(
           source,
@@ -505,11 +515,17 @@ impl<'a> Program<'a> {
 
     let file = self.sources.file(source);
     let parsed = Arc::new(oj_syntax::parse(file.bytes(), source, self.interner));
-    self.diagnostics.extend(parsed.diagnostics.iter().cloned());
+    self
+      .diagnostics
+      .borrow_mut()
+      .extend(parsed.diagnostics.iter().cloned());
 
     let scope = self.tree.push_scope(ScopeKind::File, Some(module));
     self.tree.set_file(scope, source, path);
-    self.unit_of_source.insert(source, self.units.len());
+    self
+      .unit_of_source
+      .borrow_mut()
+      .insert(source, self.units.count());
     self.units.push(Unit {
       source,
       path: path.to_path_buf(),
@@ -533,15 +549,16 @@ impl<'a> Program<'a> {
   /// A module is loaded exactly once however it was reached, so its contents
   /// are not conditional even when the `#import` that pulled it in sits in a
   /// `#if` branch M3 could not decide.
-  fn load_module_files(&mut self, module: ScopeId, entry: &Path, origin: Option<(SourceId, Span)>) {
-    let conditional = std::mem::take(&mut self.conditional);
+  fn load_module_files(&self, module: ScopeId, entry: &Path, origin: Option<(SourceId, Span)>) {
+    let conditional = self.conditional.replace(0);
     self.load_file_into(module, entry, origin);
-    self.conditional = conditional;
+    self.conditional.set(conditional);
   }
 
   fn path_of(&self, source: SourceId) -> PathBuf {
     self
       .unit_of_source
+      .borrow()
       .get(&source)
       .map(|index| self.units[*index].path.clone())
       .unwrap_or_default()
@@ -550,7 +567,7 @@ impl<'a> Program<'a> {
   // ------------------------------------------------------------ data scope ---
 
   fn data_statements(
-    &mut self,
+    &self,
     parsed: &Parsed,
     statements: &[NodeId],
     target: &mut DataTarget,
@@ -562,7 +579,7 @@ impl<'a> Program<'a> {
   }
 
   fn data_statement(
-    &mut self,
+    &self,
     parsed: &Parsed,
     statement: NodeId,
     target: &mut DataTarget,
@@ -612,7 +629,7 @@ impl<'a> Program<'a> {
       // An enum body's `#if` branches parse as imperative statements, so a bare
       // member name arrives here as an identifier rather than a declaration; in
       // an enum scope it is still a member (**L§6.10**, **L§9**).
-      NodeData::Ident(ident) if self.tree.scope(target.scope).kind == ScopeKind::Enum => {
+      NodeData::Ident(ident) if self.tree.scope_kind(target.scope) == ScopeKind::Enum => {
         let (name, span) = (ident.name, parsed.ast.node(statement).span);
         let scope = target.scope;
         let conditional = self.is_conditional(target);
@@ -626,7 +643,7 @@ impl<'a> Program<'a> {
           span,
           node: Some(statement),
           conditional,
-          branch: self.branch,
+          branch: self.branch.get(),
           overloadable: false,
         });
       }
@@ -648,7 +665,7 @@ impl<'a> Program<'a> {
   }
 
   fn declare(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     target: &mut DataTarget,
@@ -684,7 +701,7 @@ impl<'a> Program<'a> {
   /// Puts the name a declaration introduces into its scope. A declaration that
   /// has none — an unnamed return value — introduces nothing.
   fn declare_name(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     declaration: &oj_syntax::ast::Declaration,
@@ -708,7 +725,7 @@ impl<'a> Program<'a> {
       .flags
       .contains(DeclarationFlags::HAS_SCOPE_MODIFIER);
     if backticked {
-      self.macro_injected.insert(ident);
+      self.macro_injected.borrow_mut().insert(ident);
     }
     let destination = target.destination();
     let declared = self.tree.declare(Decl {
@@ -721,12 +738,12 @@ impl<'a> Program<'a> {
       span,
       node: Some(node),
       conditional: self.is_conditional(target) || backticked,
-      branch: self.branch,
+      branch: self.branch.get(),
       overloadable,
     });
 
     if let Err(previous) = declared {
-      let previous = self.tree.decl(previous).clone();
+      let previous = self.tree.decl(previous);
       self.error(
         source,
         span,
@@ -749,7 +766,7 @@ impl<'a> Program<'a> {
   /// What a name stands for, judged from the shape of its value alone; a named
   /// `#import` also instantiates the module it binds.
   fn declaration_kind(
-    &mut self,
+    &self,
     parsed: &Parsed,
     declaration: &oj_syntax::ast::Declaration,
     target: &DataTarget,
@@ -803,7 +820,7 @@ impl<'a> Program<'a> {
   /// side: it belongs to whichever block the macro expands into (**L§7.13**),
   /// so its presence here is provisional.
   fn is_conditional(&self, target: &DataTarget) -> bool {
-    target.conditional || self.conditional > 0
+    target.conditional || self.conditional.get() > 0
   }
 
   fn plain_kind(&self, flags: DeclarationFlags) -> DeclKind {
@@ -819,7 +836,7 @@ impl<'a> Program<'a> {
   /// in a declaration `b=` assigns to an existing name, and in an assignment
   /// `d:` declares a new one.
   fn compound_declaration(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     target: &mut DataTarget,
@@ -867,7 +884,7 @@ impl<'a> Program<'a> {
             span,
             node: Some(entry),
             conditional: self.is_conditional(target),
-            branch: self.branch,
+            branch: self.branch.get(),
             overloadable: false,
           });
           if declared.is_err() {
@@ -897,7 +914,7 @@ impl<'a> Program<'a> {
 
   #[allow(clippy::too_many_arguments)]
   fn using(
-    &mut self,
+    &self,
     parsed: &Parsed,
     statement: NodeId,
     expression: NodeId,
@@ -1005,7 +1022,11 @@ impl<'a> Program<'a> {
     ) {
       return None;
     }
-    self.aggregate_scopes.get(&(source, value)).copied()
+    self
+      .aggregate_scopes
+      .borrow()
+      .get(&(source, value))
+      .copied()
   }
 
   /// `using,only(a, b)` / `using,except(Node)` name lists (**L§6.8**).
@@ -1027,7 +1048,7 @@ impl<'a> Program<'a> {
     }
   }
 
-  fn load(&mut self, name: &[u8], statement: NodeId, target: &mut DataTarget, source: SourceId) {
+  fn load(&self, name: &[u8], statement: NodeId, target: &mut DataTarget, source: SourceId) {
     let span = self.span_of(source, statement);
     let Some(module) = target
       .module
@@ -1058,7 +1079,7 @@ impl<'a> Program<'a> {
   // -------------------------------------------------------------- imports ---
 
   fn import(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     destination: ScopeId,
@@ -1087,7 +1108,7 @@ impl<'a> Program<'a> {
   /// shared by (entry file, textual parameter list) so that two imports with
   /// the same arguments see the same globals (**L§11.2**).
   fn instantiate(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     scope: ScopeId,
@@ -1140,8 +1161,10 @@ impl<'a> Program<'a> {
 
     let unshared = import.flags.contains(oj_syntax::ast::ImportFlags::UNSHARED);
     let instance = if unshared {
-      self.unshared_instances += 1;
-      self.unshared_instances
+      self
+        .unshared_instances
+        .set(self.unshared_instances.get() + 1);
+      self.unshared_instances.get()
     } else {
       0
     };
@@ -1150,12 +1173,12 @@ impl<'a> Program<'a> {
       parameters: self.parameter_text(parsed, &import, source),
       instance,
     };
-    if let Some(existing) = self.modules.get(&key) {
-      return Some(*existing);
+    if let Some(existing) = self.modules.borrow().get(&key).copied() {
+      return Some(existing);
     }
 
     let module = self.tree.push_scope(ScopeKind::Module, Some(self.preload));
-    self.modules.insert(key, module);
+    self.modules.borrow_mut().insert(key, module);
     self.load_module_files(module, &resolved.entry, Some((source, span)));
     Some(module)
   }
@@ -1196,7 +1219,7 @@ impl<'a> Program<'a> {
   }
 
   fn module_parameters(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     target: &mut DataTarget,
@@ -1238,7 +1261,7 @@ impl<'a> Program<'a> {
   }
 
   fn poke_name(
-    &mut self,
+    &self,
     parsed: &Parsed,
     module: NodeId,
     name: NodeId,
@@ -1287,13 +1310,7 @@ impl<'a> Program<'a> {
 
   // ------------------------------------------------------------ static if ---
 
-  fn static_if(
-    &mut self,
-    parsed: &Parsed,
-    node: NodeId,
-    target: &mut DataTarget,
-    source: SourceId,
-  ) {
+  fn static_if(&self, parsed: &Parsed, node: NodeId, target: &mut DataTarget, source: SourceId) {
     let NodeData::If(payload) = parsed.ast.data(node) else {
       return;
     };
@@ -1309,7 +1326,7 @@ impl<'a> Program<'a> {
 
     match self.static_branch(parsed, node, target.scope, source) {
       Some(statements) => self.data_statements(parsed, &statements, target, source),
-      None => self.pending_ifs.push(PendingIf::Data {
+      None => self.pending_ifs.borrow_mut().push(PendingIf::Data {
         node,
         target: *target,
         source,
@@ -1440,9 +1457,9 @@ impl<'a> Program<'a> {
 
   /// Retries the `#if`s whose conditions were not yet decidable until nothing
   /// more folds, then admits every branch of what is left.
-  fn settle_pending_ifs(&mut self) {
+  fn settle_pending_ifs(&self) {
     loop {
-      let pending = std::mem::take(&mut self.pending_ifs);
+      let pending = std::mem::take(&mut *self.pending_ifs.borrow_mut());
       if pending.is_empty() {
         return;
       }
@@ -1477,11 +1494,11 @@ impl<'a> Program<'a> {
         }
         continue;
       }
-      self.pending_ifs.extend(still_pending);
+      self.pending_ifs.borrow_mut().extend(still_pending);
     }
   }
 
-  fn resume_static_if(&mut self, parsed: &Parsed, item: PendingIf, statements: &[NodeId]) {
+  fn resume_static_if(&self, parsed: &Parsed, item: PendingIf, statements: &[NodeId]) {
     match item {
       PendingIf::Data {
         mut target, source, ..
@@ -1498,7 +1515,7 @@ impl<'a> Program<'a> {
   /// all of them: every branch is admitted as conditional declarations, which
   /// neither collide with each other nor hide a real declaration, and the scope
   /// is marked as still able to gain names (**L§4.3**).
-  fn admit_all_branches(&mut self, item: PendingIf) {
+  fn admit_all_branches(&self, item: PendingIf) {
     let (node, source) = match &item {
       PendingIf::Data { node, source, .. } => (*node, *source),
       PendingIf::Imperative { node, source, .. } => (*node, *source),
@@ -1507,9 +1524,9 @@ impl<'a> Program<'a> {
       return;
     };
     let branches = self.labelled_branches(&parsed, node, source);
-    self.speculative += 1;
-    self.conditional += 1;
-    let outer = self.branch;
+    self.speculative.set(self.speculative.get() + 1);
+    self.conditional.set(self.conditional.get() + 1);
+    let outer = self.branch.get();
 
     match item {
       PendingIf::Data {
@@ -1520,7 +1537,7 @@ impl<'a> Program<'a> {
           .add_pending(target.destination(), PendingProvider::StaticIf);
         target.conditional = true;
         for (branch, statements) in branches {
-          self.branch = branch;
+          self.branch.set(branch);
           let mut branch_target = target;
           self.data_statements(&parsed, &statements, &mut branch_target, source);
         }
@@ -1528,16 +1545,16 @@ impl<'a> Program<'a> {
       PendingIf::Imperative { scope, source, .. } => {
         self.tree.add_pending(scope, PendingProvider::StaticIf);
         for (branch, statements) in branches {
-          self.branch = branch;
+          self.branch.set(branch);
           for statement in statements {
             self.imperative_statement(&parsed, statement, scope, source);
           }
         }
       }
     }
-    self.branch = outer;
-    self.speculative -= 1;
-    self.conditional -= 1;
+    self.branch.set(outer);
+    self.speculative.set(self.speculative.get() - 1);
+    self.conditional.set(self.conditional.get() - 1);
   }
 
   /// The statements of each branch, each labelled with the branch it is — so
@@ -1582,6 +1599,7 @@ impl<'a> Program<'a> {
   fn parsed_of(&self, source: SourceId) -> Option<Arc<Parsed>> {
     self
       .unit_of_source
+      .borrow()
       .get(&source)
       .map(|index| Arc::clone(&self.units[*index].parsed))
   }
@@ -1591,18 +1609,19 @@ impl<'a> Program<'a> {
   }
 
   fn fold(&self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<ConstValue> {
-    Evaluator::new(&self.tree, self, &self.builtins, self.interner).eval(scope, source, node)
+    Evaluator::new(&self.tree, self, &self.builtins.borrow(), self.interner)
+      .eval(scope, source, node)
   }
 
   // ------------------------------------------------------- diagnostics ------
 
-  fn error(&mut self, source: SourceId, span: Span, message: impl Into<String>) {
+  fn error(&self, source: SourceId, span: Span, message: impl Into<String>) {
     self.report(Diagnostic::error(source, span, message));
   }
 
-  fn report(&mut self, diagnostic: Diagnostic) {
-    if self.speculative == 0 {
-      self.diagnostics.push(diagnostic);
+  fn report(&self, diagnostic: Diagnostic) {
+    if self.speculative.get() == 0 {
+      self.diagnostics.borrow_mut().push(diagnostic);
     }
   }
 }
@@ -1635,7 +1654,7 @@ fn collect_names(parsed: &Parsed, node: NodeId, names: &mut Vec<Symbol>) {
 impl Program<'_> {
   /// Walks one node, opening the scopes it introduces and recording every
   /// identifier that has to resolve.
-  fn walk(&mut self, parsed: &Parsed, node: NodeId, scope: ScopeId, source: SourceId) {
+  fn walk(&self, parsed: &Parsed, node: NodeId, scope: ScopeId, source: SourceId) {
     match parsed.ast.data(node) {
       NodeData::Block(block) => {
         let (block_type, statements) = (block.block_type, block.statements.clone());
@@ -1742,7 +1761,7 @@ impl Program<'_> {
                 self.imperative_statement(parsed, statement, scope, source);
               }
             }
-            None => self.pending_ifs.push(PendingIf::Imperative {
+            None => self.pending_ifs.borrow_mut().push(PendingIf::Imperative {
               node,
               scope,
               source,
@@ -1939,7 +1958,7 @@ impl Program<'_> {
   }
 
   fn walk_all(
-    &mut self,
+    &self,
     parsed: &Parsed,
     nodes: impl IntoIterator<Item = NodeId>,
     scope: ScopeId,
@@ -1952,7 +1971,7 @@ impl Program<'_> {
 
   /// The body of an `if`, `while`, `for`, `defer` or `case`: a child scope even
   /// when it was written without braces (**L§4.2**).
-  fn body(&mut self, parsed: &Parsed, node: NodeId, scope: ScopeId, source: SourceId) {
+  fn body(&self, parsed: &Parsed, node: NodeId, scope: ScopeId, source: SourceId) {
     match parsed.ast.data(node) {
       NodeData::Block(_) => self.walk(parsed, node, scope, source),
       _ => {
@@ -1963,7 +1982,7 @@ impl Program<'_> {
   }
 
   fn imperative_statement(
-    &mut self,
+    &self,
     parsed: &Parsed,
     statement: NodeId,
     scope: ScopeId,
@@ -1980,7 +1999,7 @@ impl Program<'_> {
   /// `f(x,, allocator = temp)`: the left of a `,,` assignment names a member of
   /// the `Context` type, not anything in this scope (**L§10.1**). A struct
   /// literal field works the same way, so both walk only the value.
-  fn assignment_value(&mut self, parsed: &Parsed, entry: NodeId, scope: ScopeId, source: SourceId) {
+  fn assignment_value(&self, parsed: &Parsed, entry: NodeId, scope: ScopeId, source: SourceId) {
     match parsed.ast.data(entry) {
       NodeData::BinaryOperator {
         operator, right, ..
@@ -1995,7 +2014,7 @@ impl Program<'_> {
   /// `union { … }` or `struct { … }` written as a statement declares no name of
   /// its own, so its members join the scope around it (**L§8.1**).
   fn anonymous_aggregate(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     target: &mut DataTarget,
@@ -2012,7 +2031,7 @@ impl Program<'_> {
   }
 
   fn reference(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     name: Symbol,
@@ -2031,19 +2050,19 @@ impl Program<'_> {
     ) {
       return;
     }
-    self.references.push(Reference {
+    self.references.borrow_mut().push(Reference {
       name,
       scope,
       source,
       span: parsed.ast.node(node).span,
       node,
-      speculative: self.speculative > 0,
+      speculative: self.speculative.get() > 0,
     });
   }
 
   // ----------------------------------------------------------- procedures ---
 
-  fn procedure(&mut self, parsed: &Parsed, header: NodeId, parent: ScopeId, source: SourceId) {
+  fn procedure(&self, parsed: &Parsed, header: NodeId, parent: ScopeId, source: SourceId) {
     let NodeData::ProcedureHeader(payload) = parsed.ast.data(header) else {
       return;
     };
@@ -2082,19 +2101,19 @@ impl Program<'_> {
     let polymorphic = payload
       .procedure_flags
       .intersects(ProcedureFlags::POLYMORPHIC | ProcedureFlags::MACRO)
-      || !self.tree.scope(constants).declarations.is_empty()
+      || !self.tree.declarations(constants).is_empty()
       || payload
         .arguments
         .iter()
         .chain(&payload.returns)
         .any(|parameter| declares_a_constant(parsed, *parameter));
     if polymorphic {
-      self.uninstantiated_scopes.insert(constants);
+      self.uninstantiated_scopes.borrow_mut().insert(constants);
     }
     if payload.procedure_flags.contains(ProcedureFlags::MACRO) {
-      self.macro_scopes.insert(constants);
+      self.macro_scopes.borrow_mut().insert(constants);
     }
-    self.procedure_scopes.insert(
+    self.procedure_scopes.borrow_mut().insert(
       (source, header),
       ProcedureScopes {
         constants,
@@ -2132,7 +2151,7 @@ impl Program<'_> {
   /// One parameter or named return value. `using p: Player` also widens the
   /// scope, which needs `Player`'s members and therefore waits (**L§4.3**).
   fn declare_parameter(
-    &mut self,
+    &self,
     parsed: &Parsed,
     parameter: NodeId,
     target: &mut DataTarget,
@@ -2164,7 +2183,7 @@ impl Program<'_> {
   /// A parameter is a constant of the call, not a global or a local: the kind
   /// is fixed after the declaration is made so that `declare` stays the one
   /// place a name enters a scope.
-  fn set_parameter_kind(&mut self, id: DeclId) {
+  fn set_parameter_kind(&self, id: DeclId) {
     if self.tree.decl(id).kind == DeclKind::Variable {
       self.tree.set_decl_kind(id, DeclKind::Parameter);
     }
@@ -2173,7 +2192,7 @@ impl Program<'_> {
   /// `$T` and `$$T` introduce constants of the procedure's constants block
   /// (**L§7.8**); they are written inside the parameter's type expression.
   fn declare_polymorph_variables(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     constants: ScopeId,
@@ -2200,7 +2219,7 @@ impl Program<'_> {
 
   // ------------------------------------------------------ structs and enums ---
 
-  fn structure(&mut self, parsed: &Parsed, node: NodeId, parent: ScopeId, source: SourceId) {
+  fn structure(&self, parsed: &Parsed, node: NodeId, parent: ScopeId, source: SourceId) {
     let NodeData::Struct(payload) = parsed.ast.data(node) else {
       return;
     };
@@ -2218,12 +2237,15 @@ impl Program<'_> {
     // A polymorphic struct is a family, not a type: nothing written in its
     // body exists until an instantiation supplies the arguments (**L§8.5**).
     if payload.has_argument_list && !payload.arguments.is_empty() {
-      self.uninstantiated_scopes.insert(arguments);
+      self.uninstantiated_scopes.borrow_mut().insert(arguments);
     }
     let members = self
       .tree
       .push_scope(ScopeKind::StructMembers, Some(arguments));
-    self.aggregate_scopes.insert((source, node), members);
+    self
+      .aggregate_scopes
+      .borrow_mut()
+      .insert((source, node), members);
     for directive in &payload.modify_directives {
       self.walk(parsed, *directive, arguments, source);
     }
@@ -2240,7 +2262,7 @@ impl Program<'_> {
     }
   }
 
-  fn enumeration(&mut self, parsed: &Parsed, node: NodeId, parent: ScopeId, source: SourceId) {
+  fn enumeration(&self, parsed: &Parsed, node: NodeId, parent: ScopeId, source: SourceId) {
     let NodeData::Enum(payload) = parsed.ast.data(node) else {
       return;
     };
@@ -2249,7 +2271,10 @@ impl Program<'_> {
       self.walk(parsed, internal, parent, source);
     }
     let scope = self.tree.push_scope(ScopeKind::Enum, Some(parent));
-    self.aggregate_scopes.insert((source, node), scope);
+    self
+      .aggregate_scopes
+      .borrow_mut()
+      .insert((source, node), scope);
     if let Some(block) = payload.block {
       let statements = match parsed.ast.data(block) {
         NodeData::Block(block) => block.statements.clone(),
@@ -2261,7 +2286,7 @@ impl Program<'_> {
   }
 
   fn for_loop(
-    &mut self,
+    &self,
     parsed: &Parsed,
     node: NodeId,
     payload: &oj_syntax::ast::ForNode,
@@ -2286,7 +2311,7 @@ impl Program<'_> {
     // `it` and `it_index` live in the loop's own scope and shadow outer ones
     // (**L§4.3**, **L§6.6**).
     let scope = self.tree.push_scope(ScopeKind::Imperative, Some(parent));
-    self.loop_scopes.insert((source, node), scope);
+    self.loop_scopes.borrow_mut().insert((source, node), scope);
     let span = parsed.ast.node(payload.block).span;
     let implicit = [b"it".as_slice(), b"it_index".as_slice()];
     for (written, fallback) in [payload.ident_it, payload.ident_it_index]

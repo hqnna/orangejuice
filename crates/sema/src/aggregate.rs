@@ -168,8 +168,7 @@ impl Checker<'_> {
   fn live_declarations(&self, scope: ScopeId) -> HashSet<NodeId> {
     let tree = self.program().tree();
     tree
-      .scope(scope)
-      .declarations
+      .declarations(scope)
       .iter()
       .filter_map(|id| tree.decl(*id).node)
       .collect()
@@ -417,8 +416,7 @@ impl Checker<'_> {
   pub(crate) fn decl_in_scope(&self, scope: ScopeId, node: NodeId) -> Option<DeclId> {
     let tree = self.program().tree();
     tree
-      .scope(scope)
-      .declarations
+      .declarations(scope)
       .iter()
       .copied()
       .find(|id| tree.decl(*id).node == Some(node))

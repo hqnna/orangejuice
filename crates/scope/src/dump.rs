@@ -12,11 +12,26 @@ pub fn print_scopes(program: &Program<'_>) -> String {
   out
 }
 
+struct Entry {
+  kind: ScopeKind,
+  path: Option<std::path::PathBuf>,
+  declarations: Vec<crate::tree::DeclId>,
+  imports: Vec<ScopeId>,
+  pending: Vec<crate::tree::PendingProvider>,
+  children: Vec<ScopeId>,
+}
 fn print_scope(program: &Program<'_>, scope: ScopeId, depth: usize, out: &mut String) {
   let tree = program.tree();
   let interner = program.interner();
   let indent = "  ".repeat(depth);
-  let entry = tree.scope(scope);
+  let entry = tree.with_scope(scope, |entry| Entry {
+    kind: entry.kind,
+    path: entry.path.clone(),
+    declarations: entry.declarations.clone(),
+    imports: entry.imports.iter().map(|edge| edge.target).collect(),
+    pending: entry.pending.clone(),
+    children: entry.children.clone(),
+  });
 
   let _ = write!(out, "{indent}{}", entry.kind.name());
   if let Some(path) = &entry.path
@@ -48,8 +63,8 @@ fn print_scope(program: &Program<'_>, scope: ScopeId, depth: usize, out: &mut St
     let _ = writeln!(out);
   }
 
-  for edge in &entry.imports {
-    let _ = writeln!(out, "{indent}  using [{}]", edge.target.0);
+  for target in &entry.imports {
+    let _ = writeln!(out, "{indent}  using [{}]", target.0);
   }
   for pending in &entry.pending {
     let _ = writeln!(out, "{indent}  pending {pending:?}");

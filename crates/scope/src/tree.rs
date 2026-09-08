@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -126,7 +127,7 @@ pub struct Branch {
   pub block: NodeId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Decl {
   pub name: Symbol,
   pub scope: ScopeId,
@@ -257,12 +258,18 @@ pub enum Resolution {
   Undeclared,
 }
 
+/// The tree the program resolves into, which keeps growing after it is first
+/// built: an `#insert` or an `add_build_string` adds declarations to a scope
+/// the front end has already walked, and that is the mutable program a
+/// metaprogram works on (**L§13.2**, **C§3.1**). Every mutation therefore takes
+/// `&self`, and every read hands out a copy rather than a borrow, so the
+/// typechecker can grow the tree while it is walking it.
 #[derive(Debug, Default)]
 pub struct ScopeTree {
-  scopes: Vec<Scope>,
-  declarations: Vec<Decl>,
+  scopes: RefCell<Vec<Scope>>,
+  declarations: RefCell<Vec<Decl>>,
   /// The interned `_`, which may be declared any number of times (**L§4.6**).
-  discard: Option<Symbol>,
+  discard: Cell<Option<Symbol>>,
 }
 
 impl ScopeTree {
@@ -270,65 +277,117 @@ impl ScopeTree {
     Self::default()
   }
 
-  pub fn push_scope(&mut self, kind: ScopeKind, parent: Option<ScopeId>) -> ScopeId {
-    let id = ScopeId(self.scopes.len() as u32);
-    self.scopes.push(Scope::new(kind, parent));
+  pub fn push_scope(&self, kind: ScopeKind, parent: Option<ScopeId>) -> ScopeId {
+    let mut scopes = self.scopes.borrow_mut();
+    let id = ScopeId(scopes.len() as u32);
+    scopes.push(Scope::new(kind, parent));
     if let Some(parent) = parent {
-      self.scope_mut(parent).children.push(id);
-      let inherited = self.scope(parent).source;
-      self.scope_mut(id).source = inherited;
-      let path = self.scope(parent).path.clone();
-      self.scope_mut(id).path = path;
+      scopes[parent.0 as usize].children.push(id);
+      let (source, path) = {
+        let parent = &scopes[parent.0 as usize];
+        (parent.source, parent.path.clone())
+      };
+      let scope = &mut scopes[id.0 as usize];
+      scope.source = source;
+      scope.path = path;
     }
     id
   }
 
-  pub fn scope(&self, id: ScopeId) -> &Scope {
-    &self.scopes[id.0 as usize]
+  /// Reads one scope. The closure keeps the tree's borrow honest: nothing may
+  /// grow the tree while a scope is being looked at.
+  pub fn with_scope<R>(&self, id: ScopeId, read: impl FnOnce(&Scope) -> R) -> R {
+    read(&self.scopes.borrow()[id.0 as usize])
   }
 
-  pub fn scope_mut(&mut self, id: ScopeId) -> &mut Scope {
-    &mut self.scopes[id.0 as usize]
+  pub fn decl(&self, id: DeclId) -> Decl {
+    self.declarations.borrow()[id.0 as usize]
   }
 
-  pub fn decl(&self, id: DeclId) -> &Decl {
-    &self.declarations[id.0 as usize]
+  pub fn scope_kind(&self, id: ScopeId) -> ScopeKind {
+    self.with_scope(id, |scope| scope.kind)
+  }
+
+  pub fn parent(&self, id: ScopeId) -> Option<ScopeId> {
+    self.with_scope(id, |scope| scope.parent)
+  }
+
+  pub fn children(&self, id: ScopeId) -> Vec<ScopeId> {
+    self.with_scope(id, |scope| scope.children.clone())
+  }
+
+  pub fn source_of(&self, id: ScopeId) -> Option<SourceId> {
+    self.with_scope(id, |scope| scope.source)
+  }
+
+  pub fn path_of(&self, id: ScopeId) -> Option<PathBuf> {
+    self.with_scope(id, |scope| scope.path.clone())
+  }
+
+  pub fn declarations(&self, id: ScopeId) -> Vec<DeclId> {
+    self.with_scope(id, |scope| scope.declarations.clone())
+  }
+
+  pub fn imports(&self, id: ScopeId) -> Vec<ImportEdge> {
+    self.with_scope(id, |scope| scope.imports.clone())
+  }
+
+  pub fn used_values(&self, id: ScopeId) -> Vec<UsedValue> {
+    self.with_scope(id, |scope| scope.used_values.clone())
+  }
+
+  /// The declarations of one name in one scope, without walking outward.
+  pub fn names_in(&self, id: ScopeId, name: Symbol) -> Option<Vec<DeclId>> {
+    self.with_scope(id, |scope| scope.names.get(&name).cloned())
+  }
+
+  pub fn names(&self, id: ScopeId) -> Vec<Symbol> {
+    self.with_scope(id, |scope| scope.names.keys().copied().collect())
+  }
+
+  pub fn has_pending_providers(&self, id: ScopeId) -> bool {
+    self.with_scope(id, |scope| scope.has_pending_providers())
   }
 
   pub fn scope_count(&self) -> usize {
-    self.scopes.len()
+    self.scopes.borrow().len()
   }
 
   pub fn declaration_count(&self) -> usize {
-    self.declarations.len()
+    self.declarations.borrow().len()
   }
 
   pub fn scope_ids(&self) -> impl Iterator<Item = ScopeId> {
-    (0..self.scopes.len() as u32).map(ScopeId)
+    (0..self.scope_count() as u32).map(ScopeId)
   }
 
-  pub fn set_file(&mut self, id: ScopeId, source: SourceId, path: &Path) {
-    let scope = self.scope_mut(id);
+  pub fn set_file(&self, id: ScopeId, source: SourceId, path: &Path) {
+    let mut scopes = self.scopes.borrow_mut();
+    let scope = &mut scopes[id.0 as usize];
     scope.source = Some(source);
     scope.path = Some(path.to_path_buf());
   }
 
   /// Adds `decl` to its scope. Returns the declaration it collides with, if the
   /// scope already holds a non-overloadable name (**L§4.3**).
-  pub fn declare(&mut self, decl: Decl) -> Result<DeclId, DeclId> {
-    let id = DeclId(self.declarations.len() as u32);
+  pub fn declare(&self, decl: Decl) -> Result<DeclId, DeclId> {
     let scope = decl.scope;
     let name = decl.name;
-    let clash = self
-      .scope(scope)
-      .names
-      .get(&name)
-      .and_then(|existing| self.first_collision(existing, &decl));
+    let existing = self.with_scope(scope, |scope| scope.names.get(&name).cloned());
+    let clash = existing.and_then(|existing| self.first_collision(&existing, &decl));
 
-    self.declarations.push(decl);
-    let scope = self.scope_mut(scope);
-    scope.names.entry(name).or_default().push(id);
-    scope.declarations.push(id);
+    let id = {
+      let mut declarations = self.declarations.borrow_mut();
+      let id = DeclId(declarations.len() as u32);
+      declarations.push(decl);
+      id
+    };
+    {
+      let mut scopes = self.scopes.borrow_mut();
+      let scope = &mut scopes[scope.0 as usize];
+      scope.names.entry(name).or_default().push(id);
+      scope.declarations.push(id);
+    }
 
     match clash {
       Some(previous) => Err(previous),
@@ -340,7 +399,10 @@ impl ScopeTree {
   /// branch never collides, since only one branch will survive, and neither
   /// does a `#placeholder`, whose whole purpose is to be replaced.
   fn first_collision(&self, existing: &[DeclId], decl: &Decl) -> Option<DeclId> {
-    if decl.conditional || decl.kind == DeclKind::Placeholder || self.discard == Some(decl.name) {
+    if decl.conditional
+      || decl.kind == DeclKind::Placeholder
+      || self.discard.get() == Some(decl.name)
+    {
       return None;
     }
     existing.iter().copied().find(|previous| {
@@ -352,27 +414,42 @@ impl ScopeTree {
   }
 
   /// Tells the tree which symbol is the discard identifier `_` (**L§4.6**).
-  pub fn set_discard_name(&mut self, name: Symbol) {
-    self.discard = Some(name);
+  pub fn set_discard_name(&self, name: Symbol) {
+    self.discard.set(Some(name));
   }
 
-  pub fn set_decl_kind(&mut self, id: DeclId, kind: DeclKind) {
-    self.declarations[id.0 as usize].kind = kind;
+  pub fn set_decl_kind(&self, id: DeclId, kind: DeclKind) {
+    self.declarations.borrow_mut()[id.0 as usize].kind = kind;
   }
 
-  pub fn add_import(&mut self, scope: ScopeId, edge: ImportEdge) {
-    self.scope_mut(scope).imports.push(edge);
+  pub fn add_import(&self, scope: ScopeId, edge: ImportEdge) {
+    self.scopes.borrow_mut()[scope.0 as usize]
+      .imports
+      .push(edge);
   }
 
-  pub fn add_used_value(&mut self, scope: ScopeId, value: UsedValue) {
-    self.scope_mut(scope).used_values.push(value);
+  pub fn add_used_value(&self, scope: ScopeId, value: UsedValue) {
+    self.scopes.borrow_mut()[scope.0 as usize]
+      .used_values
+      .push(value);
   }
 
-  pub fn add_pending(&mut self, scope: ScopeId, provider: PendingProvider) {
-    let pending = &mut self.scope_mut(scope).pending;
+  pub fn add_pending(&self, scope: ScopeId, provider: PendingProvider) {
+    let mut scopes = self.scopes.borrow_mut();
+    let pending = &mut scopes[scope.0 as usize].pending;
     if !pending.contains(&provider) {
       pending.push(provider);
     }
+  }
+
+  /// Drops a construct a scope was waiting on, which is what an `#insert`
+  /// does once it has spliced its declarations in: a lookup that missed
+  /// before now has its final answer (**L§4.3**).
+  pub fn clear_pending(&self, scope: ScopeId, provider: PendingProvider) {
+    let mut scopes = self.scopes.borrow_mut();
+    scopes[scope.0 as usize]
+      .pending
+      .retain(|existing| *existing != provider);
   }
 
   /// Looks `name` up from `scope` outward (**L§4.3**): the lexical chain, and
@@ -382,15 +459,21 @@ impl ScopeTree {
     let mut current = Some(scope);
 
     while let Some(id) = current {
-      let scope = self.scope(id);
-      if let Some(found) = scope.names.get(&name) {
-        return Resolution::Found(found.clone());
+      let (found, has_pending, parent) = self.with_scope(id, |scope| {
+        (
+          scope.names.get(&name).cloned(),
+          scope.has_pending_providers(),
+          scope.parent,
+        )
+      });
+      if let Some(found) = found {
+        return Resolution::Found(found);
       }
       if let Some(found) = self.lookup_through_imports(id, name) {
         return Resolution::Found(found);
       }
-      pending |= scope.has_pending_providers();
-      current = scope.parent;
+      pending |= has_pending;
+      current = parent;
     }
 
     if pending {
@@ -414,7 +497,7 @@ impl ScopeTree {
   /// scope merely `#import`ed stops there (**L§11.2**).
   fn lookup_through_imports(&self, scope: ScopeId, name: Symbol) -> Option<Vec<DeclId>> {
     let mut found = Vec::new();
-    for edge in &self.scope(scope).imports {
+    for edge in self.imports(scope) {
       if edge.admits(name) {
         self.collect_exports(edge.target, name, &mut Vec::new(), &mut found);
       }
@@ -434,7 +517,8 @@ impl ScopeTree {
     }
     visiting.push(scope);
 
-    if let Some(candidates) = self.scope(scope).names.get(&name) {
+    let candidates = self.with_scope(scope, |scope| scope.names.get(&name).cloned());
+    if let Some(candidates) = candidates {
       found.extend(
         candidates
           .iter()
@@ -442,7 +526,7 @@ impl ScopeTree {
           .filter(|id| self.decl(*id).visibility.is_exported()),
       );
     }
-    for edge in &self.scope(scope).imports {
+    for edge in self.imports(scope) {
       if edge.transitive && edge.admits(name) {
         self.collect_exports(edge.target, name, visiting, found);
       }
@@ -454,10 +538,11 @@ impl ScopeTree {
   pub fn enclosing_module(&self, scope: ScopeId) -> Option<ScopeId> {
     let mut current = Some(scope);
     while let Some(id) = current {
-      if matches!(self.scope(id).kind, ScopeKind::Module | ScopeKind::Preload) {
+      let (kind, parent) = self.with_scope(id, |scope| (scope.kind, scope.parent));
+      if matches!(kind, ScopeKind::Module | ScopeKind::Preload) {
         return Some(id);
       }
-      current = self.scope(id).parent;
+      current = parent;
     }
     None
   }
@@ -489,7 +574,7 @@ mod tests {
     let outer = interner.intern(b"print");
     let inner = interner.intern(b"x");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let preload = tree.push_scope(ScopeKind::Preload, None);
     let module = tree.push_scope(ScopeKind::Module, Some(preload));
     let block = tree.push_scope(ScopeKind::Imperative, Some(module));
@@ -511,7 +596,7 @@ mod tests {
     let interner = oj_lexer::Interner::new();
     let name = interner.intern(b"length");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let module = tree.push_scope(ScopeKind::Module, None);
     let block = tree.push_scope(ScopeKind::Imperative, Some(module));
 
@@ -528,7 +613,7 @@ mod tests {
     let interner = oj_lexer::Interner::new();
     let name = interner.intern(b"draw");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let scope = tree.push_scope(ScopeKind::File, None);
 
     let first = tree
@@ -546,12 +631,12 @@ mod tests {
     let interner = oj_lexer::Interner::new();
     let name = interner.intern(b"handle");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let scope = tree.push_scope(ScopeKind::File, None);
 
     let mut conditional = decl(name, scope, DeclKind::Variable);
     conditional.conditional = true;
-    assert!(tree.declare(conditional.clone()).is_ok());
+    assert!(tree.declare(conditional).is_ok());
     assert!(tree.declare(conditional).is_ok());
     assert!(tree.declare(decl(name, scope, DeclKind::Variable)).is_ok());
   }
@@ -562,7 +647,7 @@ mod tests {
     let exported = interner.intern(b"print");
     let private = interner.intern(b"helper");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let preload = tree.push_scope(ScopeKind::Preload, None);
     let basic = tree.push_scope(ScopeKind::Module, Some(preload));
     let string = tree.push_scope(ScopeKind::Module, Some(preload));
@@ -600,7 +685,7 @@ mod tests {
     let hidden = interner.intern(b"Node");
     let shown = interner.intern(b"Tree");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let trees = tree.push_scope(ScopeKind::Module, None);
     let main = tree.push_scope(ScopeKind::Module, None);
     tree.declare(decl(hidden, trees, DeclKind::Struct)).unwrap();
@@ -626,7 +711,7 @@ mod tests {
     let interner = oj_lexer::Interner::new();
     let name = interner.intern(b"member");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let file = tree.push_scope(ScopeKind::File, None);
     let block = tree.push_scope(ScopeKind::Imperative, Some(file));
 
@@ -640,7 +725,7 @@ mod tests {
     let interner = oj_lexer::Interner::new();
     let name = interner.intern(b"deep");
 
-    let mut tree = ScopeTree::new();
+    let tree = ScopeTree::new();
     let a = tree.push_scope(ScopeKind::Module, None);
     let b = tree.push_scope(ScopeKind::Module, None);
     let c = tree.push_scope(ScopeKind::Module, None);

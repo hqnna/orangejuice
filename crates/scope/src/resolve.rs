@@ -26,7 +26,7 @@ pub fn undeclared_identifiers(program: &Program<'_>) -> Vec<Undeclared> {
   let interner = program.interner();
   let mut batched: BTreeMap<(SourceId, Span, Symbol), Undeclared> = BTreeMap::new();
 
-  for reference in program.references() {
+  for reference in program.references().iter() {
     if reference.speculative
       || program.is_macro_injected(reference.name)
       || program.is_in_macro(reference.scope)
@@ -80,8 +80,8 @@ fn suggestions(program: &Program<'_>, reference: &Reference, name: &str) -> Vec<
   let mut scope = Some(reference.scope);
 
   while let Some(id) = scope {
-    for candidate in tree.scope(id).names.keys() {
-      let candidate = interner.resolve_lossy(*candidate).into_owned();
+    for candidate in tree.names(id) {
+      let candidate = interner.resolve_lossy(candidate).into_owned();
       if candidate == name {
         continue;
       }
@@ -90,7 +90,7 @@ fn suggestions(program: &Program<'_>, reference: &Reference, name: &str) -> Vec<
         scored.push((distance, candidate));
       }
     }
-    scope = tree.scope(id).parent;
+    scope = tree.parent(id);
   }
 
   scored.sort();

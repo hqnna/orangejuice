@@ -61,7 +61,7 @@ fn every_vendor_file_resolves_into_a_scope_tree() {
       continue;
     }
     assert_eq!(
-      program.units().len(),
+      program.unit_count(),
       1,
       "{} should have resolved as exactly one file",
       path.display()

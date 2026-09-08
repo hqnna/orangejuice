@@ -300,7 +300,7 @@ fn dump_scopes(path: &Path, file_only: bool) -> u8 {
   print!("{}", oj_scope::print_scopes(&program));
   println!(
     "{}",
-    oj_scope::summary(program.tree(), program.units().len())
+    oj_scope::summary(program.tree(), program.unit_count())
   );
 
   // A file resolved on its own has no imports to look names up in, so only
@@ -321,7 +321,7 @@ fn dump_scopes(path: &Path, file_only: bool) -> u8 {
     eprint!("{}", oj_diag::render(&diagnostic, &file));
   }
 
-  if program.units().is_empty() {
+  if program.unit_count() == 0 {
     failed = true;
   }
   if failed { EXIT_FAILURE } else { EXIT_SUCCESS }
@@ -354,7 +354,7 @@ fn dump_types(path: &Path, file_only: bool) -> u8 {
     eprint!("{}", oj_diag::render(diagnostic, &file));
   }
 
-  if program.has_errors() || checker.has_errors() || program.units().is_empty() {
+  if program.has_errors() || checker.has_errors() || program.unit_count() == 0 {
     EXIT_FAILURE
   } else {
     EXIT_SUCCESS

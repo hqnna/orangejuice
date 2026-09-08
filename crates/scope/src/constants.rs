@@ -283,7 +283,7 @@ mod tests {
 
   impl Fixture {
     fn new() -> Self {
-      let mut tree = ScopeTree::new();
+      let tree = ScopeTree::new();
       let scope = tree.push_scope(ScopeKind::File, None);
       Self {
         tree,

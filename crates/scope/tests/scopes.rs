@@ -73,16 +73,16 @@ fn a_load_becomes_a_sibling_file_scope_under_the_same_module() {
   resolve(&fixture, "main.jai", |program, _| {
     assert_eq!(errors(program), Vec::<String>::new());
     assert_eq!(undeclared(program), Vec::<String>::new());
-    assert_eq!(program.units().len(), 2);
+    assert_eq!(program.unit_count(), 2);
 
     let tree = program.tree();
     let files: Vec<_> = tree
       .scope_ids()
-      .filter(|id| tree.scope(*id).kind == ScopeKind::File)
+      .filter(|id| tree.scope_kind(*id) == ScopeKind::File)
       .collect();
     assert_eq!(files.len(), 2);
     for file in files {
-      assert_eq!(tree.scope(file).parent, Some(program.main_scope()));
+      assert_eq!(tree.parent(file), Some(program.main_scope()));
     }
   });
 }
@@ -451,7 +451,7 @@ fn loading_one_file_twice_into_a_scope_is_reported_rather_than_looping() {
   resolve(&fixture, "main.jai", |program, _| {
     assert_eq!(errors(program).len(), 1);
     assert!(errors(program)[0].contains("loaded twice"));
-    assert_eq!(program.units().len(), 2);
+    assert_eq!(program.unit_count(), 2);
   });
 }
 
@@ -473,7 +473,7 @@ fn a_file_resolved_on_its_own_still_builds_a_scope_tree() {
   );
 
   assert_eq!(errors(&program), Vec::<String>::new());
-  assert_eq!(program.units().len(), 1);
+  assert_eq!(program.unit_count(), 1);
   assert!(program.tree().scope_count() > 2);
 }
 
@@ -501,7 +501,7 @@ fn the_dump_names_every_scope_it_built() {
     assert!(dump.contains("procedure arguments"));
     assert!(dump.contains("struct Point"));
     assert_eq!(
-      oj_scope::summary(program.tree(), program.units().len()),
+      oj_scope::summary(program.tree(), program.unit_count()),
       format!(
         "1 file, {} scopes, {} declarations",
         program.tree().scope_count(),
@@ -518,10 +518,10 @@ fn the_root_of_the_tree_is_preload_and_the_program_hangs_off_it() {
 
   resolve(&fixture, "main.jai", |program, _| {
     let tree = program.tree();
-    assert_eq!(tree.scope(program.preload_scope()).kind, ScopeKind::Preload);
-    assert_eq!(tree.scope(program.preload_scope()).parent, None);
+    assert_eq!(tree.scope_kind(program.preload_scope()), ScopeKind::Preload);
+    assert_eq!(tree.parent(program.preload_scope()), None);
     assert_eq!(
-      tree.scope(program.main_scope()).parent,
+      tree.parent(program.main_scope()),
       Some(program.preload_scope())
     );
     assert_eq!(
@@ -565,7 +565,7 @@ fn a_missing_root_file_is_reported_and_leaves_no_units() {
   );
 
   assert!(program.has_errors());
-  assert!(program.units().is_empty());
+  assert!(program.unit_count() == 0);
 }
 
 #[test]
@@ -627,10 +627,10 @@ fn a_static_if_inside_an_enum_body_still_declares_members() {
     let blorple = interner.intern(b"BLORPLE");
     let enums: Vec<_> = tree
       .scope_ids()
-      .filter(|id| tree.scope(*id).kind == ScopeKind::Enum)
+      .filter(|id| tree.scope_kind(*id) == ScopeKind::Enum)
       .collect();
     assert_eq!(enums.len(), 1);
-    assert!(tree.scope(enums[0]).names.contains_key(&blorple));
+    assert!(tree.names_in(enums[0], blorple).is_some());
   });
 }
 
@@ -721,7 +721,7 @@ fn every_diagnostic_names_a_source_the_map_can_render() {
   );
 
   assert!(program.has_errors());
-  for diagnostic in program.diagnostics() {
+  for diagnostic in program.diagnostics().iter() {
     let file = sources.file(diagnostic.source);
     assert_eq!(file.path(), Path::new("no/such/file.jai"));
     assert!(oj_diag::render(diagnostic, &file).contains("Could not read"));

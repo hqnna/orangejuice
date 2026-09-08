@@ -311,7 +311,7 @@ impl<'a> Checker<'a> {
   pub fn new(program: &'a Program<'a>) -> Self {
     let interner = program.interner();
     let mut scope_of_node = HashMap::new();
-    for reference in program.references() {
+    for reference in program.references().iter() {
       scope_of_node
         .entry((reference.source, reference.node))
         .or_insert(reference.scope);
@@ -319,6 +319,7 @@ impl<'a> Checker<'a> {
 
     let aggregate_owners = program
       .aggregate_scopes()
+      .into_iter()
       .map(|(source, node, scope)| (scope, (source, node)))
       .collect();
 
@@ -338,8 +339,7 @@ impl<'a> Checker<'a> {
           // holds `it` then `it_index` and nothing else — is the key.
           for (index, id) in program
             .tree()
-            .scope(scope)
-            .declarations
+            .declarations(scope)
             .iter()
             .take(2)
             .enumerate()
@@ -607,7 +607,7 @@ impl<'a> Checker<'a> {
       if id == outer {
         return true;
       }
-      current = tree.scope(id).parent;
+      current = tree.parent(id);
     }
     false
   }
@@ -704,10 +704,10 @@ impl<'a> Checker<'a> {
     let tree = self.program.tree();
     let mut current = Some(scope);
     while let Some(id) = current {
-      if tree.scope(id).has_pending_providers() {
+      if tree.has_pending_providers(id) {
         return true;
       }
-      current = tree.scope(id).parent;
+      current = tree.parent(id);
     }
     false
   }
@@ -764,8 +764,7 @@ impl<'a> Checker<'a> {
       && self
         .program
         .tree()
-        .scope(decl.scope)
-        .kind
+        .scope_kind(decl.scope)
         .is_program_scope()
   }
 
@@ -777,7 +776,7 @@ impl<'a> Checker<'a> {
     if let Some(value) = self.decl_constants.get(&self.decl_key(id)) {
       return Some(value.clone());
     }
-    let decl = self.program.tree().decl(id).clone();
+    let decl = self.program.tree().decl(id);
     if !decl
       .flags
       .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)
@@ -933,7 +932,7 @@ impl<'a> Checker<'a> {
 
   fn report_cycle(&mut self, id: DeclId) {
     let tree = self.program.tree();
-    let decl = tree.decl(id).clone();
+    let decl = tree.decl(id);
     let Some(source) = decl.source else { return };
     // Only the outermost report is useful: the cycle is one error, not one per
     // declaration on it.
@@ -954,7 +953,7 @@ impl<'a> Checker<'a> {
       None => Vec::new(),
     };
     for entry in cycle {
-      let member = self.program.tree().decl(entry).clone();
+      let member = self.program.tree().decl(entry);
       if let Some(member_source) = member.source {
         let name = self.symbol_text(member.name);
         self.info(
@@ -967,7 +966,7 @@ impl<'a> Checker<'a> {
   }
 
   fn compute_decl_type(&mut self, id: DeclId) -> DeclType {
-    let decl = self.program.tree().decl(id).clone();
+    let decl = self.program.tree().decl(id);
     // A loop variable takes its type from the loop rather than from a
     // declaration; one the program did not name has no node at all
     // (**L§6.5**).

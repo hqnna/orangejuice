@@ -25,6 +25,7 @@ oj-testsupport = { path = "crates/testsupport" }
 oj-types = { path = "crates/types" }
 
 bitflags = "2"
+boxcar = "0.2"
 cc = "1"
 clap = { version = "4", features = ["derive"] }
 indexmap = "2"

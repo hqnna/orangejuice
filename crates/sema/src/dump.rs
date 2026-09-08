@@ -17,17 +17,25 @@ pub fn print_types(checker: &Checker<'_>) -> String {
 fn print_scope(checker: &Checker<'_>, scope: ScopeId, depth: usize, out: &mut String) {
   let tree = checker.program().tree();
   let indent = "  ".repeat(depth);
-  let entry = tree.scope(scope);
+  let (entry_kind, entry_path, entry_declarations, entry_children) =
+    tree.with_scope(scope, |entry| {
+      (
+        entry.kind,
+        entry.path.clone(),
+        entry.declarations.clone(),
+        entry.children.clone(),
+      )
+    });
 
-  let _ = write!(out, "{indent}{}", entry.kind.name());
-  if let Some(path) = &entry.path
-    && entry.kind == ScopeKind::File
+  let _ = write!(out, "{indent}{}", entry_kind.name());
+  if let Some(path) = &entry_path
+    && entry_kind == ScopeKind::File
   {
     let _ = write!(out, " {}", path.display());
   }
   let _ = writeln!(out, " [{}]", scope.0);
 
-  for id in &entry.declarations {
+  for id in &entry_declarations {
     let declaration = tree.decl(*id);
     let name = checker.interner().resolve_lossy(declaration.name);
     let Some(resolved) = checker.resolved(*id) else {
@@ -38,7 +46,7 @@ fn print_scope(checker: &Checker<'_>, scope: ScopeId, depth: usize, out: &mut St
     match resolved.denoted {
       Some(denoted) => {
         let _ = write!(out, "{indent}  {name} :: {}", describe(checker, denoted));
-        if declaration.visibility != Visibility::Export && entry.kind.is_program_scope() {
+        if declaration.visibility != Visibility::Export && entry_kind.is_program_scope() {
           let _ = write!(out, " #scope_{}", declaration.visibility.name());
         }
         let _ = writeln!(out);
@@ -63,7 +71,7 @@ fn print_scope(checker: &Checker<'_>, scope: ScopeId, depth: usize, out: &mut St
     }
   }
 
-  for child in &entry.children {
+  for child in &entry_children {
     print_scope(checker, *child, depth + 1, out);
   }
 }

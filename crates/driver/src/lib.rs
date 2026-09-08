@@ -71,8 +71,8 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
       report.diagnostics.push(oj_diag::render(diagnostic, &file));
     }
   };
-  render(program.diagnostics(), &mut report);
-  if program.has_errors() || program.units().is_empty() {
+  render(&program.diagnostics(), &mut report);
+  if program.has_errors() || program.unit_count() == 0 {
     report.failed = true;
     return report;
   }

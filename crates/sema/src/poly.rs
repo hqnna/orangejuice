@@ -234,17 +234,12 @@ impl Checker<'_> {
     }
     let members = self.struct_scope(definition)?;
     let (body_source, body) = self.aggregate_owner(members)?;
-    let arguments_scope = self.program().tree().scope(members).parent?;
-    let outer_scope = self.program().tree().scope(arguments_scope).parent?;
+    let arguments_scope = self.program().tree().parent(members)?;
+    let outer_scope = self.program().tree().parent(arguments_scope)?;
 
     // Every argument has to be a constant, since the members are laid out
     // against them (**L§8.5**).
-    let parameters = self
-      .program()
-      .tree()
-      .scope(arguments_scope)
-      .declarations
-      .clone();
+    let parameters = self.program().tree().declarations(arguments_scope);
     // Struct arguments may be given by name, in any order, and two
     // instantiations that agree on them are one type (**L§8.5**).
     let mut given: Vec<Option<NodeId>> = vec![None; parameters.len()];
@@ -438,7 +433,7 @@ impl Checker<'_> {
     let outer_scope = signature
       .decl
       .map(|decl| self.program().tree().decl(decl).scope)
-      .or_else(|| self.program().tree().scope(scopes.constants).parent)?;
+      .or_else(|| self.program().tree().parent(scopes.constants))?;
 
     let solution = self.solve(signature, arguments, source, header, scopes)?;
     self.finish_instantiation(signature, source, header, scopes, outer_scope, solution)
@@ -614,17 +609,11 @@ impl Checker<'_> {
     }
 
     // Every `$T` the header declares has to have come out of that.
-    for id in self
-      .program()
-      .tree()
-      .scope(scopes.constants)
-      .declarations
-      .clone()
-    {
+    for id in self.program().tree().declarations(scopes.constants) {
       if solution.bindings.iter().any(|(bound, _)| *bound == id) {
         continue;
       }
-      let decl = self.program().tree().decl(id).clone();
+      let decl = self.program().tree().decl(id);
       let node = decl.node?;
       let variable = self.aggregate_type(decl.source.unwrap_or(source), node)?;
       let TypeKind::Polymorph(definition) = *self.types().kind(variable) else {

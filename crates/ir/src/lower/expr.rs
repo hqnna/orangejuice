@@ -595,7 +595,7 @@ impl Lowering<'_, '_> {
         indirect: true,
       });
     }
-    let info = self.checker.program().tree().decl(decl).clone();
+    let info = self.checker.program().tree().decl(decl);
     match info.kind {
       DeclKind::Procedure => {
         let id = self.procedure_id(decl);

@@ -136,10 +136,7 @@ impl Checker<'_> {
     let candidates = self
       .program()
       .tree()
-      .scope(scope)
-      .names
-      .get(&name)
-      .cloned()
+      .names_in(scope, name)
       .unwrap_or_default();
     if candidates.is_empty() {
       return Expr::UNKNOWN;

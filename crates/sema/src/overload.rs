@@ -289,7 +289,7 @@ impl Checker<'_> {
     if let Some(baked) = self.baked_signature(candidate) {
       return Some(baked);
     }
-    let decl = self.program().tree().decl(candidate).clone();
+    let decl = self.program().tree().decl(candidate);
     let resolved = self.decl_type(candidate);
     if self.types().is_unknown(resolved.value) {
       return None;

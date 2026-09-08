@@ -203,7 +203,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
         .checker
         .program()
         .units()
-        .first()
+        .next()
         .map(|unit| unit.source)
         .unwrap_or(SourceId(0));
       self.diagnostics.push(Diagnostic::error(
@@ -310,8 +310,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let main_scope = program.main_scope();
     let root = program
       .units()
-      .iter()
-      .find(|unit| program.tree().scope(unit.scope).parent == Some(main_scope))
+      .find(|unit| program.tree().parent(unit.scope) == Some(main_scope))
       .map(|unit| unit.scope)
       .unwrap_or(main_scope);
     let candidates = match program.tree().lookup(root, name) {
@@ -527,7 +526,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let mut resolved = None;
     if let oj_scope::Resolution::Found(candidates) = program.tree().lookup(scope, symbol) {
       for candidate in candidates {
-        let decl = program.tree().decl(candidate).clone();
+        let decl = program.tree().decl(candidate);
         let (Some(source), Some(node)) = (decl.source, decl.node) else {
           continue;
         };
@@ -547,7 +546,6 @@ impl<'c, 'p> Lowering<'c, 'p> {
         {
           let directory = program
             .units()
-            .iter()
             .find(|unit| unit.source == source)
             .and_then(|unit| unit.path.parent().map(std::path::Path::to_path_buf));
           resolved = Some(Library {
@@ -572,7 +570,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let id = GlobalId(self.globals.len() as u32);
     self.global_ids.insert(decl, id);
 
-    let info = self.checker.program().tree().decl(decl).clone();
+    let info = self.checker.program().tree().decl(decl);
     let name = self.text(info.name);
     let type_id = self.checker.decl_type(decl).value;
     let (size, alignment) = self.size_align(type_id);
@@ -606,7 +604,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
   /// A global starts out as data when its value folds, and is assigned by the
   /// generated initializer procedure when it does not.
   fn plan_global_initializer(&mut self, id: GlobalId, decl: DeclId) {
-    let info = self.checker.program().tree().decl(decl).clone();
+    let info = self.checker.program().tree().decl(decl);
     let (Some(source), Some(node)) = (info.source, info.node) else {
       return;
     };

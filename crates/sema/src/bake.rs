@@ -92,12 +92,7 @@ impl Checker<'_> {
     let outer_scope = self.program().tree().decl(only).scope;
 
     // The arguments name the header's own constants, in any order.
-    let variables = self
-      .program()
-      .tree()
-      .scope(scopes.constants)
-      .declarations
-      .clone();
+    let variables = self.program().tree().declarations(scopes.constants);
     let mut bindings = Vec::with_capacity(payload.arguments.len());
     let mut next = 0usize;
     for argument in &payload.arguments {
@@ -177,7 +172,7 @@ impl Checker<'_> {
   /// The `#bake_arguments` a declaration's value is, and the scope it was
   /// written in.
   fn bake_of(&mut self, candidate: DeclId) -> Option<(SourceId, NodeId, ScopeId)> {
-    let decl = self.program().tree().decl(candidate).clone();
+    let decl = self.program().tree().decl(candidate);
     let (node, source) = (decl.node?, decl.source?);
     let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
       return None;

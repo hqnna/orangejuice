@@ -593,7 +593,7 @@ impl Lowering<'_, '_> {
   fn default_return(&mut self, index: usize) -> Option<Val> {
     let decl = self.return_decls.get(index).copied().flatten()?;
     let type_id = self.returns.get(index).copied()?;
-    let info = self.checker.program().tree().decl(decl).clone();
+    let info = self.checker.program().tree().decl(decl);
     let (source, node) = (info.source?, info.node?);
     let NodeData::Declaration(declaration) = self.checker.tree_of(source)?.data(node) else {
       return None;
@@ -1393,7 +1393,7 @@ impl Lowering<'_, '_> {
   }
 
   fn emit_one_global_initializer(&mut self, global: GlobalId, decl: DeclId) {
-    let info = self.checker.program().tree().decl(decl).clone();
+    let info = self.checker.program().tree().decl(decl);
     let (Some(source), Some(node)) = (info.source, info.node) else {
       return;
     };
