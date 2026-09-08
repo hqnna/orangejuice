@@ -706,3 +706,24 @@ fn a_module_parameter_is_a_constant_of_the_module_that_importers_do_not_see() {
     assert_eq!(undeclared(program), ["VERBOSE"]);
   });
 }
+
+#[test]
+fn every_diagnostic_names_a_source_the_map_can_render() {
+  // A root file that cannot be read has no `#load` to point at, and the
+  // diagnostic still has to render.
+  let sources = SourceMap::new();
+  let interner = Interner::new();
+  let program = Program::build(
+    &sources,
+    &interner,
+    Path::new("no/such/file.jai"),
+    Options::single_file(),
+  );
+
+  assert!(program.has_errors());
+  for diagnostic in program.diagnostics() {
+    let file = sources.file(diagnostic.source);
+    assert_eq!(file.path(), Path::new("no/such/file.jai"));
+    assert!(oj_diag::render(diagnostic, &file).contains("Could not read"));
+  }
+}

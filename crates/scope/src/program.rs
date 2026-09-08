@@ -391,7 +391,13 @@ impl<'a> Program<'a> {
         let message = format!("Could not read '{}': {error}", path.display());
         match origin {
           Some((source, span)) => self.error(source, span, message),
-          None => self.report(Diagnostic::error(SourceId(0), Span::at(0), message)),
+          // The root file has no `#load` or `#import` to point at, so the
+          // unreadable file stands in for itself: an empty source under its own
+          // path, which every diagnostic needs to be renderable.
+          None => {
+            let source = self.sources.add_bytes(path, Vec::new());
+            self.error(source, Span::at(0), message);
+          }
         }
         return;
       }
