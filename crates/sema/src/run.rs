@@ -68,6 +68,15 @@ struct Shape {
 /// this takes `&self`.
 pub trait CompileTime {
   fn evaluate(&self, checker: &mut Checker, request: &RunRequest) -> RunOutcome;
+
+  /// Runs one `#modify` block: the polymorph variables go in as values, and
+  /// whether the candidate is accepted — and what the variables became —
+  /// comes back (**L§7.8**).
+  fn modify(
+    &self,
+    checker: &mut Checker,
+    request: &crate::modify::ModifyRequest,
+  ) -> crate::modify::ModifyOutcome;
 }
 
 impl Checker<'_> {

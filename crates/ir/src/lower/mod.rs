@@ -1,7 +1,12 @@
 mod body;
 mod expr;
+mod modify;
 mod run;
 
+pub use modify::{
+  MODIFY_ACCEPT, MODIFY_REASON, MODIFY_VARIABLE_SIZE, MODIFY_VARIABLES, Modify, lower_modify,
+  modify_result_size,
+};
 pub use run::{Run, lower_run};
 
 use std::collections::{HashMap, VecDeque};
@@ -142,6 +147,9 @@ struct Lowering<'c, 'p> {
   call_sites: Vec<(SourceId, NodeId)>,
   defers: Vec<Vec<(ScopeId, SourceId, NodeId)>>,
   returns: Vec<TypeId>,
+  /// The declarations of the named return values, so that a `return` that
+  /// leaves one out can take its default (**L§7.2**).
+  return_decls: Vec<Option<DeclId>>,
   return_pointers: Vec<ValueId>,
   context_value: Option<ValueId>,
   body_scope: ScopeId,
@@ -180,6 +188,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       call_sites: Vec::new(),
       defers: Vec::new(),
       returns: Vec::new(),
+      return_decls: Vec::new(),
       return_pointers: Vec::new(),
       context_value: None,
       body_scope: ScopeId(0),

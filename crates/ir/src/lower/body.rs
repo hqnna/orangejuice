@@ -31,6 +31,7 @@ impl Lowering<'_, '_> {
     self.call_sites.clear();
     self.defers.clear();
     self.returns.clear();
+    self.return_decls.clear();
     self.return_pointers.clear();
     self.context_value = None;
   }
@@ -90,6 +91,7 @@ impl Lowering<'_, '_> {
       .cloned()
       .unwrap_or_else(|| oj_types::ProcedureType::new(Vec::new(), Vec::new()));
     self.returns = signature.returns.clone();
+    self.return_decls = body.returns.clone();
     self.body_source = body.source;
     self.body_scope = body.scope;
 
@@ -540,12 +542,18 @@ impl Lowering<'_, '_> {
         None => return,
       }
     }
+    // A named return the `return` left out takes the default the header gave
+    // it (**L§7.2**).
+    while values.len() < returns.len() {
+      let index = values.len();
+      let Some(value) = self.default_return(index) else {
+        self.unsupported(source, node, "a return that names its values", "M7");
+        return;
+      };
+      values.push(value);
+    }
     // A `return` inside nested blocks runs every defer on the way out
     // (**L§6.6**).
-    if values.len() < returns.len() {
-      self.unsupported(source, node, "a return that names its values", "M7");
-      return;
-    }
     self.run_defers_to(0);
     self.emit_return(values);
   }
@@ -578,6 +586,21 @@ impl Lowering<'_, '_> {
     let _ = node;
     self.run_defers_to(defers);
     self.terminate(Terminator::Jump(exit));
+  }
+
+  /// The value a named return takes when the `return` left it out
+  /// (**L§7.2**).
+  fn default_return(&mut self, index: usize) -> Option<Val> {
+    let decl = self.return_decls.get(index).copied().flatten()?;
+    let type_id = self.returns.get(index).copied()?;
+    let info = self.checker.program().tree().decl(decl).clone();
+    let (source, node) = (info.source?, info.node?);
+    let NodeData::Declaration(declaration) = self.checker.tree_of(source)?.data(node) else {
+      return None;
+    };
+    let expression = declaration.expression?;
+    let scope = self.checker.scope_for(source, expression, info.scope);
+    self.expression(scope, source, expression, Some(type_id))
   }
 
   fn if_statement(&mut self, payload: &ast::IfNode) {
@@ -1326,6 +1349,7 @@ impl Lowering<'_, '_> {
     self.call_sites.clear();
     self.defers.clear();
     self.returns.clear();
+    self.return_decls.clear();
     self.return_pointers.clear();
 
     let context = self.pointer_to(self.context_type);

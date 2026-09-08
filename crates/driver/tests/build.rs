@@ -1352,3 +1352,42 @@ fn a_run_produces_a_type_the_program_declares_with() {
     "4\n7\n",
   );
 }
+
+#[test]
+fn a_modify_rejects_a_candidate_and_changes_its_variables() {
+  assert_output(
+    "widen :: (a: $T) -> T #modify { T = s64; return true; } { return a; }\n\
+     only_ints :: (a: $T) -> int\n\
+     #modify {\n\
+       ti := cast(*Type_Info) T;\n\
+       if ti.type == .INTEGER  return true;\n\
+       return false, \"not an integer\";\n\
+     } { return cast(int) a; }\n\
+     only_ints :: (a: float64) -> int { return 999; }\n\
+     main :: () {\n\
+       small: s8 = 7;\n\
+       put_number(widen(small));\n\
+       put_number(size_of(type_of(widen(small))));\n\
+       put_number(only_ints(cast(s16) 5));\n\
+       put_number(only_ints(1.5));\n\
+     }\n",
+    "7\n8\n5\n999\n",
+  );
+}
+
+#[test]
+fn a_named_return_left_out_takes_its_default() {
+  assert_output(
+    "split :: (n: int) -> int, ok: bool = true {\n\
+       if n < 0  return 0, false;\n\
+       return n;\n\
+     }\n\
+     main :: () {\n\
+       a, good := split(7);\n\
+       b, bad := split(-1);\n\
+       put_number(a + cast(int) good);\n\
+       put_number(b + cast(int) bad);\n\
+     }\n",
+    "8\n0\n",
+  );
+}

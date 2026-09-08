@@ -21,7 +21,7 @@ use oj_diag::Diagnostic;
 use oj_ir::{Constant, Global, GlobalInit, Library, Program};
 use oj_runtime::{Segment, Segments};
 use oj_scope::DeclId;
-use oj_sema::{Checker, CompileTime, RunOutcome, RunRequest};
+use oj_sema::{Checker, CompileTime, ModifyOutcome, ModifyRequest, RunOutcome, RunRequest};
 use oj_types::{FloatKind, IntKind, TypeId, TypeKind, Types};
 
 use crate::orc::Orc;
@@ -150,6 +150,88 @@ impl Engine {
     }
   }
 
+  /// Runs one `#modify` block (**L§7.8**): the polymorph variables go in as
+  /// values and whether the candidate stands — and what they became — comes
+  /// back.
+  fn run_modify(
+    &self,
+    checker: &mut Checker,
+    request: &ModifyRequest,
+  ) -> Result<ModifyOutcome, String> {
+    let modify = oj_ir::Modify {
+      source: request.source,
+      scope: request.scope,
+      block: request.block,
+      instance: request.instance,
+      variables: request.variables.clone(),
+      symbol: request.symbol.clone(),
+    };
+    let lowered = oj_ir::lower_modify(checker, &modify);
+    if lowered.has_errors() {
+      for diagnostic in lowered.diagnostics {
+        checker.push_diagnostic(diagnostic);
+      }
+      checker.push_diagnostic(Diagnostic::info(
+        request.source,
+        request.span,
+        "This is the '#modify' that needed it.",
+      ));
+      return Err(String::new());
+    }
+
+    self.prepare_data(&lowered.program)?;
+    self.load_libraries(&lowered.program.libraries);
+
+    let module = self.orc.context().create_module(&request.symbol);
+    let module = oj_codegen::build_module(module, &lowered.program, &self.options)?;
+    self.orc.add_module(module)?;
+    let address = self.orc.lookup(&request.symbol)?;
+
+    let size = oj_ir::modify_result_size(request.variables.len());
+    let mut buffer = Buffer::new(size, 8);
+    let entry: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(address as usize) };
+    entry(buffer.as_mut_ptr());
+
+    let bytes = buffer.as_slice();
+    let accepted =
+      read_integer(IntKind::S64, &bytes[oj_ir::MODIFY_ACCEPT as usize..]).unwrap_or(1) != 0;
+    if !accepted {
+      let reason = read_value(
+        checker.types(),
+        TypeId::STRING,
+        &bytes[oj_ir::MODIFY_REASON as usize..],
+      );
+      let reason = match reason.map(|value| value.value) {
+        Some(oj_sema::Value::String(text)) => String::from_utf8_lossy(&text).into_owned(),
+        _ => String::new(),
+      };
+      return Ok(ModifyOutcome::Rejected(reason));
+    }
+
+    let table = lowered
+      .program
+      .type_table
+      .symbol
+      .as_deref()
+      .and_then(|symbol| self.state.borrow().segments.address(symbol))
+      .map(|base| (base as u64, &lowered.program.type_table));
+    let mut values = Vec::with_capacity(request.variables.len());
+    for (index, variable) in request.variables.iter().enumerate() {
+      let at = (oj_ir::MODIFY_VARIABLES + oj_ir::MODIFY_VARIABLE_SIZE * index as u64) as usize;
+      let slot = &bytes[at..];
+      // A variable the block left alone keeps exactly what it had, whether or
+      // not the answer can be read back.
+      let value = match checker.types().underlying(variable.type_id) == TypeId::TYPE {
+        true => table
+          .and_then(|(base, image)| read_type(base, image, slot))
+          .map(oj_sema::Const::type_value),
+        false => read_value(checker.types(), variable.type_id, slot),
+      };
+      values.push(value.unwrap_or_else(|| variable.value.clone()));
+    }
+    Ok(ModifyOutcome::Accepted(values))
+  }
+
   /// Gives every global the run reached storage the JIT can bind to. A global
   /// already bound keeps the address — and the contents — it had.
   fn prepare_data(&self, program: &Program) -> Result<(), String> {
@@ -237,6 +319,22 @@ impl CompileTime for Engine {
           ));
         }
         RunOutcome::Failed
+      }
+    }
+  }
+
+  fn modify(&self, checker: &mut Checker, request: &ModifyRequest) -> ModifyOutcome {
+    match self.run_modify(checker, request) {
+      Ok(outcome) => outcome,
+      Err(message) => {
+        if !message.is_empty() {
+          checker.push_diagnostic(Diagnostic::error(
+            request.source,
+            request.span,
+            format!("This '#modify' could not be executed: {message}."),
+          ));
+        }
+        ModifyOutcome::Failed
       }
     }
   }

@@ -77,7 +77,7 @@ impl Lowering<'_, '_> {
 
   /// A folded constant as a value of `target`, or `None` when it is of a kind
   /// the back end has no data form for.
-  fn constant_value(&mut self, constant: &Const, target: TypeId) -> Option<Val> {
+  pub(super) fn constant_value(&mut self, constant: &Const, target: TypeId) -> Option<Val> {
     if self.is_scalar(target)
       && let Some(value) = self.fold(constant, target)
     {

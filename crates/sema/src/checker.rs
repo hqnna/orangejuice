@@ -289,6 +289,9 @@ pub struct Checker<'a> {
   /// Instantiations whose bodies nobody has checked yet.
   pub(crate) pending_instances: Vec<InstanceId>,
   pub(crate) checked_instances: HashSet<InstanceId>,
+  /// The `#modify` blocks being run right now, which is what makes one that
+  /// reaches its own header stop instead of looping (**L§7.8**).
+  pub(crate) modify_in_flight: HashSet<InstanceId>,
   /// The call being resolved right now, which is where a macro expands
   /// (**L§7.13**). Overload resolution reaches down through operators too, so
   /// this is a single piece of state rather than a parameter of every step.
@@ -395,6 +398,7 @@ impl<'a> Checker<'a> {
       current_instance: None,
       pending_instances: Vec::new(),
       checked_instances: HashSet::new(),
+      modify_in_flight: HashSet::new(),
       call_site: None,
       loop_expansions: HashMap::new(),
       argument_instances: HashMap::new(),

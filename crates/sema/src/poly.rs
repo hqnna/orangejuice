@@ -426,6 +426,19 @@ impl Checker<'_> {
       .or_else(|| self.program().tree().scope(scopes.constants).parent)?;
 
     let solution = self.solve(signature, arguments, source, header, scopes)?;
+    // `#modify` decides the candidate and may change what its variables are,
+    // and deduplication happens after it (**L§7.8**).
+    let bindings = self.run_modify(
+      source,
+      header,
+      scopes,
+      outer_scope,
+      solution.bindings.clone(),
+    )?;
+    let solution = Solution {
+      bindings,
+      ..solution
+    };
 
     // A macro is expanded into the block it was called from rather than
     // called, so two sites never share one (**L§7.13**).
