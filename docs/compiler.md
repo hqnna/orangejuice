@@ -254,6 +254,16 @@ Hand-written recursive descent with precedence climbing for binary operators (0.
 - Struct bodies allow declarations, assignments (defaults), `#place`, `#if`, `#insert`, `using`, `#as`, nested `union {}`/`struct {}` blocks; enum bodies allow member constants, `#if`, `#insert`, `using`.
 - Every AST node carries `kind`, `node_flags`, `type` (filled by typechecking), `location`, `serial`. Sizes were repeatedly shrunk (nodes are compact, 24+ bytes smaller than earlier betas).
 
+Rules the reference does not document but that the vendor tree forces, established by parsing all 702 files with orangejuice:
+
+- **`->` followed by `(`** always opens the *return list*, not a returned procedure type; only a `->` after the matching `)` makes it one. `f :: () -> (s32) #c_call { }` is a `#c_call` procedure returning one `s32`, and `-> (status: Get_Root_Type_Status) { }` is a named single return.
+- **A procedure type inside a parameter list** ends its return list at the comma that separates parameters: in `(f: (idx: int) -> Key, $compare: (Key, Key) -> bool)` the `, $compare` belongs to the outer list. Multiple returns there need parentheses.
+- **Directives after the parts they describe**: struct layout directives may follow the body (`} #no_padding;`), a member may carry `#align N` and `#elsewhere lib "symbol"` after its type (`x: u8 #align 64;`, `environ: *u8 #elsewhere libc "environ";`), and `#align` may also follow `= ---`.
+- **`#assert(cond, "message")`** is accepted next to `#assert cond "message"`; `#run,host` marks a run that executes on the host when cross-compiling; `#no_alias` is accepted as a header directive.
+- **`interface` is a keyword only in a type restriction** (`$T/interface I`); the generated bindings use it as an ordinary member name.
+- **Semicolons may be omitted** after a statement whose value ends in a here-string terminator line, a braced `ifx`, a `#code { }` block, a `#module_parameters` common-code block, an anonymous `enum`/`union` behind `using`, or a `#insert -> T { }`.
+- **A branch that starts with `*`, `-` or `.`** needs `then` (`ifx use_semaphores then *sync.image_available else null`), since the condition would otherwise absorb it.
+
 ### 5.3 AST (exported to metaprograms; `modules/Compiler/Compiler.jai`)
 
 `Code_Node.Kind :: enum u8 { UNINITIALIZED 0; BLOCK 1; LITERAL 2; IDENT 3; UNARY_OPERATOR 4; BINARY_OPERATOR 5; PROCEDURE_BODY 6; PROCEDURE_CALL 7; CONTEXT 8; WHILE 9; IF 10; LOOP_CONTROL 11; CASE 12; RETURN 14; FOR 15; TYPE_DEFINITION 16; TYPE_INSTANTIATION 17; ENUM 18; PROCEDURE_HEADER 19; STRUCT 20; COMMA_SEPARATED_ARGUMENTS 21; EXTRACT 22; DIRECTIVE_BYTES 23; MAKE_VARARGS 24; DECLARATION 25; CAST 26; DIRECTIVE_IMPORT 27; DIRECTIVE_THIS 28; DIRECTIVE_THROUGH 29; DIRECTIVE_LOAD 30; DIRECTIVE_RUN 31; DIRECTIVE_CODE 32; DIRECTIVE_POKE_NAME 33; ASM 34; DIRECTIVE_BAKE 35; DIRECTIVE_MODIFY 36; DIRECTIVE_LIBRARY 37; EXPRESSION_QUERY 38; PUSH_CONTEXT 39; NOTE 40; DIRECTIVE_PLACE 41; DIRECTIVE_SCOPE 42; TYPE_QUERY 43; DIRECTIVE_LOCATION 44; DIRECTIVE_MODULE_PARAMETERS 45; DIRECTIVE_ADD_CONTEXT 46; DIRECTIVE_COMPILE_TIME 47; COMPOUND_DECLARATION 48; DEFER 49; USING 50; PLACEHOLDER 51; DIRECTIVE_INSERT 52; DIRECTIVE_PROCEDURE_NAME 53; DIRECTIVE_WILDCARD 54; DIRECTIVE_EXISTS 55; DIRECTIVE_CONTEXT_TYPE 56; RESOLVED_OVERLOAD 57; }`
