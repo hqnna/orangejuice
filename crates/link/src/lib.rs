@@ -100,16 +100,20 @@ pub fn link_line(request: &Request) -> LinkLine {
   for directory in directories {
     arguments.push(format!("-L{directory}"));
   }
-  // One library named by many `#foreign` procedures is one `-l`.
-  let mut named: Vec<&str> = Vec::new();
+  // One library named by many `#foreign` procedures is one `-l`, and a system
+  // library `pkg-config` knows takes the flags it gives instead (**C§11**).
+  let mut named: Vec<(&str, bool)> = Vec::new();
   for library in &request.libraries {
-    let name = link_name(library);
-    if !named.contains(&name) {
-      named.push(name);
+    let entry = (link_name(library), library.system);
+    if !named.contains(&entry) {
+      named.push(entry);
     }
   }
-  for name in named {
-    arguments.push(format!("-l{name}"));
+  for (name, system) in named {
+    match system.then(|| pkg_config_flags(name)).flatten() {
+      Some(flags) => arguments.extend(flags),
+      None => arguments.push(format!("-l{name}")),
+    }
   }
 
   // The reference links every executable so that it finds its own libraries
@@ -133,6 +137,36 @@ fn link_name(library: &Library) -> &str {
     true => library.name.strip_prefix("lib").unwrap_or(&library.name),
     false => &library.name,
   }
+}
+
+/// What `pkg-config` says a system library needs, when it has a `.pc` file for
+/// it (**C§11**). The `pkg-config` crate is written for build scripts — it
+/// reads `TARGET` out of the environment and prints cargo directives — so the
+/// tool is asked directly instead. A name it does not know, and a machine
+/// without `pkg-config` on it, both fall back to a plain `-l`.
+fn pkg_config_flags(name: &str) -> Option<Vec<String>> {
+  let known = Command::new("pkg-config")
+    .arg("--exists")
+    .arg(name)
+    .status()
+    .ok()?;
+  if !known.success() {
+    return None;
+  }
+  let output = Command::new("pkg-config")
+    .arg("--libs")
+    .arg(name)
+    .output()
+    .ok()?;
+  if !output.status.success() {
+    return None;
+  }
+  let flags: Vec<String> = String::from_utf8(output.stdout)
+    .ok()?
+    .split_whitespace()
+    .map(String::from)
+    .collect();
+  (!flags.is_empty()).then_some(flags)
 }
 
 /// Runs the link, or copies the single object out when no linking is asked
@@ -240,6 +274,25 @@ mod tests {
     assert!(line.arguments.contains(&String::from("-lraylib")));
     assert!(line.arguments.contains(&String::from("-L/tmp/game")));
     assert!(!line.arguments.contains(&String::from("-L/ignored")));
+  }
+
+  #[test]
+  fn a_system_library_pkg_config_knows_takes_the_flags_it_gives() {
+    // `zlib` is what the dev shell has a `.pc` file for; a machine without
+    // `pkg-config`, or without that file, falls back to `-lz` and the test
+    // still says something true about the link line.
+    let line = link_line(&Request {
+      libraries: vec![Library {
+        name: String::from("libz"),
+        system: true,
+        directory: None,
+      }],
+      ..request()
+    });
+    match pkg_config_flags("z") {
+      Some(flags) => assert!(flags.iter().all(|flag| line.arguments.contains(flag))),
+      None => assert!(line.arguments.contains(&String::from("-lz"))),
+    }
   }
 
   #[test]

@@ -752,6 +752,14 @@ impl<'c, 'p> Lowering<'c, 'p> {
       Value::Float(number) => Some(Constant::Float(*number)),
       Value::Bool(flag) => Some(Constant::Bool(*flag)),
       Value::Null => Some(Constant::Null),
+      // A literal in a `*u8` is its bytes with a trailing zero rather than the
+      // `{count, data}` pair a `string` is, which is what lets one reach a C
+      // procedure (**L§3.4**, **L§5.10**).
+      Value::String(text) if self.checker.types().pointee(target).is_some() => {
+        let mut bytes = text.to_vec();
+        bytes.push(0);
+        Some(Constant::Bytes(bytes.into_boxed_slice()))
+      }
       Value::String(text) => Some(Constant::String(text.clone())),
       Value::Bytes(bytes) => Some(Constant::Bytes(bytes.clone())),
       // A `Code` value is a piece of the program, not data (**L§13.1**).

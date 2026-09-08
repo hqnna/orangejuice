@@ -592,6 +592,11 @@ impl Lowering<'_, '_> {
         // (**L§15**).
         let local = match class {
           AsmClass::Gpr => Some(self.new_local(String::from("asm"), TypeId::S64)),
+          // A vector register survives between blocks as the 128 bits it is;
+          // the wider ones have no type of their own to keep them in yet.
+          AsmClass::Vec if at.vector_bits == 128 => {
+            Some(self.new_local(String::from("asm"), TypeId::V128))
+          }
           _ => None,
         };
         if let Some(decl) = decl {

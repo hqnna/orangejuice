@@ -1774,3 +1774,41 @@ fn a_constant_that_names_a_polymorphic_procedure_is_that_procedure() {
     "42\n",
   );
 }
+
+#[test]
+fn a_string_literal_reaches_a_c_procedure_as_a_c_string() {
+  assert_output(
+    "puts :: (s: *u8) -> s32 #foreign libc;\n\
+     main :: () { puts(\"through libc\"); }\n",
+    "through libc\n",
+  );
+}
+
+#[test]
+fn a_vector_register_survives_between_two_asm_blocks() {
+  assert_output(
+    "String :: #import \"String\";\n\
+     main :: () {\n\
+       s := \"hello, world and a longer tail to reach the simd path\";\n\
+       put_number(String.find_index_from_left(s, #char \",\"));\n\
+       put_number(String.find_index_from_left(s, #char \"z\"));\n\
+     }\n",
+    "5\n-1\n",
+  );
+}
+
+#[test]
+fn the_file_module_writes_and_reads_a_file() {
+  assert_output(
+    "File :: #import \"File\";\n\
+     main :: () {\n\
+       path := \"oj_file_module_test.txt\";\n\
+       if !File.write_entire_file(path, \"written\\n\")  return;\n\
+       text, ok := File.read_entire_file(path);\n\
+       if !ok  return;\n\
+       put(text);\n\
+       File.file_delete(path);\n\
+     }\n",
+    "written\n",
+  );
+}

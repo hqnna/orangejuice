@@ -110,6 +110,10 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         self.context.ptr_type(AddressSpace::default()).into()
       }
       TypeKind::Enum(id) => self.llvm_type(types.enum_info(*id).base),
+      // The vector register `#asm` works in, which is a value LLVM can bind to
+      // an `xmm` constraint rather than storage it can only address
+      // (**L§3.1**, **L§15**).
+      TypeKind::V128 => self.context.i64_type().vec_type(2).into(),
       // Everything else is storage of a known size, addressed by byte offset.
       _ => {
         let size = types.size_of(underlying).unwrap_or(0);
