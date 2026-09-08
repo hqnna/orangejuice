@@ -88,6 +88,13 @@ pub enum DumpStage {
     #[arg(long)]
     tree: bool,
   },
+  /// The scope tree the file resolves into
+  Scopes {
+    file: PathBuf,
+    /// Resolve this file alone, without following its `#load`s and `#import`s
+    #[arg(long)]
+    file_only: bool,
+  },
   /// The typed IR of the live procedures
   Ir {
     file: PathBuf,
@@ -185,6 +192,7 @@ fn execute(cli: &Cli) -> u8 {
     Some(Command::Dump { stage }) => match stage {
       DumpStage::Tokens { file } => dump_tokens(file),
       DumpStage::Ast { file, tree } => dump_ast(file, *tree),
+      DumpStage::Scopes { file, file_only } => dump_scopes(file, *file_only),
       DumpStage::Ir { .. } => not_implemented("oj dump ir", "M5"),
       DumpStage::Asm { .. } => not_implemented("oj dump asm", "M5"),
     },
@@ -256,6 +264,67 @@ fn dump_ast(path: &Path, tree: bool) -> u8 {
   } else {
     EXIT_SUCCESS
   }
+}
+
+/// `oj dump scopes`: resolves one file — and, unless `--file-only`, everything
+/// it `#load`s and `#import`s — and prints the scope tree it produced.
+/// Undeclared identifiers are reported in one batch (**L§11.7**).
+fn dump_scopes(path: &Path, file_only: bool) -> u8 {
+  let sources = SourceMap::new();
+  let interner = Interner::new();
+  let options = if file_only {
+    oj_scope::Options::single_file()
+  } else {
+    oj_scope::Options {
+      jai_dir: jai_dir(),
+      ..oj_scope::Options::default()
+    }
+  };
+
+  let program = oj_scope::Program::build(&sources, &interner, path, options);
+  print!("{}", oj_scope::print_scopes(&program));
+  println!(
+    "{}",
+    oj_scope::summary(program.tree(), program.units().len())
+  );
+
+  // A file resolved on its own has no imports to look names up in, so only
+  // what it gets wrong by itself is worth reporting.
+  let undeclared = if file_only {
+    Vec::new()
+  } else {
+    oj_scope::undeclared_identifiers(&program)
+  };
+  let mut failed = program.has_errors() || !undeclared.is_empty();
+  for diagnostic in program
+    .diagnostics()
+    .iter()
+    .cloned()
+    .chain(oj_scope::undeclared_diagnostics(&undeclared))
+  {
+    let file = sources.file(diagnostic.source);
+    eprint!("{}", oj_diag::render(&diagnostic, &file));
+  }
+
+  if program.units().is_empty() {
+    failed = true;
+  }
+  if failed { EXIT_FAILURE } else { EXIT_SUCCESS }
+}
+
+/// The jai distribution the standard modules come from: `OJ_JAI_DIR`, else a
+/// `vendor/jai` in the current directory or one of its ancestors
+/// (`docs/spec.md` §5).
+fn jai_dir() -> Option<PathBuf> {
+  if let Some(value) = std::env::var_os("OJ_JAI_DIR").filter(|value| !value.is_empty()) {
+    let candidate = PathBuf::from(value);
+    return candidate.join("modules").is_dir().then_some(candidate);
+  }
+  let current = std::env::current_dir().ok()?;
+  current.ancestors().find_map(|directory| {
+    let candidate = directory.join("vendor").join("jai");
+    candidate.join("modules").is_dir().then_some(candidate)
+  })
 }
 
 fn not_implemented(command: &str, milestone: &str) -> u8 {
@@ -367,6 +436,61 @@ mod tests {
       exit_code(["oj", "dump", "ast", "no/such/file.jai"]),
       EXIT_FAILURE
     );
+  }
+
+  fn dump_scopes_of(source: &str) -> (u8, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("input.jai");
+    std::fs::write(&path, source).expect("the input should be writable");
+    (
+      exit_code([
+        "oj",
+        "dump",
+        "scopes",
+        "--file-only",
+        path.to_str().unwrap(),
+      ]),
+      dir,
+    )
+  }
+
+  #[test]
+  fn dump_scopes_succeeds_on_a_well_formed_file() {
+    assert_eq!(
+      dump_scopes_of("Point :: struct { x: float; }\nmain :: () {}\n").0,
+      EXIT_SUCCESS
+    );
+  }
+
+  #[test]
+  fn dump_scopes_fails_on_a_redeclaration_or_a_missing_file() {
+    assert_eq!(dump_scopes_of("x := 1;\nx := 2;\n").0, EXIT_FAILURE);
+    assert_eq!(
+      exit_code(["oj", "dump", "scopes", "no/such/file.jai"]),
+      EXIT_FAILURE
+    );
+  }
+
+  #[test]
+  fn dump_scopes_on_one_file_does_not_report_the_names_its_imports_would_supply() {
+    // Resolved on its own the file has nothing to look `print` up in, so it is
+    // not an undeclared identifier here.
+    assert_eq!(
+      dump_scopes_of("main :: () { print(\"hi\"); }\n").0,
+      EXIT_SUCCESS
+    );
+  }
+
+  #[test]
+  fn dump_scopes_carries_its_flag() {
+    let Some(Command::Dump {
+      stage: DumpStage::Scopes { file, file_only },
+    }) = parse(&["oj", "dump", "scopes", "first.jai", "--file-only"]).command
+    else {
+      panic!("expected a scope dump");
+    };
+    assert_eq!(file, PathBuf::from("first.jai"));
+    assert!(file_only);
   }
 
   #[test]
