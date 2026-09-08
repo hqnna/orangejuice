@@ -15,7 +15,7 @@ mod typetable;
 pub use ir::{
   Abi, AbiParameter, BinaryOp, Block, BlockId, Callee, Constant, ConvertKind, Global, GlobalId,
   GlobalInit, Inst, Library, Local, LocalId, ParameterKind, ProcId, Procedure, ProcedureFlags,
-  Program, Terminator, UnaryOp, ValueId, abi_of, is_scalar,
+  Program, Terminator, TypeTableImage, UnaryOp, ValueId, abi_of, is_scalar,
 };
 pub use lower::{Lowered, Run, lower, lower_run};
 pub use print::{print_ir, summary};

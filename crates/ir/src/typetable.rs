@@ -68,6 +68,18 @@ impl TypeTable {
     &self.bytes
   }
 
+  /// Where each type's record ended up, so that an address into the image can
+  /// be read back as the type it belongs to (**L§17**).
+  pub(crate) fn placements(&self) -> Vec<(TypeId, u64)> {
+    let mut placements: Vec<(TypeId, u64)> = self
+      .offsets
+      .iter()
+      .map(|(type_id, offset)| (*type_id, *offset))
+      .collect();
+    placements.sort_unstable();
+    placements
+  }
+
   pub(crate) fn relocations(&self) -> &[(u64, u64)] {
     &self.relocations
   }

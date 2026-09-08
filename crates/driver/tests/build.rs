@@ -1338,3 +1338,17 @@ fn a_procedure_held_in_a_member_is_called_through_its_value() {
     "42\n",
   );
 }
+
+#[test]
+fn a_run_produces_a_type_the_program_declares_with() {
+  assert_output(
+    "pick :: (n: int) -> Type { if n > 0  return s32; return float64; }\n\
+     Chosen :: #run pick(1);\n\
+     main :: () {\n\
+       value: Chosen = 7;\n\
+       put_number(size_of(Chosen));\n\
+       put_number(cast(int) value);\n\
+     }\n",
+    "4\n7\n",
+  );
+}

@@ -258,6 +258,12 @@ impl<'c, 'p> Lowering<'c, 'p> {
 
   fn finish(mut self) -> Lowered {
     self.place_type_table();
+    let type_table = crate::ir::TypeTableImage {
+      symbol: self
+        .type_table_global
+        .map(|id| self.globals[id.0 as usize].symbol.clone()),
+      offsets: self.type_table.placements(),
+    };
     let Self {
       checker,
       procedures,
@@ -281,6 +287,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
         global_init,
         context_type,
         libraries,
+        type_table,
       },
       diagnostics,
     }

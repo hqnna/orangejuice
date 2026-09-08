@@ -526,6 +526,28 @@ pub struct Program {
   pub context_type: TypeId,
   /// The libraries the `#foreign` procedures asked for, in declaration order.
   pub libraries: Vec<Library>,
+  /// Where each type's record sits in the type table image, and the symbol the
+  /// image took (**L§17**). A `Type` a compile-time program produced is an
+  /// address into it, so this is what turns that address back into a type.
+  pub type_table: TypeTableImage,
+}
+
+/// Where the types the program asked about ended up (**L§17**).
+#[derive(Clone, Debug, Default)]
+pub struct TypeTableImage {
+  pub symbol: Option<String>,
+  pub offsets: Vec<(TypeId, u64)>,
+}
+
+impl TypeTableImage {
+  /// The type whose record sits at `offset`.
+  pub fn type_at(&self, offset: u64) -> Option<TypeId> {
+    self
+      .offsets
+      .iter()
+      .find(|(_, at)| *at == offset)
+      .map(|(type_id, _)| *type_id)
+  }
 }
 
 /// A `#library` or `#library,system` the program named (**L§12.2**).

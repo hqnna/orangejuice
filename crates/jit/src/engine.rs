@@ -125,6 +125,23 @@ impl Engine {
     if request.result == TypeId::VOID {
       return Ok(RunOutcome::Void);
     }
+    // A `Type` a run produced is an address into the type table image, so it
+    // is read back through where that image ended up (**L§17**).
+    let table = lowered
+      .program
+      .type_table
+      .symbol
+      .as_deref()
+      .and_then(|symbol| self.state.borrow().segments.address(symbol))
+      .map(|base| (base as u64, &lowered.program.type_table));
+    if checker.types().underlying(request.result) == TypeId::TYPE {
+      return match table.and_then(|(base, image)| read_type(base, image, buffer.as_slice())) {
+        Some(type_id) => Ok(RunOutcome::Value(oj_sema::Const::type_value(type_id))),
+        None => Err(String::from(
+          "orangejuice cannot bring this kind of value back from compile time yet",
+        )),
+      };
+    }
     match read_value(checker.types(), request.result, buffer.as_slice()) {
       Some(value) => Ok(RunOutcome::Value(value)),
       None => Err(String::from(
@@ -299,6 +316,12 @@ fn copy(source: &[u8], destination: &mut [u8]) {
 
 /// Reads a run's result out of the buffer it wrote (**L§12.1**). `None` means
 /// the value is of a kind orangejuice cannot turn into a front-end constant.
+/// The type whose record a compile-time `Type` value points at (**L§17**).
+fn read_type(base: u64, image: &oj_ir::TypeTableImage, bytes: &[u8]) -> Option<TypeId> {
+  let address = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
+  image.type_at(address.checked_sub(base)?)
+}
+
 fn read_value(types: &Types, type_id: TypeId, bytes: &[u8]) -> Option<oj_sema::Const> {
   use oj_sema::{Const, Value};
   let underlying = types.underlying(type_id);
