@@ -414,7 +414,12 @@ dependencies = [
 name = "oj-meta"
 version = "0.1.0"
 dependencies = [
+ "oj-diag",
+ "oj-lexer",
+ "oj-scope",
+ "oj-sema",
  "oj-testsupport",
+ "tempfile",
 ]
 
 [[package]]

@@ -7,4 +7,9 @@ authors.workspace = true
 license.workspace = true
 
 [dev-dependencies]
+oj-diag.workspace = true
+oj-lexer.workspace = true
+oj-scope.workspace = true
+oj-sema.workspace = true
 oj-testsupport.workspace = true
+tempfile.workspace = true

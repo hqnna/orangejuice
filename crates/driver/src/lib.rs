@@ -42,6 +42,9 @@ pub struct Report {
   pub executable: Option<PathBuf>,
   /// The link command, for `OUTPUT_LINK_LINE` and for `-verbose`.
   pub link_line: Option<String>,
+  /// What a metaprogram watching this compilation is told about it
+  /// (**C§3.2**).
+  pub compiled: oj_meta::Compiled,
 }
 
 impl Report {
@@ -111,7 +114,13 @@ pub fn run_input(
     &input.strings,
     scope_options,
   );
-  let mut report = Report::default();
+  let mut report = Report {
+    compiled: oj_meta::Compiled {
+      failed: true,
+      ..describe_program(&program)
+    },
+    ..Report::default()
+  };
   let render = |diagnostics: &[oj_diag::Diagnostic], report: &mut Report| {
     for diagnostic in diagnostics {
       let file = sources.file(diagnostic.source);
@@ -144,13 +153,25 @@ pub fn run_input(
   // A metaprogram runs as part of typechecking, since its work is done by the
   // `#run`s the checker executes (**C§3.1**). What it asks the compiler for
   // lands in this, and the workspaces it created are built once it is done.
-  let outer = oj_meta::install(metaprogram_state(&mut checker, options));
+  let mut state = metaprogram_state(&mut checker, options);
+  // A workspace compiled while its metaprogram watches reports through this,
+  // since the compilation that produced the diagnostics is not this one.
+  let watched: std::rc::Rc<std::cell::RefCell<Vec<String>>> = std::rc::Rc::default();
+  state.compiler = Some(workspace_compiler(
+    root,
+    options,
+    stage,
+    state.build_options_layout,
+    watched.clone(),
+  ));
+  let outer = oj_meta::install(state);
   checker.check();
   let meta = oj_meta::uninstall().unwrap_or_default();
   if let Some(outer) = outer {
     oj_meta::install(outer);
   }
   render(checker.diagnostics(), &mut report);
+  report.diagnostics.extend(watched.borrow_mut().drain(..));
   report_metaprogram_diagnostics(&meta, &mut report);
   if checker.has_errors() || meta.has_errors() {
     report.failed = true;
@@ -218,6 +239,7 @@ pub fn run_input(
         return Report::failure(format!("could not create {}: {error}", build.display()));
       }
       let object = build.join(format!("{name}.o"));
+      let object_name = object.display().to_string();
       if let Err(error) = oj_codegen::compile(
         &lowered.program,
         &codegen,
@@ -233,9 +255,26 @@ pub fn run_input(
         libraries: lowered.program.libraries.clone(),
         additional_arguments: Vec::new(),
       };
+      report.compiled.object_files = vec![object_name];
+      report.compiled.system_libraries = lowered
+        .program
+        .libraries
+        .iter()
+        .filter(|library| library.system)
+        .map(|library| library.name.clone())
+        .collect();
+      report.compiled.user_libraries = lowered
+        .program
+        .libraries
+        .iter()
+        .filter(|library| !library.system)
+        .map(|library| library.name.clone())
+        .collect();
       match oj_link::link(&request) {
         Ok(line) => {
           report.link_line = line.map(|line| line.display());
+          report.compiled.executable = Some(request.output.clone());
+          report.compiled.failed = false;
           report.executable = Some(request.output);
           report
         }
@@ -302,6 +341,106 @@ fn build_options_layout(
   layout
 }
 
+/// What a metaprogram is told about a compilation's source (**C§3.2**): one
+/// module instantiation per `#import`, and the files each one loaded.
+fn describe_program(program: &oj_scope::Program<'_>) -> oj_meta::Compiled {
+  let modules = program.modules();
+  let compiled_modules: Vec<oj_meta::CompiledModule> = modules
+    .iter()
+    .map(|module| oj_meta::CompiledModule {
+      name: module.name.clone(),
+      entry: module.entry.clone(),
+      module_type: match module.kind {
+        oj_scope::ModuleKind::Preload => oj_meta::ModuleType::Preload,
+        oj_scope::ModuleKind::RuntimeSupport => oj_meta::ModuleType::RuntimeSupport,
+        oj_scope::ModuleKind::MainProgram => oj_meta::ModuleType::MainProgram,
+        oj_scope::ModuleKind::File => oj_meta::ModuleType::File,
+      },
+    })
+    .collect();
+
+  let files = program
+    .units()
+    .map(|unit| {
+      let module = program.tree().parent(unit.scope);
+      oj_meta::CompiledFile {
+        module: module.and_then(|scope| modules.iter().position(|entry| entry.scope == scope)),
+        from_a_string: !unit.path.is_file(),
+        path: unit.path.clone(),
+      }
+    })
+    .collect();
+
+  oj_meta::Compiled {
+    modules: compiled_modules,
+    files,
+    ..oj_meta::Compiled::default()
+  }
+}
+
+/// How a metaprogram's `compiler_wait_for_message` gets a workspace compiled:
+/// the whole pipeline again, from inside the `#run` that is watching it
+/// (`docs/spec.md` §10).
+fn workspace_compiler(
+  outer: &Path,
+  options: &BuildOptions,
+  stage: Stage,
+  layout: oj_meta::BuildOptionsLayout,
+  sink: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+) -> oj_meta::Compiler {
+  let outer = outer.to_path_buf();
+  let options = options.clone();
+  std::rc::Rc::new(move |workspace: &oj_meta::Workspace| {
+    let (input, nested) = workspace_input(workspace, &layout, &outer, &options);
+    let report = run_input(&input, &nested, stage, None);
+    let mut compiled = report.compiled;
+    compiled.errors = report.diagnostics.len();
+    compiled.failed |= report.failed;
+    sink.borrow_mut().extend(report.diagnostics);
+    compiled
+  })
+}
+
+/// The input and the options one workspace compiles with, as its metaprogram
+/// set them (**C§3.1**).
+fn workspace_input(
+  workspace: &oj_meta::Workspace,
+  layout: &oj_meta::BuildOptionsLayout,
+  outer: &Path,
+  options: &BuildOptions,
+) -> (Input, BuildOptions) {
+  let directory = outer
+    .parent()
+    .map(Path::to_path_buf)
+    .unwrap_or_else(|| PathBuf::from("."));
+  let mut nested = options.clone();
+  nested.compile_time_command_line = Vec::new();
+  if let Some(name) = workspace.option_string(layout, |layout| layout.output_executable_name)
+    && !name.is_empty()
+  {
+    nested.output_executable_name = Some(name);
+  }
+  if let Some(path) = workspace.option_string(layout, |layout| layout.output_path)
+    && !path.is_empty()
+  {
+    nested.output_path = Some(PathBuf::from(path));
+  }
+  let input = Input {
+    files: workspace.files.clone(),
+    strings: workspace
+      .strings
+      .iter()
+      .enumerate()
+      .map(|(index, text)| {
+        (
+          added_string_path(workspace, &directory, index),
+          text.clone(),
+        )
+      })
+      .collect(),
+  };
+  (input, nested)
+}
 /// Turns what a metaprogram reported into diagnostics of the compilation
 /// (**C§3.3**).
 fn report_metaprogram_diagnostics(meta: &oj_meta::Meta, report: &mut Report) {
@@ -332,37 +471,8 @@ fn build_workspaces(
   stage: Stage,
   report: &mut Report,
 ) {
-  let directory = outer
-    .parent()
-    .map(Path::to_path_buf)
-    .unwrap_or_else(|| PathBuf::from("."));
   for workspace in meta.buildable() {
-    let mut nested = options.clone();
-    nested.compile_time_command_line = Vec::new();
-    if let Some(name) = meta.workspace_string(workspace, |layout| layout.output_executable_name)
-      && !name.is_empty()
-    {
-      nested.output_executable_name = Some(name);
-    }
-    if let Some(path) = meta.workspace_string(workspace, |layout| layout.output_path)
-      && !path.is_empty()
-    {
-      nested.output_path = Some(PathBuf::from(path));
-    }
-    let input = Input {
-      files: workspace.files.clone(),
-      strings: workspace
-        .strings
-        .iter()
-        .enumerate()
-        .map(|(index, text)| {
-          (
-            added_string_path(workspace, &directory, index),
-            text.clone(),
-          )
-        })
-        .collect(),
-    };
+    let (input, nested) = workspace_input(workspace, &meta.build_options_layout, outer, options);
     let inner = run_input(&input, &nested, stage, None);
     report.diagnostics.extend(inner.diagnostics);
     if inner.failed {

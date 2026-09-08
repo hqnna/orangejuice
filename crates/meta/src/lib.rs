@@ -19,10 +19,18 @@ use std::path::PathBuf;
 
 mod abi;
 mod intrinsics;
+mod message;
 mod state;
 
 pub use abi::{Slice, SourceCodeLocation, Str, VersionInfo};
-pub use state::{BuildOptionsLayout, Meta, Report, ReportMode, Workspace, WorkspaceStatus};
+pub use message::{
+  ErrorCode, Kind, Message, MessageComplete, MessageFile, MessageImport, MessagePhase, ModuleType,
+  Phase, Stored,
+};
+pub use state::{
+  BuildOptionsLayout, Compiled, CompiledFile, CompiledModule, Compiler, Intercept, Meta, Report,
+  ReportMode, Workspace, WorkspaceStatus,
+};
 
 thread_local! {
   static INSTALLED: RefCell<Option<Meta>> = const { RefCell::new(None) };

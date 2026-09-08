@@ -10,6 +10,7 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 
 use crate::abi::{Slice, SourceCodeLocation, Str, VersionInfo};
+use crate::message::Message;
 use crate::state::{Report, ReportMode, WorkspaceStatus};
 use crate::with;
 
@@ -51,9 +52,53 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
       "compiler_add_library_search_directory",
       compiler_add_library_search_directory as *const () as usize,
     ),
+    (
+      "compiler_begin_intercept",
+      compiler_begin_intercept as *const () as usize,
+    ),
+    (
+      "compiler_end_intercept",
+      compiler_end_intercept as *const () as usize,
+    ),
+    (
+      "compiler_wait_for_message",
+      compiler_wait_for_message as *const () as usize,
+    ),
   ]
 }
 
+/// `compiler_begin_intercept :: (w: Workspace, flags: Intercept_Flags = 0)`
+unsafe extern "C" fn compiler_begin_intercept(w: i64, flags: u32, _context: *mut c_void) {
+  with(|meta| meta.begin_intercept(w, flags));
+}
+
+/// `compiler_end_intercept :: (w: Workspace)`
+unsafe extern "C" fn compiler_end_intercept(_w: i64, _context: *mut c_void) {
+  with(|meta| meta.end_intercept());
+}
+
+/// `compiler_wait_for_message :: () -> *Message`
+///
+/// The reference compiles a workspace on another thread while the metaprogram
+/// watches; orangejuice compiles it here, the first time the metaprogram asks
+/// for a message, and then hands the stream over one message at a time
+/// (`docs/spec.md` §10). The compiling re-enters the compiler, so it happens
+/// with nothing of this state borrowed.
+unsafe extern "C" fn compiler_wait_for_message(_context: *mut c_void) -> *const Message {
+  let pending = with(|meta| {
+    meta
+      .workspace_awaiting_compilation()
+      .map(|workspace| (workspace, meta.compiler.clone()))
+  })
+  .flatten();
+  if let Some((workspace, Some(compile))) = pending {
+    let compiled = compile(&workspace);
+    with(|meta| meta.queue_messages(&compiled));
+  }
+  with(|meta| meta.next_message())
+    .flatten()
+    .unwrap_or(std::ptr::null())
+}
 /// `compiler_get_version_info :: (version_info_return: *Version_Info) -> string`
 unsafe extern "C" fn compiler_get_version_info(
   result: *mut Str,

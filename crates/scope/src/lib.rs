@@ -7,8 +7,8 @@ mod tree;
 pub use constants::{AstSource, ConstValue, Evaluator};
 pub use dump::{print_scopes, summary};
 pub use program::{
-  Expansion, InsertKind, Insertion, Options, PendingInsert, ProcedureScopes, Program, Reference,
-  Unit,
+  Expansion, InsertKind, Insertion, Module, ModuleKind, Options, PendingInsert, ProcedureScopes,
+  Program, Reference, Unit,
 };
 pub use resolve::{Undeclared, undeclared_diagnostics, undeclared_identifiers};
 pub use tree::{

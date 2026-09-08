@@ -258,3 +258,188 @@ fn compiler_get_base_path_names_the_distribution() {
     report.diagnostics
   );
 }
+
+/// The message structs a metaprogram casts what it is handed to (**C§3.2**),
+/// spelled as `Compiler.jai` spells them.
+const MESSAGES: &str = "\
+Intercept_Flags :: enum_flags u32 { SKIP_ALL :: 0x3f; }
+
+Message :: struct {
+  kind: enum u8 {
+    UNINITIALIZED :: 0;
+    FILE; IMPORT; FAILED_IMPORT; PHASE; TYPECHECKED; COMPLETE; DEBUG_DUMP; ERROR; PERFORMANCE_REPORT;
+  }
+  workspace: Workspace;
+}
+
+Message_Import :: struct {
+  #as using m: Message;
+  module_type: enum u8 { UNINITIALIZED :: 0; PRELOAD :: 1; RUNTIME_SUPPORT :: 2; MAIN_PROGRAM :: 3; FILE :: 4; };
+  module_name: string;
+  fully_pathed_filename: string;
+}
+
+Message_Phase :: struct {
+  #as using m: Message;
+  phase: enum u32 {
+    ALL_SOURCE_CODE_PARSED :: 0;
+    TYPECHECKED_ALL_WE_CAN :: 1;
+    ALL_TARGET_CODE_BUILT  :: 2;
+    PRE_WRITE_EXECUTABLE   :: 3;
+    POST_WRITE_EXECUTABLE  :: 4;
+    READY_FOR_CUSTOM_LINK_COMMAND :: 5;
+  };
+  executable_name: string;
+  executable_write_failed := false;
+  linker_exit_code: s32;
+  num_items_waiting_to_typecheck: s32;
+  compiler_generated_object_files: [] string;
+  support_object_files:            [] string;
+  system_libraries:                [] string;
+  user_libraries:                  [] string;
+}
+
+Message_Complete :: struct {
+  #as using m: Message;
+  error_code: enum u8 { NONE :: 0; COMPILATION_FAILED :: 1; COMPILER_SHUTDOWN :: 2; }
+}
+
+compiler_begin_intercept :: (w: Workspace, flags: Intercept_Flags = 0) #compiler;
+compiler_end_intercept :: (w: Workspace) #compiler;
+compiler_wait_for_message :: () -> *Message #compiler;
+";
+
+/// Builds a program that also has the message declarations in front of it.
+fn build_watching(fixture: &Fixture, body: &str) -> Option<oj_driver::Report> {
+  build(fixture, &format!("{MESSAGES}\n{body}"))
+}
+
+/// A program for a workspace to compile that says so, once, through its own
+/// `compiler_report`. It is a here-string in the source that adds it, so the
+/// nested program can have quotes of its own.
+const WATCHED_PROGRAM: &str = "\
+WATCHED_PROGRAM :: #string OJ_DONE
+Report :: enum u8 { ERROR; ERROR_CONTINUABLE; WARNING; INFO; }
+compiler_report :: (message: string, loc := #caller_location, mode := Report.ERROR) #compiler;
+#run compiler_report(\"compiled once\", mode = .INFO);
+main :: () { }
+OJ_DONE
+";
+
+#[test]
+fn a_metaprogram_watches_the_workspace_it_created_compile() {
+  let fixture = Fixture::new();
+  let Some(report) = build_watching(
+    &fixture,
+    "#run {\n\
+       w := compiler_create_workspace(\"target\");\n\
+       options := get_build_options(w);\n\
+       options.output_executable_name = \"watched\";\n\
+       set_build_options(options, w);\n\
+       compiler_begin_intercept(w);\n\
+       add_build_string(\"main :: () { }\", w);\n\
+       imports := 0;\n\
+       files := 0;\n\
+       built := false;\n\
+       while true {\n\
+         message := compiler_wait_for_message();\n\
+         if message.kind == .IMPORT   imports += 1;\n\
+         if message.kind == .FILE     files += 1;\n\
+         if message.kind == .PHASE {\n\
+           phase := cast(*Message_Phase) message;\n\
+           if phase.phase == .POST_WRITE_EXECUTABLE  built = true;\n\
+         }\n\
+         if message.kind == .COMPLETE {\n\
+           complete := cast(*Message_Complete) message;\n\
+           if complete.error_code != .NONE  compiler_report(\"the workspace failed\");\n\
+           break;\n\
+         }\n\
+       }\n\
+       compiler_end_intercept(w);\n\
+       if imports == 0  compiler_report(\"no imports were reported\");\n\
+       if files == 0    compiler_report(\"no files were reported\");\n\
+       if !built        compiler_report(\"the executable phase was never reported\");\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("watched"));
+}
+
+#[test]
+fn a_watched_workspace_is_not_compiled_a_second_time() {
+  let fixture = Fixture::new();
+  let Some(report) = build_watching(
+    &fixture,
+    &(WATCHED_PROGRAM.to_string()
+      + "#run {\n\
+       w := compiler_create_workspace(\"target\");\n\
+       options := get_build_options(w);\n\
+       options.output_executable_name = \"once\";\n\
+       set_build_options(options, w);\n\
+       compiler_begin_intercept(w);\n\
+       add_build_string(WATCHED_PROGRAM, w);\n\
+       while true {\n\
+         message := compiler_wait_for_message();\n\
+         if message.kind == .COMPLETE  break;\n\
+       }\n\
+       compiler_end_intercept(w);\n\
+     }\n\
+     main :: () {}\n"),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("once"));
+  // The workspace compiled once: the `#run` inside it reported exactly one
+  // line, and nothing rebuilt it afterwards.
+  let reported = report
+    .diagnostics
+    .iter()
+    .filter(|line| line.contains("compiled once"))
+    .count();
+  assert_eq!(reported, 1, "{:?}", report.diagnostics);
+}
+
+#[test]
+fn a_workspace_that_fails_reports_a_failed_completion() {
+  let fixture = Fixture::new();
+  let Some(report) = build_watching(
+    &fixture,
+    "#run {\n\
+       w := compiler_create_workspace(\"target\");\n\
+       compiler_begin_intercept(w);\n\
+       add_build_string(\"main :: () { undefined_name(); }\", w);\n\
+       failed := false;\n\
+       while true {\n\
+         message := compiler_wait_for_message();\n\
+         if message.kind == .COMPLETE {\n\
+           complete := cast(*Message_Complete) message;\n\
+           failed = complete.error_code == .COMPILATION_FAILED;\n\
+           break;\n\
+         }\n\
+       }\n\
+       compiler_end_intercept(w);\n\
+       if !failed  compiler_report(\"the failure was not reported\");\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(
+    report
+      .diagnostics
+      .iter()
+      .any(|line| line.contains("undefined_name")),
+    "{:?}",
+    report.diagnostics
+  );
+  assert!(
+    !report
+      .diagnostics
+      .iter()
+      .any(|line| line.contains("the failure was not reported")),
+    "{:?}",
+    report.diagnostics
+  );
+}

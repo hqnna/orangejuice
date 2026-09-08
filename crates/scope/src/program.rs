@@ -79,6 +79,26 @@ impl Options {
   }
 }
 
+/// One module instantiation: what it was imported as, the file it starts at,
+/// and the scope it became (**L§11.2**).
+#[derive(Clone, Debug)]
+pub struct Module {
+  pub name: String,
+  pub entry: PathBuf,
+  pub scope: ScopeId,
+  pub kind: ModuleKind,
+}
+
+/// What a module is to the program that has it, which is what `Message_Import`
+/// reports (**C§3.2**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModuleKind {
+  Preload,
+  RuntimeSupport,
+  MainProgram,
+  File,
+}
+
 /// One parsed file and the file scope it was resolved into.
 pub struct Unit {
   pub source: SourceId,
@@ -200,6 +220,9 @@ pub struct Program<'a> {
   inserted: boxcar::Vec<Insertion>,
   inserted_of_source: RefCell<HashMap<SourceId, usize>>,
   expansions: RefCell<HashMap<(SourceId, NodeId), Expansion>>,
+  /// Every module instantiation, in the order it was made, so that a
+  /// metaprogram can be told about each one (**C§3.2**).
+  module_records: RefCell<Vec<Module>>,
   /// The `#insert`s whose text the scope tree could not work out on its own:
   /// they need a type or a `#run`, so the typechecker expands them.
   pending_inserts: RefCell<Vec<PendingInsert>>,
@@ -316,6 +339,7 @@ impl<'a> Program<'a> {
       inserted_of_source: RefCell::default(),
       expansions: RefCell::default(),
       pending_inserts: RefCell::default(),
+      module_records: RefCell::default(),
       modules: RefCell::default(),
       loaded: RefCell::default(),
       aggregate_scopes: RefCell::default(),
@@ -336,6 +360,7 @@ impl<'a> Program<'a> {
       main,
     };
 
+    program.record_module(String::new(), anchor.clone(), main, ModuleKind::MainProgram);
     program.declare_builtins();
     if program.options.load_preload {
       program.load_preload();
@@ -509,6 +534,12 @@ impl<'a> Program<'a> {
     let preload = jai_dir.join("modules").join("Preload.jai");
     if preload.is_file() {
       let scope = self.preload;
+      self.record_module(
+        String::from("Preload"),
+        preload.clone(),
+        scope,
+        ModuleKind::Preload,
+      );
       self.load_file_into(scope, &preload, None);
     }
     // `Runtime_Support` is imported by the compiler into every workspace, not
@@ -535,6 +566,11 @@ impl<'a> Program<'a> {
       None => {
         let module = self.tree.push_scope(ScopeKind::Module, Some(self.preload));
         self.modules.borrow_mut().insert(key, module);
+        let kind = match name {
+          "Runtime_Support" => ModuleKind::RuntimeSupport,
+          _ => ModuleKind::File,
+        };
+        self.record_module(name.to_string(), resolved.entry.clone(), module, kind);
         self.load_module_files(module, &resolved.entry, None);
         module
       }
@@ -1280,6 +1316,7 @@ impl<'a> Program<'a> {
 
     let module = self.tree.push_scope(ScopeKind::Module, Some(self.preload));
     self.modules.borrow_mut().insert(key, module);
+    self.record_module(name, resolved.entry.clone(), module, ModuleKind::File);
     self.load_module_files(module, &resolved.entry, Some((source, span)));
     Some(module)
   }
@@ -1715,6 +1752,20 @@ impl<'a> Program<'a> {
   }
 
   // --------------------------------------------------------------- insert ---
+
+  /// Every module instantiation the program made, in order (**C§3.2**).
+  pub fn modules(&self) -> Vec<Module> {
+    self.module_records.borrow().clone()
+  }
+
+  fn record_module(&self, name: String, entry: PathBuf, scope: ScopeId, kind: ModuleKind) {
+    self.module_records.borrow_mut().push(Module {
+      name,
+      entry,
+      scope,
+      kind,
+    });
+  }
 
   /// The `#insert`s still waiting for the typechecker to say what their text
   /// is (**L§13.2**).
