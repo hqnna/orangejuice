@@ -331,7 +331,25 @@ impl Checker<'_> {
 
     let vararg_slot = signature.vararg_slot;
     let slots = self.argument_slots(signature, arguments)?;
-    for (argument, index) in arguments.iter().zip(slots) {
+    // A literal argument is whatever the header wants, so it only decides a
+    // `$T` that nothing typed did: `compare_and_swap(*lock, 0, 1)` takes `T`
+    // from the pointer and converts the two literals to it (**L§7.8**).
+    let typed_first = slots
+      .iter()
+      .copied()
+      .zip(arguments)
+      .filter(|(_, argument)| !self.types().is_untyped(argument.value.type_id))
+      .chain(
+        slots
+          .iter()
+          .copied()
+          .zip(arguments)
+          .filter(|(_, argument)| self.types().is_untyped(argument.value.type_id)),
+      )
+      .map(|(index, argument)| (index, argument.clone()))
+      .collect::<Vec<_>>();
+    for (index, argument) in typed_first {
+      let argument = &argument;
       let parameter = signature.parameters.get(index)?;
       // An argument in the varargs slot matches the `[] T`'s element
       // (**L§7.8**): `values: ..$T` takes `T` from the first one. `..xs`
@@ -443,13 +461,13 @@ impl Checker<'_> {
       self.types().kind(actual).clone(),
     );
     match kinds {
-      (TypeKind::Polymorph(definition), _) => match substitution.get(&definition) {
-        Some(bound) => *bound == actual,
-        None => {
-          substitution.insert(definition, actual);
-          true
-        }
-      },
+      // A variable something else already decided is not decided again: the
+      // argument only has to convert to it, which scoring checks
+      // (**L§7.8**).
+      (TypeKind::Polymorph(definition), _) => {
+        substitution.entry(definition).or_insert(actual);
+        true
+      }
       (TypeKind::Pointer(pattern), TypeKind::Pointer(actual)) => {
         self.unify_types(pattern, actual, substitution)
       }

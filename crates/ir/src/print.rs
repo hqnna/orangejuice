@@ -214,6 +214,20 @@ fn instruction_text(
       kind,
       operand,
     } => format!("{} = {} %{}", named(*dest), convert_name(*kind), operand.0),
+    Inst::AtomicCompareExchange {
+      success,
+      previous,
+      address,
+      expected,
+      desired,
+    } => format!(
+      "{}, {} = cmpxchg %{} %{} %{}",
+      named(*success),
+      named(*previous),
+      address.0,
+      expected.0,
+      desired.0
+    ),
     Inst::Call {
       dest,
       callee,

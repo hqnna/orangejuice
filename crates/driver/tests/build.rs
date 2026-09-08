@@ -1136,3 +1136,19 @@ fn a_compound_assignment_reads_its_right_operand_as_the_place() {
     "2\n",
   );
 }
+
+#[test]
+fn compare_and_swap_is_an_atomic_exchange() {
+  assert_output(
+    "compare_and_swap :: (pointer: *$T, old: T, new: T) -> (success: bool, old_value: T) #intrinsic;\n\
+     main :: () {\n\
+       lock: int = 0;\n\
+       ok, before := compare_and_swap(*lock, 0, 1);\n\
+       put_number(cast(int) ok);\n\
+       put_number(before);\n\
+       put_number(lock);\n\
+       put_number(cast(int) compare_and_swap(*lock, 0, 1));\n\
+     }\n",
+    "1\n0\n1\n0\n",
+  );
+}

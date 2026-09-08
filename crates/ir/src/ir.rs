@@ -210,6 +210,15 @@ pub enum Inst {
     kind: ConvertKind,
     operand: ValueId,
   },
+  /// Preload's `compare_and_swap` (**L§17**): an atomic compare-exchange that
+  /// gives both whether the swap happened and what was there before.
+  AtomicCompareExchange {
+    success: ValueId,
+    previous: ValueId,
+    address: ValueId,
+    expected: ValueId,
+    desired: ValueId,
+  },
   Call {
     /// The value returned in registers, when the call has one. A return the
     /// convention passes by pointer is written through an argument instead.
@@ -235,7 +244,11 @@ impl Inst {
       | Self::Binary { dest, .. }
       | Self::Convert { dest, .. } => Some(*dest),
       Self::Call { dest, .. } => *dest,
-      Self::Store { .. } | Self::Copy { .. } | Self::Clear { .. } => None,
+      // A compare-exchange writes two values, so neither is "the" one.
+      Self::AtomicCompareExchange { .. }
+      | Self::Store { .. }
+      | Self::Copy { .. }
+      | Self::Clear { .. } => None,
     }
   }
 }

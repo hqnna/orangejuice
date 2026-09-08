@@ -498,6 +498,50 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
           .map_err(|error| error.to_string())?;
         values[dest.0 as usize] = Some(loaded);
       }
+      // Preload's `compare_and_swap` (**L§17**). LLVM's `cmpxchg` gives back
+      // the pair the procedure returns: what was there, and whether the swap
+      // happened.
+      Inst::AtomicCompareExchange {
+        success,
+        previous,
+        address,
+        expected,
+        desired,
+      } => {
+        let address = self.pointer(values, *address)?;
+        let expected = self.value(values, *expected)?;
+        let desired = self.value(values, *desired)?;
+        let exchanged = self
+          .builder
+          .build_cmpxchg(
+            address,
+            expected,
+            desired,
+            inkwell::AtomicOrdering::SequentiallyConsistent,
+            inkwell::AtomicOrdering::SequentiallyConsistent,
+          )
+          .map_err(|error| error.to_string())?;
+        let before = self
+          .builder
+          .build_extract_value(exchanged, 0, "cmpxchg.previous")
+          .map_err(|error| error.to_string())?;
+        let happened = self
+          .builder
+          .build_extract_value(exchanged, 1, "cmpxchg.success")
+          .map_err(|error| error.to_string())?;
+        let happened = self
+          .builder
+          .build_int_z_extend(
+            happened.into_int_value(),
+            self
+              .llvm_type(procedure.value_type(*success))
+              .into_int_type(),
+            "cmpxchg.bool",
+          )
+          .map_err(|error| error.to_string())?;
+        values[previous.0 as usize] = Some(before);
+        values[success.0 as usize] = Some(happened.into());
+      }
       Inst::Store { address, value } => {
         let address = self.pointer(values, *address)?;
         let value = self.value(values, *value)?;

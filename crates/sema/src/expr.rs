@@ -493,6 +493,10 @@ impl Checker<'_> {
         {
           return result;
         }
+        // `+x` is `x` (**L§5.2**), constant and all.
+        if operator == OperatorType::PLUS {
+          return inner;
+        }
         match inner
           .constant
           .as_ref()

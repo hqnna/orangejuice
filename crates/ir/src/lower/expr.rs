@@ -1536,6 +1536,13 @@ impl Lowering<'_, '_> {
       return None;
     }
 
+    // Preload's `compare_and_swap` is an operation, not a procedure
+    // (**L§17**).
+    if let Some(decl) = plan.callee
+      && self.is_intrinsic_named(decl, "compare_and_swap")
+    {
+      return self.compare_and_swap(&plan);
+    }
     // A macro is spliced into the block it was called from rather than called
     // (**L§7.13**).
     if let Some(instance) = plan.instance
@@ -1646,6 +1653,55 @@ impl Lowering<'_, '_> {
     }
     results.extend(return_places);
     Some(results)
+  }
+
+  /// Whether a declaration is the `#intrinsic` of that name: an operation the
+  /// back end provides rather than a procedure it calls (**L§17**).
+  fn is_intrinsic_named(&mut self, decl: DeclId, name: &str) -> bool {
+    let symbol = self.checker.program().tree().decl(decl).name;
+    if self.checker.interner().resolve_lossy(symbol) != name {
+      return false;
+    }
+    self
+      .checker
+      .procedure_body(decl)
+      .is_some_and(|body| body.flags.contains(ast::ProcedureFlags::INTRINSIC))
+  }
+
+  /// Preload's `compare_and_swap(pointer, old, new)` (**L§17**): an atomic
+  /// compare-exchange giving `(success, old_value)`.
+  fn compare_and_swap(&mut self, plan: &CallPlan) -> Option<Vec<Val>> {
+    let [pointer, old, new] = plan.arguments[..] else {
+      return None;
+    };
+    let address = self.expression(pointer.scope, pointer.source, pointer.node, None)?;
+    let element = self.checker.types().pointee(address.type_id)?;
+    let address = self.scalar(address);
+    let expected = self.expression(old.scope, old.source, old.node, Some(element))?;
+    let desired = self.expression(new.scope, new.source, new.node, Some(element))?;
+    let expected = self.scalar(expected);
+    let desired = self.scalar(desired);
+    let success = self.value(TypeId::BOOL);
+    let previous = self.value(element);
+    self.emit(Inst::AtomicCompareExchange {
+      success,
+      previous,
+      address,
+      expected,
+      desired,
+    });
+    Some(vec![
+      Val {
+        id: success,
+        type_id: TypeId::BOOL,
+        indirect: false,
+      },
+      Val {
+        id: previous,
+        type_id: element,
+        indirect: false,
+      },
+    ])
   }
 
   /// Splices a macro's body into the procedure being lowered (**L§7.13**). Its
