@@ -58,6 +58,9 @@ pub struct Expr {
   /// The expression is an explicit `cast(T)`. A bitwise operator whose left
   /// operand was cast keeps the cast's type rather than widening (**L§5.2**).
   pub explicitly_cast: bool,
+  /// The expression is `xx e`, whose type is whatever asked for it
+  /// (**L§5.6**).
+  pub autocast: bool,
 }
 
 impl Expr {
@@ -68,6 +71,7 @@ impl Expr {
     lvalue: false,
     overloads: Vec::new(),
     explicitly_cast: false,
+    autocast: false,
   };
 
   pub fn value(type_id: TypeId) -> Self {
@@ -78,6 +82,7 @@ impl Expr {
       lvalue: false,
       overloads: Vec::new(),
       explicitly_cast: false,
+      autocast: false,
     }
   }
 
@@ -96,6 +101,7 @@ impl Expr {
       lvalue: false,
       overloads: Vec::new(),
       explicitly_cast: false,
+      autocast: false,
     }
   }
 
@@ -107,6 +113,7 @@ impl Expr {
       lvalue: false,
       overloads: Vec::new(),
       explicitly_cast: false,
+      autocast: false,
     }
   }
 

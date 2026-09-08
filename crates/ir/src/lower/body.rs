@@ -762,8 +762,19 @@ impl Lowering<'_, '_> {
     };
     // `a &&= b` and `a ||= b` only assign when the operator would change the
     // value, which a plain read-modify-write already does (**L§5.2**).
+    // `x &= ~.A` reads the right operand as one of `x`'s own type. A shift's
+    // right operand is a count and a pointer's is an index of elements, so
+    // neither takes it (**L§3.2**, **L§5.2**).
+    let keeps_left = matches!(
+      binary,
+      crate::ir::BinaryOp::ShiftLeft
+        | crate::ir::BinaryOp::ShiftRight
+        | crate::ir::BinaryOp::RotateLeft
+        | crate::ir::BinaryOp::RotateRight
+    ) || self.checker.types().is_pointer(place.type_id);
     let scope = self.checker.scope_for(source, right, self.body_scope);
-    let Some(value) = self.expression(scope, source, right, None) else {
+    let wanted = (!keeps_left).then_some(place.type_id);
+    let Some(value) = self.expression(scope, source, right, wanted) else {
       return;
     };
     let current = Val {

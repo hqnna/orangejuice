@@ -33,8 +33,13 @@ impl Checker<'_> {
       );
     }
 
+    // `xx e` names no type: whatever asked for the value decides it
+    // (**L§5.6**).
     let Some(target) = cast.target_type else {
-      return Expr::UNKNOWN;
+      return Expr {
+        autocast: cast.cast_flags.contains(CastFlags::IS_AUTO),
+        ..Expr::UNKNOWN
+      };
     };
     let target = self.type_from_node(scope, source, target);
     if let Some(span) = span {
@@ -42,6 +47,7 @@ impl Checker<'_> {
     }
     Expr {
       explicitly_cast: true,
+      autocast: false,
       ..Expr::value(target)
     }
   }

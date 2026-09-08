@@ -432,6 +432,7 @@ impl Checker<'_> {
           lvalue: false,
           overloads: Vec::new(),
           explicitly_cast: false,
+          autocast: false,
         },
         None => Expr::UNKNOWN,
       };
@@ -768,15 +769,18 @@ impl Checker<'_> {
     payload: &oj_syntax::ast::IfNode,
   ) -> Expr {
     self.expression_type(scope, source, payload.condition);
-    let then_type = payload
+    let then_value = payload
       .then_block
-      .map(|node| self.expression_type(scope, source, node).type_id);
-    let else_type = payload
+      .map(|node| self.expression_type(scope, source, node));
+    let else_value = payload
       .else_block
-      .map(|node| self.expression_type(scope, source, node).type_id);
-    match (then_type, else_type) {
-      (Some(left), Some(right)) => Expr::value(self.unify(left, right)),
-      (Some(only), None) | (None, Some(only)) => Expr::value(only),
+      .map(|node| self.expression_type(scope, source, node));
+    match (then_value, else_value) {
+      // A branch written `xx e` takes the other one's type (**L§5.6**).
+      (Some(left), Some(right)) if left.autocast => Expr::value(right.type_id),
+      (Some(left), Some(right)) if right.autocast => Expr::value(left.type_id),
+      (Some(left), Some(right)) => Expr::value(self.unify(left.type_id, right.type_id)),
+      (Some(only), None) | (None, Some(only)) => Expr::value(only.type_id),
       (None, None) => Expr::value(TypeId::VOID),
     }
   }

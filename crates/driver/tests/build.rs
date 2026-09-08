@@ -1105,3 +1105,34 @@ fn a_constant_that_holds_a_procedure_is_built_where_it_is_used() {
     "42\n7\n",
   );
 }
+
+#[test]
+fn an_autocast_takes_the_type_that_asked_for_the_value() {
+  assert_output(
+    "Box :: struct { value: int; }\n\
+     unwrap :: (b: *Box) -> int { return b.value; }\n\
+     main :: () {\n\
+       b: Box;\n\
+       b.value = 42;\n\
+       raw: *void = *b;\n\
+       boxed := ifx raw then xx raw else cast(*Box) null;\n\
+       put_number(unwrap(boxed));\n\
+       n: u8 = xx 7;\n\
+       put_number(cast(int) n);\n\
+     }\n",
+    "42\n7\n",
+  );
+}
+
+#[test]
+fn a_compound_assignment_reads_its_right_operand_as_the_place() {
+  assert_output(
+    "Flags :: enum_flags u32 { A; B; C; }\n\
+     main :: () {\n\
+       f := Flags.A | .B;\n\
+       f &= ~.A;\n\
+       put_number(cast(int) f);\n\
+     }\n",
+    "2\n",
+  );
+}

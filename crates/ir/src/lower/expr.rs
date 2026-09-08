@@ -31,7 +31,10 @@ impl Lowering<'_, '_> {
       }
     }
 
-    if self.checker.types().is_unknown(info.type_id) && info.overloads.is_empty() {
+    // `xx e` has no type of its own: whatever asked for the value decides it
+    // (**L§5.6**), so it is not the unknown the next check reports.
+    if self.checker.types().is_unknown(info.type_id) && info.overloads.is_empty() && !info.autocast
+    {
       self.unsupported(
         source,
         node,
@@ -314,7 +317,7 @@ impl Lowering<'_, '_> {
         self.literal_value(scope, source, node, &literal.value, info, want)
       }
       NodeData::UnaryOperator { operator, operand } => {
-        self.unary_value(scope, source, node, operator, operand, info)
+        self.unary_value(scope, source, node, operator, operand, info, want)
       }
       NodeData::BinaryOperator {
         operator,
@@ -324,7 +327,15 @@ impl Lowering<'_, '_> {
       } => self.binary_value(scope, source, node, operator, left, right, info),
       NodeData::Cast(cast) => {
         let value = self.expression(scope, source, cast.expression, None)?;
-        self.convert(source, node, value, info.type_id)
+        // `xx e` is a cast to whatever asked for the value (**L§5.6**).
+        let target = match cast.target_type {
+          Some(_) => info.type_id,
+          None => match want {
+            Some(target) => target,
+            None => return Some(value),
+          },
+        };
+        self.convert(source, node, value, target)
       }
       NodeData::ProcedureCall(_) => self.call_value(scope, source, node, info),
       NodeData::Context => {
@@ -336,10 +347,12 @@ impl Lowering<'_, '_> {
         })
       }
       NodeData::If(payload) => self.ifx_value(scope, source, node, &payload, info),
+      // A block in expression position is its last statement, and takes the
+      // type whatever asked for the block wanted (**L§5.13**).
       NodeData::Block(block) => match block.statements.last() {
         Some(last) => {
           let last = *last;
-          self.expression(scope, source, last, None)
+          self.expression(scope, source, last, want)
         }
         None => None,
       },
@@ -740,6 +753,7 @@ impl Lowering<'_, '_> {
 
   // ---------------------------------------------------------- operators -----
 
+  #[allow(clippy::too_many_arguments)]
   fn unary_value(
     &mut self,
     scope: ScopeId,
@@ -748,6 +762,7 @@ impl Lowering<'_, '_> {
     operator: OperatorType,
     operand: NodeId,
     info: &Expr,
+    want: Option<TypeId>,
   ) -> Option<Val> {
     match operator {
       // `*x` on a value is its address (**L§3.2**).
@@ -787,9 +802,15 @@ impl Lowering<'_, '_> {
         })
       }
       OperatorType::MINUS | OperatorType::BITWISE_NOT => {
-        let value = self.expression(scope, source, operand, Some(info.type_id))?;
+        // `~.MEMBER` has no type of its own: what asked for the value decides
+        // which enum it belongs to (**L§5.12**).
+        let result = match self.checker.types().is_untyped(info.type_id) {
+          true => want.unwrap_or_else(|| self.checker.hardened(info.type_id)),
+          false => info.type_id,
+        };
+        let value = self.expression(scope, source, operand, Some(result))?;
         let operand = self.scalar(value);
-        let dest = self.value(info.type_id);
+        let dest = self.value(result);
         self.emit(Inst::Unary {
           dest,
           operator: match operator {
@@ -800,7 +821,7 @@ impl Lowering<'_, '_> {
         });
         Some(Val {
           id: dest,
-          type_id: info.type_id,
+          type_id: result,
           indirect: false,
         })
       }

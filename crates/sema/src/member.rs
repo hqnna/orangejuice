@@ -66,6 +66,7 @@ impl Checker<'_> {
           lvalue,
           overloads: Vec::new(),
           explicitly_cast: false,
+          autocast: false,
         };
       }
       // A nested type or procedure reached through a value (**L§8.3**).
@@ -168,6 +169,7 @@ impl Checker<'_> {
           lvalue,
           overloads: Vec::new(),
           explicitly_cast: false,
+          autocast: false,
         },
       });
     }
@@ -182,6 +184,7 @@ impl Checker<'_> {
         lvalue: lvalue && !matches!(kind, ArrayKind::Fixed(_)),
         overloads: Vec::new(),
         explicitly_cast: false,
+        autocast: false,
       });
     }
     if kind == ArrayKind::Resizable {
