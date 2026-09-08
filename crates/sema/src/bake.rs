@@ -28,10 +28,14 @@ impl Checker<'_> {
     else {
       return None;
     };
-    if *bake_type != BakeType::ParameterValue {
+    let bake_type = *bake_type;
+    let call = *procedure_call;
+    if bake_type == BakeType::Constants {
+      return self.baked_constants(source, call, scope);
+    }
+    if bake_type != BakeType::ParameterValue {
       return None;
     }
-    let call = *procedure_call;
     let NodeData::ProcedureCall(payload) = self.ast(source)?.data(call) else {
       return None;
     };
@@ -65,12 +69,96 @@ impl Checker<'_> {
     Some(signature)
   }
 
+  /// `#bake_constants f(T = int)`: the instantiation those constants name
+  /// (**L§7.10**).
+  fn baked_constants(
+    &mut self,
+    source: SourceId,
+    call: NodeId,
+    scope: ScopeId,
+  ) -> Option<Signature> {
+    let NodeData::ProcedureCall(payload) = self.ast(source)?.data(call) else {
+      return None;
+    };
+    let payload = payload.clone();
+    let scope = self.scope_at(source, payload.procedure_expression, scope);
+    let target = self.expression_type(scope, source, payload.procedure_expression);
+    let [only] = target.overloads[..] else {
+      return None;
+    };
+    let signature = self.signature_of(only)?;
+    let (header_source, header) = signature.header?;
+    let scopes = self.program().procedure_scopes(header_source, header)?;
+    let outer_scope = self.program().tree().decl(only).scope;
+
+    // The arguments name the header's own constants, in any order.
+    let variables = self
+      .program()
+      .tree()
+      .scope(scopes.constants)
+      .declarations
+      .clone();
+    let mut bindings = Vec::with_capacity(payload.arguments.len());
+    let mut next = 0usize;
+    for argument in &payload.arguments {
+      let index = match argument.name.and_then(|node| self.ident_name(source, node)) {
+        Some(name) => variables
+          .iter()
+          .position(|id| self.program().tree().decl(*id).name == name)?,
+        None => {
+          next += 1;
+          next - 1
+        }
+      };
+      let value = self
+        .expression_type(scope, source, argument.expression)
+        .constant?;
+      bindings.push((*variables.get(index)?, value));
+    }
+    bindings.sort_by_key(|(id, _)| *id);
+
+    let solution = crate::poly::Solution {
+      bindings,
+      overrides: Vec::new(),
+    };
+    let instance = self.finish_instantiation(
+      &signature,
+      header_source,
+      header,
+      scopes,
+      outer_scope,
+      solution,
+    )?;
+    self.use_instance(instance);
+    let type_id = self.instance_type(instance);
+    let procedure = self.types().procedure_of(type_id)?.clone();
+    let parameters = self.with_instance(Some(instance), |checker| {
+      checker.header_parameters(header_source, header, &procedure.arguments)
+    });
+    Some(Signature {
+      parameters,
+      returns: procedure.returns.clone(),
+      vararg_slot: procedure.vararg_index.map(|index| index as usize),
+      hidden: Vec::new(),
+      polymorphic: false,
+      is_macro: signature.is_macro,
+      decl: signature.decl,
+      header: signature.header,
+      type_id,
+      instance: Some(instance),
+    })
+  }
+
   /// The type a `#bake_arguments` constant has: the original's, without the
   /// parameters the bake gave values to (**L§7.10**).
   pub(crate) fn baked_type(&mut self, candidate: DeclId) -> TypeId {
     let Some(signature) = self.baked_signature(candidate) else {
       return TypeId::UNKNOWN;
     };
+    // A constants bake hides nothing: the specialization is the type.
+    if signature.hidden.is_empty() {
+      return signature.type_id;
+    }
     let Some(original) = self.types().procedure_of(signature.type_id).cloned() else {
       return TypeId::UNKNOWN;
     };

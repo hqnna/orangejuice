@@ -441,6 +441,21 @@ impl Checker<'_> {
       .or_else(|| self.program().tree().scope(scopes.constants).parent)?;
 
     let solution = self.solve(signature, arguments, source, header, scopes)?;
+    self.finish_instantiation(signature, source, header, scopes, outer_scope, solution)
+  }
+
+  /// Turns a solved header into an instantiation: `#modify` decides it, the
+  /// constants key it, and the specialization's own type comes out of reading
+  /// the header again (**L§7.8**).
+  pub(crate) fn finish_instantiation(
+    &mut self,
+    signature: &crate::overload::Signature,
+    source: SourceId,
+    header: NodeId,
+    scopes: ProcedureScopes,
+    outer_scope: ScopeId,
+    solution: Solution,
+  ) -> Option<InstanceId> {
     // `#modify` decides the candidate and may change what its variables are,
     // and deduplication happens after it (**L§7.8**).
     let bindings = self.run_modify(

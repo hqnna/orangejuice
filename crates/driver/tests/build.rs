@@ -1413,3 +1413,13 @@ fn bake_arguments_gives_a_procedure_some_of_its_arguments() {
     "42\n42\n",
   );
 }
+
+#[test]
+fn bake_constants_binds_a_polymorph_variable() {
+  assert_output(
+    "twice :: (x: $T) -> T { return x + x; }\n\
+     twice_int :: #bake_constants twice(T = int);\n\
+     main :: () { put_number(twice_int(21)); }\n",
+    "42\n",
+  );
+}
