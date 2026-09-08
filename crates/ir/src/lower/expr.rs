@@ -231,6 +231,12 @@ impl Lowering<'_, '_> {
         self.unsupported(source, node, "an anonymous procedure", "M7");
         None
       }
+      // `#compile_time` is a value each back end folds for itself: true in
+      // compile-time code, false in the executable (**L§6.10**).
+      NodeData::DirectiveCompileTime => {
+        let running = self.mode == Mode::CompileTime;
+        Some(self.constant(Constant::Bool(running), TypeId::BOOL))
+      }
       NodeData::TypeQuery {
         query_kind: ast::TypeQueryKind::TypeInfo,
         type_to_query,

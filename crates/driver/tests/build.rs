@@ -705,3 +705,30 @@ fn an_any_carries_the_type_and_the_value_it_was_made_from() {
     "integer 7\nstring hello\nother\n",
   );
 }
+
+#[test]
+fn compile_time_is_true_only_while_the_compiler_is_running() {
+  assert_output(
+    "where :: () {\n\
+       if #compile_time  put(\"compile time\\n\"); else put(\"run time\\n\");\n\
+     }\n\
+     #run where();\n\
+     main :: () { where(); }\n",
+    "run time\n",
+  );
+}
+
+#[test]
+fn a_run_in_a_polymorphic_body_waits_for_the_instantiation() {
+  // The body of a polymorph does not exist until something instantiates it,
+  // so the `#run` inside it neither executes nor reports (**L§12.1**).
+  assert_output(
+    "width :: ($U: Type) -> int { return size_of(U); }\n\
+     unreached :: ($T: Type) -> int {\n\
+       SIZE :: #run width(T);\n\
+       return SIZE;\n\
+     }\n\
+     main :: () { put(\"ok\\n\"); }\n",
+    "ok\n",
+  );
+}

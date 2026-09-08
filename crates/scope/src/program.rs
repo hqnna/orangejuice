@@ -7,7 +7,7 @@ use oj_lexer::{Interner, Symbol};
 use oj_source::{ImportPath, ModuleError};
 use oj_syntax::Parsed;
 use oj_syntax::ast::{
-  Argument, DeclarationFlags, FilterType, ImportType, NodeData, NodeId, ScopeType,
+  Argument, DeclarationFlags, FilterType, ImportType, NodeData, NodeId, ProcedureFlags, ScopeType,
 };
 
 use crate::constants::{AstSource, ConstValue, Evaluator};
@@ -152,6 +152,10 @@ pub struct Program<'a> {
   /// The scope a `for` loop declares its `it` and `it_index` in, by the loop
   /// node: an implicit one has no identifier to be found through (**L§6.5**).
   loop_scopes: HashMap<(SourceId, NodeId), ScopeId>,
+  /// The constants scope of every polymorphic procedure and macro. Nothing
+  /// inside one of those exists until an instantiation makes it exist, so a
+  /// `#run` written there waits for M7 rather than executing (**L§12.1**).
+  uninstantiated_scopes: HashSet<ScopeId>,
   builtins: HashMap<DeclId, ConstValue>,
   references: Vec<Reference>,
   /// Names some macro declares with a backtick, which land in whatever block
@@ -220,6 +224,7 @@ impl<'a> Program<'a> {
       loaded: HashSet::new(),
       aggregate_scopes: HashMap::new(),
       loop_scopes: HashMap::new(),
+      uninstantiated_scopes: HashSet::new(),
       builtins: HashMap::new(),
       references: Vec::new(),
       macro_injected: HashSet::new(),
@@ -288,6 +293,20 @@ impl<'a> Program<'a> {
   /// this is the only way in.
   pub fn loop_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
     self.loop_scopes.get(&(source, node)).copied()
+  }
+
+  /// Whether a scope lies inside a polymorphic procedure or a macro, whose
+  /// body only exists once something instantiates or expands it. Nothing
+  /// written there is checked or executed until then (**L§7.8**, **L§7.13**).
+  pub fn is_uninstantiated(&self, scope: ScopeId) -> bool {
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if self.uninstantiated_scopes.contains(&id) {
+        return true;
+      }
+      current = self.tree.scope(id).parent;
+    }
+    false
   }
 
   pub fn aggregate_scopes(&self) -> impl Iterator<Item = (SourceId, NodeId, ScopeId)> + '_ {
@@ -1919,6 +1938,24 @@ impl Program<'_> {
       self.declare_parameter(parsed, *parameter, &mut return_target, source);
     }
 
+    // A polymorphic procedure or a macro has no body until something
+    // instantiates or expands it, so nothing written inside one is checked or
+    // executed until then (**L§7.8**, **L§7.13**). A `$` in a parameter's type
+    // declares a variable in the constants scope; a `$` on its *name* makes
+    // the parameter itself a constant of the instantiation.
+    let polymorphic = payload
+      .procedure_flags
+      .intersects(ProcedureFlags::POLYMORPHIC | ProcedureFlags::MACRO)
+      || !self.tree.scope(constants).declarations.is_empty()
+      || payload
+        .arguments
+        .iter()
+        .chain(&payload.returns)
+        .any(|parameter| declares_a_constant(parsed, *parameter));
+    if polymorphic {
+      self.uninstantiated_scopes.insert(constants);
+    }
+
     // `#modify` runs with the `$` parameters bound as mutable values
     // (**C§6.3**), so it reads them where they are declared.
     for directive in &payload.modify_directives {
@@ -2192,5 +2229,17 @@ fn collect_polymorph_variables(
       }
     }
     _ => {}
+  }
+}
+
+/// Whether a parameter is written `$name: T` — a constant of the instantiation
+/// rather than an argument, which the parser records as a required bake
+/// (**L§7.8**).
+fn declares_a_constant(parsed: &Parsed, parameter: NodeId) -> bool {
+  match parsed.ast.data(parameter) {
+    NodeData::Declaration(declaration) => declaration
+      .flags
+      .contains(DeclarationFlags::AUTO_VALUE_BAKE_IS_REQUIRED),
+    _ => false,
   }
 }

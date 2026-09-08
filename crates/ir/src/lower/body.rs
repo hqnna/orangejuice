@@ -293,8 +293,11 @@ impl Lowering<'_, '_> {
       // A `#run` statement already happened, when the front end typechecked
       // the body around it (**L§6.11**); the executable holds nothing for it.
       NodeData::DirectiveRun(_) => {}
+      // An `#insert` adds declarations to a scope the front end already built,
+      // which is the mutable program a metaprogram works on (`docs/spec.md`
+      // §10).
       NodeData::DirectiveInsert(_) => {
-        self.unsupported(source, node, "'#insert'", "M6");
+        self.unsupported(source, node, "'#insert'", "M8");
       }
       _ => {
         let scope = self.checker.scope_for(source, node, self.body_scope);

@@ -93,6 +93,13 @@ impl Engine {
       for diagnostic in lowered.diagnostics {
         checker.push_diagnostic(diagnostic);
       }
+      // The complaint is about code somewhere else entirely — whatever the run
+      // called — so it needs the run to point back at (**C§12**).
+      checker.push_diagnostic(Diagnostic::info(
+        request.source,
+        request.span,
+        "This is the '#run' that needed it.",
+      ));
       return Err(String::new());
     }
 

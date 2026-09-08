@@ -82,6 +82,11 @@ impl Checker<'_> {
     if self.undecided_static_ifs > 0 {
       return Expr::UNKNOWN;
     }
+    // A `#run` in a polymorphic body runs once per instantiation (**L§12.1**),
+    // so there is nothing to run until there is one.
+    if self.program().is_uninstantiated(scope) {
+      return Expr::UNKNOWN;
+    }
     if !self.runs_in_flight.insert((source, node)) {
       let span = self
         .ast(source)
