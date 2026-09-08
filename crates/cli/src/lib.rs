@@ -524,12 +524,7 @@ mod tests {
       return;
     }
     assert_eq!(
-      compile_stage(
-        "ir",
-        &[],
-        "#import \"Basic\";\nmain :: () { print(\"x\"); }\n"
-      )
-      .0,
+      compile_stage("ir", &[], "main :: () { #asm { frobnicate a:, 1; } }\n").0,
       EXIT_FAILURE
     );
   }

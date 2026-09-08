@@ -308,6 +308,18 @@ impl Checker<'_> {
       .find(|id| self.program().tree().decl(*id).kind == oj_scope::DeclKind::Procedure)
   }
 
+  /// A procedure the program declares anywhere, by name. The entry point
+  /// generated for the C runtime finds `__jai_runtime_init` this way, since it
+  /// belongs to Runtime_Support rather than to Preload (**C§13**).
+  pub fn procedure_named(&mut self, name: &str) -> Option<DeclId> {
+    let symbol = self.interner().intern(name.as_bytes());
+    let tree = self.program().tree();
+    (0..tree.declaration_count() as u32).map(DeclId).find(|id| {
+      let decl = tree.decl(*id);
+      decl.name == symbol && decl.kind == oj_scope::DeclKind::Procedure
+    })
+  }
+
   /// A type Preload declares, by name — the `Type_Info*` structs the type
   /// table is laid out against (**L§17**). `unknown` when Preload is not
   /// loaded, which is the case when one file is checked on its own.

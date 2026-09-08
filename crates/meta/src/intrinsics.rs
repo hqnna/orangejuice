@@ -73,6 +73,12 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
       "set_build_options_dc",
       set_build_options_dc as *const () as usize,
     ),
+    (
+      "compile_time_debug_break",
+      compile_time_debug_break as *const () as usize,
+    ),
+    ("write_string", write_string as *const () as usize),
+    ("write_strings", write_strings as *const () as usize),
   ]
 }
 
@@ -92,6 +98,51 @@ unsafe extern "C" fn set_build_options_dc(options: *const u8, w: i64, _context: 
     }
   });
 }
+/// `write_string :: (s: string, to_standard_error := false) #no_context #compiler`
+/// (Runtime_Support). At compile time the compiler is the one that writes, so
+/// that what a metaprogram prints is interleaved with the compiler's own
+/// output (**L§16**).
+unsafe extern "C" fn write_string(text: *const Str, to_standard_error: bool) {
+  let text = unsafe { read_str(text) };
+  write_out(&text, to_standard_error);
+}
+
+/// `write_strings :: (strings: ..string, to_standard_error := false)`
+unsafe extern "C" fn write_strings(strings: *const Slice, to_standard_error: bool) {
+  if strings.is_null() {
+    return;
+  }
+  let strings = unsafe { &*strings };
+  if strings.data.is_null() || strings.count <= 0 {
+    return;
+  }
+  let items =
+    unsafe { std::slice::from_raw_parts(strings.data as *const Str, strings.count as usize) };
+  for item in items {
+    let text = unsafe { item.string_lossy() };
+    write_out(&text, to_standard_error);
+  }
+}
+
+fn write_out(text: &str, to_standard_error: bool) {
+  use std::io::Write as _;
+  if to_standard_error {
+    let mut stream = std::io::stderr();
+    let _ = stream.write_all(text.as_bytes());
+    let _ = stream.flush();
+  } else {
+    let mut stream = std::io::stdout();
+    let _ = stream.write_all(text.as_bytes());
+    let _ = stream.flush();
+  }
+}
+
+/// `compile_time_debug_break :: () #compiler #no_context` (Runtime_Support).
+/// The reference stops in its bytecode debugger here; orangejuice runs compile
+/// time code natively, so there is nothing to stop, and a `debug_break` at
+/// compile time goes by (`docs/spec.md` §6.5).
+unsafe extern "C" fn compile_time_debug_break() {}
+
 /// `get_current_workspace :: () -> Workspace` (Preload)
 unsafe extern "C" fn get_current_workspace(_context: *mut c_void) -> i64 {
   with(|meta| meta.current).unwrap_or(0)

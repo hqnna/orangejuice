@@ -412,8 +412,29 @@ impl Lowering<'_, '_> {
         let queried = self.checker.denoted_type(scope, source, type_to_query);
         self.type_info_value(queried, info.type_id)
       }
+      // `initializer_of(T)` is a procedure the compiler writes out: it gives
+      // storage the value a declaration of that type would start with
+      // (**L§17**).
+      NodeData::TypeQuery {
+        query_kind: ast::TypeQueryKind::InitializerOf,
+        type_to_query,
+      } => {
+        let scope = self
+          .checker
+          .scope_for(source, type_to_query, self.body_scope);
+        let queried = self.checker.denoted_type(scope, source, type_to_query);
+        let procedure = self.initializer_id(queried);
+        let procedure_type = self.procedures[procedure.0 as usize].type_id;
+        let dest = self.value(procedure_type);
+        self.emit(Inst::ProcedureAddress { dest, procedure });
+        Some(Val {
+          id: dest,
+          type_id: procedure_type,
+          indirect: false,
+        })
+      }
       NodeData::TypeQuery { .. } | NodeData::ExpressionQuery { .. } => {
-        self.unsupported(source, node, "'initializer_of'", "M6");
+        self.unsupported(source, node, "this query", "M10");
         None
       }
       // `#caller_location` is the call site's, which a macro or a baked

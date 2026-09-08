@@ -40,10 +40,13 @@ fn every_symbol_the_compiler_answers_is_one_the_module_declares() {
     eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
     return;
   };
-  // Preload declares a couple of them too, `get_current_workspace` among them.
+  // Preload declares a couple of them too, `get_current_workspace` among
+  // them, and so does Runtime_Support: `write_string` is the compiler's at
+  // compile time and the program's own at runtime.
   let paths = [
     jai_dir.join("modules/Compiler/Compiler.jai"),
     jai_dir.join("modules/Preload.jai"),
+    jai_dir.join("modules/Runtime_Support.jai"),
   ];
   let mut declared = HashSet::new();
   for path in &paths {

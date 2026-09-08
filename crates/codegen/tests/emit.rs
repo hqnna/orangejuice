@@ -75,12 +75,14 @@ fn the_c_runtime_calls_a_generated_main_that_hands_over_a_context() {
     module.contains("define i32 @main(i32 %0, ptr %1)"),
     "{module}"
   );
+  // The context the program runs in is the one Runtime_Support builds, with
+  // its allocator, its logger and its temporary storage (**C§13**).
   assert!(
-    module.contains("@__oj_context = internal global"),
+    module.contains("call ptr @__jai_runtime_init(i32 %0, ptr %1)"),
     "{module}"
   );
   assert!(
-    module.contains("call void @__program_main(ptr @__oj_context)"),
+    module.contains("call void @__program_main(ptr %"),
     "{module}"
   );
 }

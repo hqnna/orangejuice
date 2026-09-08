@@ -526,6 +526,9 @@ impl<'a> Program<'a> {
     self.declare_builtin(b"CPU", Some(ConstValue::EnumName(x64)));
     self.declare_builtin(b"IS_CROSS_COMPILING", Some(ConstValue::Bool(false)));
     self.declare_builtin(b"MACHINE_OPTIONS_SIZE", Some(ConstValue::Int(256)));
+    // Runtime_Support sizes the first thread's temporary storage by this, and
+    // the compiler is what defines it (**C§4**).
+    self.declare_builtin(b"TEMPORARY_STORAGE_SIZE", Some(ConstValue::Int(32768)));
   }
 
   fn declare_builtin(&self, name: &[u8], value: Option<ConstValue>) {
@@ -2425,9 +2428,11 @@ impl Program<'_> {
       self.declare_parameter(parsed, *parameter, &mut argument_target, source);
     }
 
-    // Named return values are their own scope: a macro may name a return after
-    // a parameter (`(count: int, s: *u8) -> (n: int, s: *u8)`), which shadows
-    // rather than redeclares.
+    // Named return values are their own scope, which the body is not inside:
+    // a return may be named after a parameter (`(oh: float64, ol: float64) ->
+    // (oh: float64, ol: float64)`) without redeclaring it, and the name in the
+    // body is still the parameter, because a named return is not a name the
+    // body can read at all (**L§7.2**).
     let returns = self
       .tree
       .push_scope(ScopeKind::ProcedureReturns, Some(arguments));
@@ -2481,7 +2486,7 @@ impl Program<'_> {
         return;
       };
       let block = *block;
-      let inner = self.tree.push_scope(ScopeKind::Imperative, Some(returns));
+      let inner = self.tree.push_scope(ScopeKind::Imperative, Some(arguments));
       let statements = match parsed.ast.data(block) {
         NodeData::Block(block) => block.statements.clone(),
         _ => vec![block],

@@ -1,3 +1,4 @@
+mod asm;
 mod body;
 mod expr;
 mod modify;
@@ -84,6 +85,10 @@ enum Mode {
 enum ProcKey {
   Decl(DeclId),
   Node(SourceId, NodeId),
+  /// `initializer_of(T)`: the procedure that writes a `T`'s default value
+  /// through a pointer (**L§17**). The compiler generates it, so it has no
+  /// declaration of its own.
+  Initializer(TypeId),
   /// One instantiation of a polymorphic procedure: the header is shared, the
   /// code is not (**L§7.8**).
   Instance(InstanceId),
@@ -162,6 +167,12 @@ struct Lowering<'c, 'p> {
   context_value: Option<ValueId>,
   body_scope: ScopeId,
   body_source: SourceId,
+  /// The registers the `#asm` blocks of the procedure in hand have declared,
+  /// which the blocks after them still name (**L§15**).
+  asm_registers: HashMap<(Option<InstanceId>, DeclId), asm::AsmRegisterState>,
+  /// `Runtime_Support.__jai_runtime_init`, which the generated entry point
+  /// calls before the program (**C§13**).
+  runtime_init: Option<ProcId>,
 }
 
 impl<'c, 'p> Lowering<'c, 'p> {
@@ -201,6 +212,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       context_value: None,
       body_scope: ScopeId(0),
       body_source: SourceId(0),
+      asm_registers: HashMap::new(),
+      runtime_init: None,
     }
   }
 
@@ -225,6 +238,12 @@ impl<'c, 'p> Lowering<'c, 'p> {
     self.entry_decl = Some(main);
     let entry = self.procedure_id(main);
     self.entry = Some(entry);
+    // The generated entry point hands the program the context
+    // `Runtime_Support.__jai_runtime_init` builds — the allocator, the logger
+    // and the temporary storage a `#Context` starts with (**C§13**).
+    if let Some(init) = self.checker.procedure_named("__jai_runtime_init") {
+      self.runtime_init = Some(self.procedure_id(init));
+    }
     self.drain_queue();
     // A global initializer may be the first thing to reach a procedure, so
     // whatever it named still has to be lowered.
@@ -313,6 +332,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       libraries,
       diagnostics,
       entry,
+      runtime_init,
       context_type,
       ..
     } = self;
@@ -326,6 +346,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
         procedures,
         globals,
         entry,
+        runtime_init,
         global_init,
         context_type,
         libraries,
@@ -429,6 +450,45 @@ impl<'c, 'p> Lowering<'c, 'p> {
     }
     let type_id = self.checker.decl_type(decl).value;
     self.declare_procedure(ProcKey::Decl(decl), Some(decl), type_id, None)
+  }
+
+  /// The procedure `initializer_of(T)` names, written out once per type
+  /// (**L§17**).
+  fn initializer_id(&mut self, type_id: TypeId) -> ProcId {
+    let key = ProcKey::Initializer(type_id);
+    if let Some(id) = self.procedure_ids.get(&key) {
+      return *id;
+    }
+    let id = ProcId(self.procedures.len() as u32);
+    self.procedure_ids.insert(key, id);
+    let mut signature = oj_types::ProcedureType::new(vec![TypeId::VOID_POINTER], Vec::new());
+    signature.flags = oj_types::ProcedureFlags::HAS_NO_CONTEXT;
+    let procedure_type = self.checker.types_table_mut().procedure(signature);
+    let name = format!("__oj_initializer_{}", type_id.0);
+    let symbol = self.unique_symbol(&name);
+    let pointer = self.pointer_to(type_id);
+    self.procedures.push(Procedure {
+      symbol,
+      name,
+      type_id: procedure_type,
+      parameters: vec![pointer],
+      returns: Vec::new(),
+      flags: ProcedureFlags::COMPILER_GENERATED | ProcedureFlags::NO_CONTEXT,
+      library: None,
+      abi: crate::ir::Abi {
+        parameters: vec![crate::ir::AbiParameter {
+          type_id: pointer,
+          kind: crate::ir::ParameterKind::Value,
+        }],
+        direct_return: None,
+      },
+      locals: Vec::new(),
+      blocks: Vec::new(),
+      value_types: Vec::new(),
+      entry: BlockId(0),
+    });
+    self.queue.push_back((id, key));
+    id
   }
 
   /// Registers a procedure and queues its body. `decl` is the declaration its

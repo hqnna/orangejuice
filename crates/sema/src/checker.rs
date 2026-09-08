@@ -147,6 +147,7 @@ struct Names {
   cpu: Symbol,
   is_cross_compiling: Symbol,
   machine_options_size: Symbol,
+  temporary_storage_size: Symbol,
   operating_system_tag: Symbol,
   cpu_tag: Symbol,
   count: Symbol,
@@ -189,6 +190,7 @@ impl Names {
       cpu: interner.intern(b"CPU"),
       is_cross_compiling: interner.intern(b"IS_CROSS_COMPILING"),
       machine_options_size: interner.intern(b"MACHINE_OPTIONS_SIZE"),
+      temporary_storage_size: interner.intern(b"TEMPORARY_STORAGE_SIZE"),
       operating_system_tag: interner.intern(b"Operating_System_Tag"),
       cpu_tag: interner.intern(b"CPU_Tag"),
       count: interner.intern(b"count"),
@@ -310,6 +312,10 @@ pub struct Checker<'a> {
 /// Deep enough for the module tree's nested types, shallow enough that a
 /// pathological expression fails instead of overflowing the stack.
 const MAX_DEPTH: u32 = 128;
+
+/// The size of a thread's temporary storage, which the compiler defines for
+/// Runtime_Support out of `Build_Options.temporary_storage_size` (**C§4**).
+const TEMPORARY_STORAGE_SIZE: i64 = 32768;
 
 impl<'a> Checker<'a> {
   pub fn new(program: &'a Program<'a>) -> Self {
@@ -1046,6 +1052,13 @@ impl<'a> Checker<'a> {
     }
     if name == self.names.machine_options_size {
       self.record_constant(id, Const::new(TypeId::S64, crate::Value::Int(256)));
+      return DeclType::value(TypeId::S64);
+    }
+    // Runtime_Support sizes the first thread's temporary storage by this, and
+    // the compiler is what defines it, from `Build_Options` (**C§4**).
+    if name == self.names.temporary_storage_size {
+      let size = i128::from(TEMPORARY_STORAGE_SIZE);
+      self.record_constant(id, Const::new(TypeId::S64, crate::Value::Int(size)));
       return DeclType::value(TypeId::S64);
     }
     // `OS` and `CPU` are the target's, which is Linux x86-64 (`docs/spec.md`

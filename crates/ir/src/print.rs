@@ -162,6 +162,24 @@ fn instruction_text(
       named(*dest),
       program.procedure(*id).symbol
     ),
+    Inst::Asm {
+      text,
+      inputs,
+      outputs,
+      clobbers,
+    } => {
+      let binding =
+        |binding: &crate::ir::AsmBinding| format!("{} = %{}", binding.constraint, binding.value.0);
+      let outputs: Vec<String> = outputs.iter().map(binding).collect();
+      let inputs: Vec<String> = inputs.iter().map(binding).collect();
+      format!(
+        "asm {:?} out [{}] in [{}] clobbers [{}]",
+        text,
+        outputs.join(", "),
+        inputs.join(", "),
+        clobbers.join(", ")
+      )
+    }
     Inst::Load { dest, address } => format!("{} = load %{}", named(*dest), address.0),
     Inst::Store { address, value } => format!("store %{} <- %{}", address.0, value.0),
     Inst::Copy {

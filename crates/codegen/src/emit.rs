@@ -215,6 +215,17 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   fn declare_functions(&mut self) {
     for (index, procedure) in self.program.procedures.iter().enumerate() {
       let function_type = self.function_type(&procedure.abi);
+      // Two modules may declare the same `#foreign` procedure â Runtime_Support
+      // and the program both reach `write(2)` â and they name one symbol, so
+      // the module declares it once (**L§12.2**).
+      let existing = (!procedure.has_body())
+        .then(|| self.module.get_function(&procedure.symbol))
+        .flatten()
+        .filter(|function| function.count_basic_blocks() == 0);
+      if let Some(function) = existing {
+        self.functions.push(function);
+        continue;
+      }
       let function = self
         .module
         .add_function(&procedure.symbol, function_type, None);
@@ -650,6 +661,80 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         let result = self.convert(*kind, value, target)?;
         values[dest.0 as usize] = Some(result);
       }
+      // An `#asm` block arrives with its registers already chosen (**L§15**),
+      // so all that is left is to name each one in a constraint and let the
+      // integrated assembler read the text.
+      Inst::Asm {
+        text,
+        inputs,
+        outputs,
+        clobbers,
+      } => {
+        let output_types: Vec<BasicTypeEnum<'ctx>> = outputs
+          .iter()
+          .map(|binding| self.llvm_type(procedure.value_type(binding.value)))
+          .collect();
+        let parameter_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = inputs
+          .iter()
+          .map(|binding| self.llvm_type(procedure.value_type(binding.value)).into())
+          .collect();
+        let signature = match output_types.len() {
+          0 => self.context.void_type().fn_type(&parameter_types, false),
+          1 => output_types[0].fn_type(&parameter_types, false),
+          _ => self
+            .context
+            .struct_type(&output_types, false)
+            .fn_type(&parameter_types, false),
+        };
+        let mut constraints: Vec<String> = Vec::new();
+        for binding in outputs.iter().chain(inputs) {
+          constraints.push(binding.constraint.clone());
+        }
+        for register in clobbers {
+          constraints.push(format!("~{register}"));
+        }
+        // Every `#asm` block may set the flags and touch memory, and the
+        // reference's own blocks do both.
+        constraints.push(String::from("~{dirflag}"));
+        constraints.push(String::from("~{fpsr}"));
+        constraints.push(String::from("~{flags}"));
+        constraints.push(String::from("~{memory}"));
+        let assembly = self.context.create_inline_asm(
+          signature,
+          text.clone(),
+          constraints.join(","),
+          true,
+          false,
+          Some(inkwell::InlineAsmDialect::Intel),
+          false,
+        );
+        let arguments: Vec<BasicMetadataValueEnum<'ctx>> = inputs
+          .iter()
+          .map(|binding| self.value(values, binding.value).map(Into::into))
+          .collect::<Result<_, _>>()?;
+        let site = self
+          .builder
+          .build_indirect_call(signature, assembly, &arguments, "")
+          .map_err(|error| error.to_string())?;
+        match outputs.len() {
+          0 => {}
+          1 => {
+            values[outputs[0].value.0 as usize] = site.try_as_basic_value().basic();
+          }
+          _ => {
+            let Some(result) = site.try_as_basic_value().basic() else {
+              return Err(String::from("an '#asm' block produced no result to read"));
+            };
+            for (index, binding) in outputs.iter().enumerate() {
+              let extracted = self
+                .builder
+                .build_extract_value(result.into_struct_value(), index as u32, "")
+                .map_err(|error| error.to_string())?;
+              values[binding.value.0 as usize] = Some(extracted);
+            }
+          }
+        }
+      }
       Inst::Call {
         dest,
         callee,
@@ -837,6 +922,28 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       return Err(format!(
         "cannot apply {operator:?} to {left:?} and {right:?}"
       ));
+    };
+    // A shift keeps the width of what is being shifted; the amount is a count,
+    // and LLVM wants it in the same type (**L§5.2**).
+    let right = match operator {
+      BinaryOp::ShiftLeft | BinaryOp::ShiftRight | BinaryOp::RotateLeft | BinaryOp::RotateRight => {
+        let (from, to) = (
+          right.get_type().get_bit_width(),
+          left.get_type().get_bit_width(),
+        );
+        match from.cmp(&to) {
+          std::cmp::Ordering::Equal => right,
+          std::cmp::Ordering::Less => self
+            .builder
+            .build_int_z_extend(right, left.get_type(), "")
+            .map_err(|error| error.to_string())?,
+          std::cmp::Ordering::Greater => self
+            .builder
+            .build_int_truncate(right, left.get_type(), "")
+            .map_err(|error| error.to_string())?,
+        }
+      }
+      _ => right,
     };
     let builder = &self.builder;
     let result: BasicValueEnum<'ctx> = match operator {
@@ -1060,7 +1167,33 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     let block = self.context.append_basic_block(function, "entry");
     self.builder.position_at_end(block);
 
-    let context_pointer = context.as_pointer_value();
+    // `Runtime_Support.__jai_runtime_init` records the command line and hands
+    // back the `#Context` the program starts with: its allocator, its logger
+    // and its temporary storage (**C§13**). A program that does not reach
+    // Runtime_Support gets zeroed storage instead.
+    let context_pointer = match self.program.runtime_init {
+      Some(init) => {
+        let argc = function
+          .get_nth_param(0)
+          .ok_or("the entry point takes argc")?;
+        let argv = function
+          .get_nth_param(1)
+          .ok_or("the entry point takes argv")?;
+        let site = self
+          .builder
+          .build_direct_call(
+            self.functions[init.0 as usize],
+            &[argc.into(), argv.into()],
+            "",
+          )
+          .map_err(|error| error.to_string())?;
+        match site.try_as_basic_value().basic() {
+          Some(BasicValueEnum::PointerValue(pointer)) => pointer,
+          _ => context.as_pointer_value(),
+        }
+      }
+      None => context.as_pointer_value(),
+    };
     if let Some(initializer) = self.program.global_init {
       self
         .builder

@@ -5,6 +5,10 @@ use super::*;
 
 use crate::ir::{Abi, AbiParameter, ParameterKind};
 
+/// Deep enough for the nesting the module tree has, shallow enough that a
+/// pathological type fails rather than overflowing the stack.
+const MAX_DEFAULT_DEPTH: u32 = 32;
+
 impl Lowering<'_, '_> {
   /// The machine-level parameter list of a procedure type, with every type it
   /// mentions laid out first.
@@ -26,6 +30,7 @@ impl Lowering<'_, '_> {
     self.value_types.clear();
     self.current = BlockId(0);
     self.local_of_decl.clear();
+    self.asm_registers.clear();
     self.loops.clear();
     self.expansions.clear();
     self.call_sites.clear();
@@ -52,6 +57,12 @@ impl Lowering<'_, '_> {
         self.checker.procedure_body_at(source, header, scope)
       }
       ProcKey::Instance(instance) => self.checker.instance_body(instance),
+      // A generated initializer has no body to read: it is the default
+      // initialization every declaration of that type does (**L§4.6**).
+      ProcKey::Initializer(type_id) => {
+        self.lower_initializer(id, type_id);
+        return;
+      }
     };
     let leave = |lowering: &mut Self| {
       if let Some(previous) = entered {
@@ -352,11 +363,9 @@ impl Lowering<'_, '_> {
           None => self.unsupported(source, node, "'#insert'", "M8"),
         }
       }
-      // An `#asm` block is assembled by the back end, which is the milestone
-      // that owns x86-64 (**L§15**).
-      NodeData::Asm(_) => {
-        self.unsupported(source, node, "'#asm'", "M9");
-      }
+      // An `#asm` block places its own registers and hands the back end the
+      // text to assemble (**L§15**).
+      NodeData::Asm(_) => self.asm(source, node),
       _ => {
         let scope = self.checker.scope_for(source, node, self.body_scope);
         self.expression(scope, source, node, None);
@@ -467,8 +476,24 @@ impl Lowering<'_, '_> {
     };
     let names: Vec<NodeId> = arguments.iter().map(|argument| argument.node).collect();
 
+    // `a, b = f();` assigns to names that already exist; only `:=` and a
+    // typed form declare them (**L§4.5**).
+    let assigns = compound.operator_type.is_some();
+    if assigns && compound.operator_type != Some(OperatorType::ASSIGN) {
+      self.unsupported(source, node, "this assignment operator", "M10");
+      return;
+    }
     let mut places = Vec::new();
     for name in &names {
+      if assigns {
+        let scope = self.checker.scope_for(source, *name, self.body_scope);
+        places.push(
+          self
+            .place(scope, source, *name)
+            .map(|place| (place.id, place.type_id)),
+        );
+        continue;
+      }
       let Some(decl) = self.checker.decl_at(source, *name) else {
         places.push(None);
         continue;
@@ -592,6 +617,21 @@ impl Lowering<'_, '_> {
     self.expression(scope, source, expression, Some(type_id))
   }
 
+  /// Whether a condition is decided before the program runs. `#compile_time`
+  /// is the one each back end answers for itself (**L§6.10**).
+  fn folded_condition(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<bool> {
+    if let Some(ast) = self.checker.tree_of(source)
+      && matches!(ast.data(node), NodeData::DirectiveCompileTime)
+    {
+      return Some(self.mode == Mode::CompileTime);
+    }
+    match self.checker.expression(scope, source, node).constant?.value {
+      oj_sema::Value::Bool(value) => Some(value),
+      oj_sema::Value::Int(value) => Some(value != 0),
+      _ => None,
+    }
+  }
+
   fn if_statement(&mut self, payload: &ast::IfNode) {
     let source = self.body_source;
     let scope = self
@@ -602,6 +642,20 @@ impl Lowering<'_, '_> {
     // so there is nothing here to lower.
     if let Some(branches) = self.checker.static_if_branches(scope, source, payload) {
       for branch in branches {
+        self.statement(branch);
+      }
+      return;
+    }
+    // A condition the front end folded, and `#compile_time`, which each back
+    // end folds for itself, leave only one branch to lower: the other is dead
+    // code, and lowering it would make the executable name a procedure that
+    // only exists at compile time (**L§11.6**).
+    if let Some(taken) = self.folded_condition(scope, source, payload.condition) {
+      let branch = match taken {
+        true => payload.then_block,
+        false => payload.else_block,
+      };
+      if let Some(branch) = branch {
         self.statement(branch);
       }
       return;
@@ -1303,11 +1357,36 @@ impl Lowering<'_, '_> {
   }
 
   fn apply_member_defaults(&mut self, address: ValueId, type_id: TypeId) {
+    self.apply_member_defaults_at(address, type_id, 0);
+  }
+
+  /// A member with no value of its own still gets one when its own type has
+  /// defaults: `#Context` is a `using` of `Context_Base`, whose allocator and
+  /// logger are what a program starts with (**L§4.6**, **L§8.4**).
+  fn apply_member_defaults_at(&mut self, address: ValueId, type_id: TypeId, depth: u32) {
+    if depth > MAX_DEFAULT_DEPTH {
+      return;
+    }
     let underlying = self.checker.types().underlying(type_id);
     let Some(definition) = self.checker.types().struct_of(underlying) else {
       return;
     };
     let defaults = self.checker.member_defaults(definition);
+    let nested: Vec<(u64, TypeId)> = self
+      .checker
+      .types()
+      .struct_info(definition)
+      .members
+      .iter()
+      .filter(|member| {
+        member.imported_through.is_none()
+          && !member
+            .flags
+            .intersects(oj_types::MemberFlags::CONSTANT | oj_types::MemberFlags::IMPORTED)
+          && !defaults.iter().any(|(offset, ..)| *offset == member.offset)
+      })
+      .map(|member| (member.offset, member.type_id))
+      .collect();
     for (offset, member_type, source, node) in defaults {
       let member = self.offset(address, offset, member_type);
       let scope = self.checker.scope_for(source, node, self.body_scope);
@@ -1319,6 +1398,10 @@ impl Lowering<'_, '_> {
       }
       self.body_source = previous_source;
       self.body_scope = previous_scope;
+    }
+    for (offset, member_type) in nested {
+      let member = self.offset(address, offset, member_type);
+      self.apply_member_defaults_at(member, member_type, depth + 1);
     }
   }
 
@@ -1333,6 +1416,7 @@ impl Lowering<'_, '_> {
     self.value_types.clear();
     self.current = BlockId(0);
     self.local_of_decl.clear();
+    self.asm_registers.clear();
     self.loops.clear();
     self.expansions.clear();
     self.call_sites.clear();
@@ -1379,6 +1463,21 @@ impl Lowering<'_, '_> {
       value_types: std::mem::take(&mut self.value_types),
       entry: BlockId(0),
     });
+  }
+
+  /// `initializer_of(T)` is a procedure the compiler writes: it zeroes the
+  /// storage it is handed and then applies the member defaults, which is what
+  /// a declaration of that type does (**L§4.6**, **L§17**).
+  fn lower_initializer(&mut self, id: ProcId, type_id: TypeId) {
+    let pointer = self.pointer_to(type_id);
+    let address = self.value(pointer);
+    self.default_initialize(address, type_id);
+    self.terminate(Terminator::Return(Vec::new()));
+    let procedure = &mut self.procedures[id.0 as usize];
+    procedure.locals = std::mem::take(&mut self.locals);
+    procedure.blocks = std::mem::take(&mut self.blocks);
+    procedure.value_types = std::mem::take(&mut self.value_types);
+    procedure.entry = BlockId(0);
   }
 
   fn emit_one_global_initializer(&mut self, global: GlobalId, decl: DeclId) {

@@ -139,6 +139,17 @@ pub enum Callee {
   Indirect(ValueId),
 }
 
+/// One machine register an `#asm` block reads or writes, and the value that
+/// travels through it (**L§15**).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmBinding {
+  /// The constraint the back end binds this operand with: `={rax}` and `{rax}`
+  /// name a register the block chose, `rm` and `r` leave the choice to the
+  /// back end, and a bare number ties an input to the output at that place.
+  pub constraint: String,
+  pub value: ValueId,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inst {
   Const {
@@ -219,6 +230,17 @@ pub enum Inst {
     expected: ValueId,
     desired: ValueId,
   },
+  /// An `#asm` block, with the registers its allocator chose already written
+  /// into the text (**L§15**). Each input says which value a machine register
+  /// starts out holding and each output which value it is left holding, so the
+  /// back end binds registers to values and assembles the text, and decides
+  /// nothing else about the block.
+  Asm {
+    text: String,
+    inputs: Vec<AsmBinding>,
+    outputs: Vec<AsmBinding>,
+    clobbers: Vec<String>,
+  },
   Call {
     /// The value returned in registers, when the call has one. A return the
     /// convention passes by pointer is written through an argument instead.
@@ -248,7 +270,9 @@ impl Inst {
       Self::AtomicCompareExchange { .. }
       | Self::Store { .. }
       | Self::Copy { .. }
-      | Self::Clear { .. } => None,
+      | Self::Clear { .. }
+      // An `#asm` block writes one value per register it hands back.
+      | Self::Asm { .. } => None,
     }
   }
 }
@@ -525,6 +549,10 @@ pub struct Program {
   pub globals: Vec<Global>,
   /// The program's `main`, which the generated entry point calls.
   pub entry: Option<ProcId>,
+  /// `Runtime_Support.__jai_runtime_init`, which builds the `#Context` the
+  /// program starts with (**C§13**). Absent when the program does not reach
+  /// Runtime_Support, in which case the context is zeroed storage.
+  pub runtime_init: Option<ProcId>,
   /// The generated procedure that runs the global initializers the front end
   /// could not fold into data, called before `main`.
   pub global_init: Option<ProcId>,

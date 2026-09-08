@@ -317,11 +317,8 @@ fn a_program_that_needs_a_later_milestone_says_which_one() {
   };
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("program.jai");
-  std::fs::write(
-    &path,
-    "#import \"Basic\";\nmain :: () { print(\"hi\\n\"); }\n",
-  )
-  .expect("the input should be writable");
+  std::fs::write(&path, "main :: () { #asm { frobnicate a:, 1; } }\n")
+    .expect("the input should be writable");
   unsafe {
     std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
   }
@@ -1480,5 +1477,110 @@ fn an_inserted_string_can_stand_where_an_expression_goes() {
      argument :: \"21;\";\n\
      main :: () { put_number(#insert call); }\n",
     "42\n",
+  );
+}
+
+// ------------------------------------------------------------------- M9 -----
+
+#[test]
+fn an_asm_block_computes_with_the_registers_it_names() {
+  assert_output(
+    "main :: () {\n\
+       count := 10;\n\
+       #asm {\n\
+         mov apple:, 10;\n\
+         banana: gpr;\n\
+         mov.64 banana, 17;\n\
+         sub banana, apple;\n\
+         add count, banana;\n\
+       }\n\
+       put_number(count);\n\
+     }\n",
+    "17\n",
+  );
+}
+
+#[test]
+fn an_asm_register_outlives_the_block_that_declared_it() {
+  assert_output(
+    "main :: () {\n\
+       #asm { mov a:, 12; mov b:, 18; }\n\
+       #asm { add a, b; }\n\
+       c: s64 = ---;\n\
+       #asm { mov c, a; }\n\
+       put_number(c);\n\
+     }\n",
+    "30\n",
+  );
+}
+
+#[test]
+fn an_asm_block_reaches_memory_through_a_base_and_an_index() {
+  assert_output(
+    "main :: () {\n\
+       values: [4] s64;\n\
+       for i: 0..3  values[i] = (i + 1) * 10;\n\
+       base := values.data;\n\
+       index := 2;\n\
+       total: s64 = ---;\n\
+       #asm {\n\
+         mov total, [base];\n\
+         add total, [base + 8];\n\
+         add total, [base + index*8];\n\
+       }\n\
+       put_number(total);\n\
+     }\n",
+    "60\n",
+  );
+}
+
+#[test]
+fn a_syscall_block_reaches_the_kernel() {
+  assert_output(
+    "write_directly :: (text: string) -> s64 {\n\
+       result: s64 = ---;\n\
+       fd: s32 = 1;\n\
+       data := text.data;\n\
+       count := text.count;\n\
+       #asm SYSCALL_SYSRET {\n\
+         mov.q rcx: gpr === c,  0;\n\
+         mov.q r11: gpr === 11, 0;\n\
+         mov.q rax: gpr === a,  1;\n\
+         mov.d rdi: gpr === di, fd;\n\
+         mov.q rsi: gpr === si, data;\n\
+         mov.q rdx: gpr === d,  count;\n\
+         syscall rcx, r11, rax, rdi, rsi, rdx;\n\
+         mov.q result, rax;\n\
+       }\n\
+       return result;\n\
+     }\n\
+     main :: () { put_number(write_directly(\"kernel\\n\")); }\n",
+    "kernel\n7\n",
+  );
+}
+
+#[test]
+fn an_asm_block_runs_at_compile_time_too() {
+  assert_output(
+    "add_them :: (a: int, b: int) -> int {\n\
+       x := a;\n\
+       #asm { add x, b; }\n\
+       return x;\n\
+     }\n\
+     TOTAL :: #run add_them(19, 23);\n\
+     main :: () { put_number(TOTAL); }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn the_standard_print_reaches_the_terminal() {
+  assert_output(
+    "Basic :: #import \"Basic\";\n\
+     main :: () {\n\
+       Basic.print(\"% and %\\n\", 42, \"a string\");\n\
+       Basic.print(\"%\\n\", 37.0);\n\
+     }\n",
+    "42 and a string\n37\n",
   );
 }

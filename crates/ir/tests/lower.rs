@@ -204,7 +204,7 @@ fn a_defer_runs_at_the_end_of_its_block_and_before_a_return() {
   let Some(listing) = listing_of(
     "libc :: #library,system \"libc\";\n\
      mark :: (n: s32) -> s32 #foreign libc;\n\
-     main :: () { defer mark(1); if true return; }\n",
+     main :: () { n := 0; defer mark(1); if n == 0 return; }\n",
   ) else {
     return;
   };
@@ -223,12 +223,12 @@ fn a_range_loop_counts_it_and_it_index() {
 
 #[test]
 fn a_construct_a_later_milestone_owns_names_that_milestone() {
-  let Some(lowered) = lower("main :: () { f := initializer_of(int); }\n") else {
+  let Some(lowered) = lower("main :: () { #asm { frobnicate a:, 1; } }\n") else {
     return;
   };
   assert_eq!(
     lowered.errors,
-    ["Code generation for 'initializer_of' is not implemented yet (milestone M6)."]
+    ["orangejuice cannot assemble the '#asm' instruction 'frobnicate' yet (milestone M10)."]
   );
 }
 
