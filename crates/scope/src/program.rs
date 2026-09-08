@@ -15,6 +15,18 @@ use crate::tree::{
   Decl, DeclId, DeclKind, ImportEdge, PendingProvider, ScopeId, ScopeKind, ScopeTree, Visibility,
 };
 
+/// The three scopes a procedure header opens (**L§7.8**): the constants block
+/// holding its `$T`s and baked values, the arguments, and the named returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProcedureScopes {
+  pub constants: ScopeId,
+  pub arguments: ScopeId,
+  pub returns: ScopeId,
+  /// Whether the header has to be instantiated before its body exists — it is
+  /// polymorphic, a macro, or it bakes a value.
+  pub polymorphic: bool,
+}
+
 /// The identifiers whose lookup the program still owes an answer, collected
 /// while the tree is built and resolved once it is complete so that data scopes
 /// stay order-independent (**L§11.7**).
@@ -152,6 +164,10 @@ pub struct Program<'a> {
   /// The scope a `for` loop declares its `it` and `it_index` in, by the loop
   /// node: an implicit one has no identifier to be found through (**L§6.5**).
   loop_scopes: HashMap<(SourceId, NodeId), ScopeId>,
+  /// The scopes every procedure header opened, by the header node. An
+  /// instantiation binds the `$T`s declared in the constants block, so it
+  /// needs a way in that does not go through a name (**L§7.8**).
+  procedure_scopes: HashMap<(SourceId, NodeId), ProcedureScopes>,
   /// The constants scope of every polymorphic procedure and macro. Nothing
   /// inside one of those exists until an instantiation makes it exist, so a
   /// `#run` written there waits for M7 rather than executing (**L§12.1**).
@@ -224,6 +240,7 @@ impl<'a> Program<'a> {
       loaded: HashSet::new(),
       aggregate_scopes: HashMap::new(),
       loop_scopes: HashMap::new(),
+      procedure_scopes: HashMap::new(),
       uninstantiated_scopes: HashSet::new(),
       builtins: HashMap::new(),
       references: Vec::new(),
@@ -299,6 +316,11 @@ impl<'a> Program<'a> {
   /// this is the only way in.
   pub fn loop_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
     self.loop_scopes.get(&(source, node)).copied()
+  }
+
+  /// The scopes a procedure header opened (**L§7.8**).
+  pub fn procedure_scopes(&self, source: SourceId, header: NodeId) -> Option<ProcedureScopes> {
+    self.procedure_scopes.get(&(source, header)).copied()
   }
 
   /// Whether a scope lies inside a polymorphic procedure or a macro, whose
@@ -609,6 +631,40 @@ impl<'a> Program<'a> {
       return None;
     };
     let declaration = declaration.clone();
+    let declared = self.declare_name(parsed, node, &declaration, target, source);
+    // A declaration with no name still has slots to resolve: `-> T` names no
+    // return value, but `T` is looked up where the return was written
+    // (**L§7.2**).
+    if let Some(type_inst) = declaration.type_inst {
+      self.walk(parsed, type_inst, target.scope, source);
+    }
+    // A named `#import` was already instantiated to give the name its meaning,
+    // and unlike a bare one it adds nothing to this scope (**L§11.2**).
+    if let Some(expression) = declaration.expression
+      && !matches!(parsed.ast.data(expression), NodeData::DirectiveImport(_))
+    {
+      self.walk(parsed, expression, target.scope, source);
+    }
+    if let Some(alignment) = declaration.alignment_expression {
+      self.walk(parsed, alignment, target.scope, source);
+    }
+    if let Some(library) = declaration.elsewhere_library {
+      self.walk(parsed, library, target.scope, source);
+    }
+    declared
+  }
+
+  /// Puts the name a declaration introduces into its scope. A declaration that
+  /// has none — an unnamed return value — introduces nothing.
+  fn declare_name(
+    &mut self,
+    parsed: &Parsed,
+    node: NodeId,
+    declaration: &oj_syntax::ast::Declaration,
+    target: &mut DataTarget,
+    source: SourceId,
+  ) -> Option<DeclId> {
+    let declaration = declaration.clone();
     let name = declaration.name?;
     let NodeData::Ident(ident) = parsed.ast.data(name) else {
       return None;
@@ -658,22 +714,6 @@ impl<'a> Program<'a> {
           "Here is the previous declaration.",
         ));
       }
-    }
-    if let Some(type_inst) = declaration.type_inst {
-      self.walk(parsed, type_inst, target.scope, source);
-    }
-    // A named `#import` was already instantiated to give the name its meaning,
-    // and unlike a bare one it adds nothing to this scope (**L§11.2**).
-    if let Some(expression) = declaration.expression
-      && !matches!(parsed.ast.data(expression), NodeData::DirectiveImport(_))
-    {
-      self.walk(parsed, expression, target.scope, source);
-    }
-    if let Some(alignment) = declaration.alignment_expression {
-      self.walk(parsed, alignment, target.scope, source);
-    }
-    if let Some(library) = declaration.elsewhere_library {
-      self.walk(parsed, library, target.scope, source);
     }
     declared.ok()
   }
@@ -1961,6 +2001,15 @@ impl Program<'_> {
     if polymorphic {
       self.uninstantiated_scopes.insert(constants);
     }
+    self.procedure_scopes.insert(
+      (source, header),
+      ProcedureScopes {
+        constants,
+        arguments,
+        returns,
+        polymorphic,
+      },
+    );
 
     // `#modify` runs with the `$` parameters bound as mutable values
     // (**C§6.3**), so it reads them where they are declared.

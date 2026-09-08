@@ -35,17 +35,32 @@ impl Lowering<'_, '_> {
 
   pub(super) fn lower_procedure(&mut self, id: ProcId, key: ProcKey) {
     self.start_procedure();
+    // An instantiated body is walked with its own constants bound, so that the
+    // questions the lowering asks get the specialization's answers, not the
+    // header's (**L§7.8**).
+    let entered = match key {
+      ProcKey::Instance(instance) => Some(self.checker.enter_instance(Some(instance))),
+      _ => None,
+    };
     let body = match key {
       ProcKey::Decl(decl) => self.checker.procedure_body(decl),
       ProcKey::Node(source, header) => {
         let scope = self.checker.scope_for(source, header, self.body_scope);
         self.checker.procedure_body_at(source, header, scope)
       }
+      ProcKey::Instance(instance) => self.checker.instance_body(instance),
+    };
+    let leave = |lowering: &mut Self| {
+      if let Some(previous) = entered {
+        lowering.checker.enter_instance(previous);
+      }
     };
     let Some(body) = body else {
+      leave(self);
       return;
     };
     let Some(block) = body.block else {
+      leave(self);
       return;
     };
     let type_id = self.procedures[id.0 as usize].type_id;
@@ -61,6 +76,7 @@ impl Lowering<'_, '_> {
            (polymorphs and macros are milestone M7)."
         ),
       );
+      leave(self);
       return;
     }
 
@@ -145,6 +161,7 @@ impl Lowering<'_, '_> {
     procedure.blocks = std::mem::take(&mut self.blocks);
     procedure.value_types = std::mem::take(&mut self.value_types);
     procedure.entry = BlockId(0);
+    leave(self);
   }
 
   /// Falling off the end of a body returns the named return values, or

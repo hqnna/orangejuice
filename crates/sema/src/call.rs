@@ -11,12 +11,29 @@ impl Checker<'_> {
   /// (**L§5.5**). Which procedure it calls is decided by overload resolution
   /// (**L§7.5**).
   pub(crate) fn call_type(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
-    match self.call_returns(scope, source, node) {
-      Some(returns) => match returns.first() {
-        Some(first) => Expr::value(*first),
-        None => Expr::value(TypeId::VOID),
-      },
-      None => Expr::UNKNOWN,
+    let Some(signature) = self.resolve_call(scope, source, node) else {
+      return Expr::UNKNOWN;
+    };
+    // `#procedure_of_call f(x)` is the procedure the call would reach, not
+    // what the call would produce (**L§7.10**).
+    if self.returns_procedure_pointer_only(source, node) {
+      return Expr::value(signature.type_id);
+    }
+    match signature.returns.first() {
+      Some(first) => Expr::value(*first),
+      None => Expr::value(TypeId::VOID),
+    }
+  }
+
+  fn returns_procedure_pointer_only(&self, source: SourceId, node: NodeId) -> bool {
+    let Some(ast) = self.ast(source) else {
+      return false;
+    };
+    match ast.data(node) {
+      NodeData::ProcedureCall(call) => call
+        .flags
+        .contains(oj_syntax::ast::CallFlags::RETURNS_PROCEDURE_POINTER_ONLY),
+      _ => false,
     }
   }
 
@@ -28,15 +45,20 @@ impl Checker<'_> {
     source: SourceId,
     node: NodeId,
   ) -> Vec<TypeId> {
-    self.call_returns(scope, source, node).unwrap_or_default()
+    self
+      .resolve_call(scope, source, node)
+      .map(|signature| signature.returns)
+      .unwrap_or_default()
   }
 
-  fn call_returns(
+  /// The candidate a call site resolves to, with its polymorphic header
+  /// already instantiated (**L§7.5**, **L§7.8**).
+  fn resolve_call(
     &mut self,
     scope: ScopeId,
     source: SourceId,
     node: NodeId,
-  ) -> Option<Vec<TypeId>> {
+  ) -> Option<crate::overload::Signature> {
     let ast = self.ast(source)?;
     let NodeData::ProcedureCall(call) = ast.data(node) else {
       return None;
@@ -67,7 +89,12 @@ impl Checker<'_> {
     };
 
     match resolved {
-      Resolved::One(signature) => Some(signature.returns),
+      Resolved::One(signature) => {
+        if let Some(instance) = signature.instance {
+          self.use_instance(instance);
+        }
+        Some(signature)
+      }
       Resolved::Ambiguous | Resolved::None => None,
     }
   }

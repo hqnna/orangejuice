@@ -161,12 +161,25 @@ impl Checker<'_> {
       return;
     }
 
+    self.check_procedure_body(source, decl.scope, *block, signature.returns.clone());
+  }
+
+  /// The statements of one body, checked against what its `return`s have to
+  /// match. An instantiation reaches this with its own specialized returns
+  /// (**L§7.8**).
+  pub(crate) fn check_procedure_body(
+    &mut self,
+    source: SourceId,
+    scope: ScopeId,
+    block: NodeId,
+    returns: Vec<TypeId>,
+  ) {
     let context = Context {
-      returns: signature.returns.clone(),
-      scope: decl.scope,
+      returns,
+      scope,
       source,
     };
-    self.check_statement(&context, *block);
+    self.check_statement(&context, block);
   }
 
   fn check_statement(&mut self, context: &Context, node: NodeId) {

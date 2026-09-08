@@ -15,6 +15,7 @@ use oj_types::{Layout, TypeId};
 
 use crate::checker::{Checker, Expr};
 use crate::overload::Resolved;
+use crate::poly::InstanceId;
 
 /// One argument of a resolved call, in parameter order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +37,10 @@ pub struct CallPlan {
   /// The procedure the call names, or `None` when it goes through a value of
   /// procedure type.
   pub callee: Option<DeclId>,
+  /// The instantiation the call names, when the procedure it resolved to was
+  /// polymorphic (**L§7.8**). It, not the declaration, is what the back end
+  /// generates code for.
+  pub instance: Option<InstanceId>,
   /// The procedure type being called.
   pub type_id: TypeId,
   pub returns: Vec<TypeId>,
@@ -43,6 +48,19 @@ pub struct CallPlan {
   /// The arguments that landed in a `..T` parameter, which the call site
   /// gathers into a `[] T` (**L§7.9**).
   pub varargs: Option<(TypeId, Vec<PlannedArgument>)>,
+}
+
+/// One instantiation, as a back end sees it (**L§7.8**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InstanceInfo {
+  /// The declaration the polymorphic header was written at, when it has one.
+  pub decl: Option<DeclId>,
+  pub source: SourceId,
+  pub header: NodeId,
+  /// The scope the header was written in.
+  pub scope: ScopeId,
+  /// The specialized procedure type.
+  pub type_id: TypeId,
 }
 
 /// The pieces of a procedure declaration a back end needs: where its header
@@ -177,6 +195,39 @@ impl Checker<'_> {
     self.procedure_body_from(source, header, decl.scope, export_name)
   }
 
+  /// What a back end needs to know about one instantiation: where the header
+  /// was written, the specialized procedure type, and the declaration it came
+  /// from, which is what its symbol is named after (**L§7.8**).
+  pub fn instance_info(&self, id: InstanceId) -> InstanceInfo {
+    let instance = self.instance(id);
+    InstanceInfo {
+      decl: instance.decl,
+      source: instance.source,
+      header: instance.header,
+      scope: instance.outer_scope,
+      type_id: instance.type_id,
+    }
+  }
+
+  /// How many instantiations the program produced (**L§7.8**). Two call sites
+  /// that solve the same constants share one.
+  pub fn instance_count(&self) -> usize {
+    self.instances.len()
+  }
+
+  /// Makes `instance` the active instantiation and returns the one it
+  /// replaced, so that a back end walking an instantiated body asks its
+  /// questions with the bindings the checker used (**L§7.8**).
+  pub fn enter_instance(&mut self, instance: Option<InstanceId>) -> Option<InstanceId> {
+    std::mem::replace(&mut self.current_instance, instance)
+  }
+
+  /// Where an instantiation's body was written, and what its parameters are.
+  pub fn instance_body(&mut self, id: InstanceId) -> Option<ProcedureBody> {
+    let info = self.instance_info(id);
+    self.procedure_body_from(info.source, info.header, info.scope, None)
+  }
+
   /// A type Preload declares, by name — the `Type_Info*` structs the type
   /// table is laid out against (**L§17**). `unknown` when Preload is not
   /// loaded, which is the case when one file is checked on its own.
@@ -291,6 +342,9 @@ impl Checker<'_> {
     if signature.polymorphic {
       return None;
     }
+    if let Some(instance) = signature.instance {
+      self.use_instance(instance);
+    }
 
     self.plan_arguments(scope, source, &call.arguments, signature)
   }
@@ -377,6 +431,7 @@ impl Checker<'_> {
 
     Some(CallPlan {
       callee: signature.decl,
+      instance: signature.instance,
       type_id: signature.type_id,
       returns: signature.returns,
       arguments: planned,

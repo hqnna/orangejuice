@@ -248,6 +248,16 @@ impl Checker<'_> {
     flags: IdentFlags,
   ) -> Expr {
     if flags.contains(IdentFlags::DEFINES_POLYMORPH_VARIABLE) {
+      // Inside an instantiation the `$T` that declares the variable is the
+      // type it was bound to, which is what turns the header into a concrete
+      // signature (**L§7.8**).
+      if let Some(bound) = self
+        .decl_at(source, node)
+        .and_then(|decl| self.bound_constant(decl))
+        .and_then(|value| value.as_type())
+      {
+        return Expr::type_expression(bound);
+      }
       return Expr::type_expression(self.polymorph_type(source, node, name));
     }
     let mut scope = self.scope_at(source, node, scope);

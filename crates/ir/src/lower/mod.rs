@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use oj_diag::{Diagnostic, SourceId, Span};
 use oj_lexer::Symbol;
 use oj_scope::{AstSource, DeclId, DeclKind, ScopeId};
-use oj_sema::{Checker, Const, Expr, ProcedureBody, Value};
+use oj_sema::{Checker, Const, Expr, InstanceId, ProcedureBody, Value};
 use oj_syntax::ast::{
   self, DeclarationFlags, ForFlags, IfFlags, LiteralValue, LoopControlType, NodeData, NodeId,
   OperatorType,
@@ -68,6 +68,9 @@ enum Mode {
 enum ProcKey {
   Decl(DeclId),
   Node(SourceId, NodeId),
+  /// One instantiation of a polymorphic procedure: the header is shared, the
+  /// code is not (**L§7.8**).
+  Instance(InstanceId),
 }
 
 /// Lowers a typechecked program to IR, starting from its entry points and
@@ -307,25 +310,81 @@ impl<'c, 'p> Lowering<'c, 'p> {
   /// only made unique when it collides; in a compile-time module it also has
   /// to be the same in every other module of the compilation, so the
   /// declaration it came from is what makes it unique.
-  fn symbol_for(&mut self, base: &str, decl: DeclId) -> String {
+  fn symbol_for(
+    &mut self,
+    base: &str,
+    decl: Option<DeclId>,
+    instance: Option<InstanceId>,
+  ) -> String {
     match self.mode {
       Mode::Executable => self.unique_symbol(base),
-      Mode::CompileTime => format!("{base}${}", decl.0),
+      Mode::CompileTime => {
+        let decl = decl.map(|decl| decl.0).unwrap_or(u32::MAX);
+        match instance {
+          // Two instantiations of one header share a declaration, so the
+          // specialization is what tells their symbols apart.
+          Some(instance) => format!("{base}${decl}.{}", instance.0),
+          None => format!("{base}${decl}"),
+        }
+      }
     }
+  }
+
+  /// The procedure one instantiation generates. Two call sites that solve the
+  /// same constants share it; two that do not each get their own (**L§7.8**).
+  fn instance_id(&mut self, instance: InstanceId) -> ProcId {
+    if let Some(id) = self.procedure_ids.get(&ProcKey::Instance(instance)) {
+      return *id;
+    }
+    let info = self.checker.instance_info(instance);
+    let previous = self.checker.enter_instance(Some(instance));
+    let id = self.declare_procedure(
+      ProcKey::Instance(instance),
+      info.decl,
+      info.type_id,
+      Some(instance),
+    );
+    self.checker.enter_instance(previous);
+    id
   }
 
   fn procedure_id(&mut self, decl: DeclId) -> ProcId {
     if let Some(id) = self.procedure_ids.get(&ProcKey::Decl(decl)) {
       return *id;
     }
-    let id = ProcId(self.procedures.len() as u32);
-    self.procedure_ids.insert(ProcKey::Decl(decl), id);
-
-    let info = self.checker.program().tree().decl(decl).clone();
-    let name = self.text(info.name);
     let type_id = self.checker.decl_type(decl).value;
+    self.declare_procedure(ProcKey::Decl(decl), Some(decl), type_id, None)
+  }
+
+  /// Registers a procedure and queues its body. `decl` is the declaration its
+  /// name and `#foreign`/`#c_call` directives come from — an instantiation
+  /// shares its polymorphic header's.
+  fn declare_procedure(
+    &mut self,
+    key: ProcKey,
+    decl: Option<DeclId>,
+    type_id: TypeId,
+    instance: Option<InstanceId>,
+  ) -> ProcId {
+    let id = ProcId(self.procedures.len() as u32);
+    self.procedure_ids.insert(key, id);
+
+    let name = match decl {
+      Some(decl) => {
+        let symbol = self.checker.program().tree().decl(decl).name;
+        self.text(symbol)
+      }
+      None => String::from("procedure"),
+    };
     let signature = self.checker.types().procedure_of(type_id).cloned();
-    let body = self.checker.procedure_body(decl);
+    let body = match instance {
+      Some(instance) => self.checker.instance_body(instance),
+      None => decl.and_then(|decl| self.checker.procedure_body(decl)),
+    };
+    let span = decl
+      .map(|decl| self.checker.program().tree().decl(decl).span)
+      .unwrap_or_else(|| Span::at(0));
+    let decl_source = decl.and_then(|decl| self.checker.program().tree().decl(decl).source);
 
     let mut flags = ProcedureFlags::empty();
     let mut library = None;
@@ -355,7 +414,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
         symbol = Some(name.clone());
       }
       library = body.library.map(|name| self.text(name));
-      if let Some(library) = &library {
+      if let (Some(library), Some(decl)) = (&library, decl) {
         self.record_library(library.clone(), decl);
       }
     }
@@ -364,8 +423,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
     // own entry point is the `__program_main` the reference names (**C§13**).
     let symbol = match symbol {
       Some(symbol) => symbol,
-      None if self.entry_decl == Some(decl) => self.unique_symbol(PROGRAM_MAIN_SYMBOL),
-      None => self.symbol_for(&name, decl),
+      None if decl.is_some() && self.entry_decl == decl => self.unique_symbol(PROGRAM_MAIN_SYMBOL),
+      None => self.symbol_for(&name, decl, instance),
     };
     let (parameters, returns) = match &signature {
       Some(signature) => (signature.arguments.clone(), signature.returns.clone()),
@@ -381,18 +440,16 @@ impl<'c, 'p> Lowering<'c, 'p> {
         .parameters
         .iter()
         .any(|parameter| parameter.kind != crate::ir::ParameterKind::Value)
+      && let Some(source) = decl_source
     {
-      let span = info.span;
-      if let Some(source) = info.source {
-        self.report(
-          source,
-          span,
-          format!(
-            "'{name}' passes a value by the C convention that orangejuice cannot classify yet: \
-             only registers-sized arguments and returns are supported (milestone M9)."
-          ),
-        );
-      }
+      self.report(
+        source,
+        span,
+        format!(
+          "'{name}' passes a value by the C convention that orangejuice cannot classify yet: \
+           only registers-sized arguments and returns are supported (milestone M9)."
+        ),
+      );
     }
 
     self.procedures.push(Procedure {
@@ -410,7 +467,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       entry: BlockId(0),
     });
     if !flags.contains(ProcedureFlags::FOREIGN) {
-      self.queue.push_back((id, ProcKey::Decl(decl)));
+      self.queue.push_back((id, key));
     }
     id
   }
@@ -481,7 +538,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let symbol = if external {
       name.clone()
     } else {
-      self.symbol_for(&name, decl)
+      self.symbol_for(&name, Some(decl), None)
     };
 
     self.globals.push(Global {

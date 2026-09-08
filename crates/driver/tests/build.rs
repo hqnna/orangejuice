@@ -823,3 +823,44 @@ fn push_context_changes_what_the_block_and_its_callees_see() {
     "zero\nseven\nzero\n",
   );
 }
+
+// ------------------------------------------------------------------- M7 ---
+
+#[test]
+fn a_polymorphic_procedure_is_instantiated_per_argument_type() {
+  assert_output(
+    "square :: (x: $T) -> T { return x * x; }\n\
+     main :: () {\n\
+       put_number(square(7));\n\
+       put_number(cast(int) square(cast(float64) 3.0));\n\
+     }\n",
+    "49\n9\n",
+  );
+}
+
+#[test]
+fn a_type_variable_solved_through_a_pointer_reaches_the_right_body() {
+  assert_output(
+    "bump :: (p: *$T, by: T) { <<p = <<p + by; }\n\
+     main :: () {\n\
+       a: int = 40;\n\
+       bump(*a, 2);\n\
+       put_number(a);\n\
+     }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn a_baked_type_parameter_declares_the_bodys_locals() {
+  assert_output(
+    "Box :: struct { value: int; }\n\
+     zeroed :: ($T: Type) -> T { result: T; return result; }\n\
+     main :: () {\n\
+       b := zeroed(Box);\n\
+       put_number(b.value);\n\
+       put_number(zeroed(int));\n\
+     }\n",
+    "0\n0\n",
+  );
+}

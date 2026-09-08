@@ -1224,6 +1224,7 @@ impl Lowering<'_, '_> {
     // A macro is expanded into its caller rather than called (**L§7.13**);
     // until it is, the call site has nothing to lower.
     if let Some(decl) = plan.callee
+      && plan.instance.is_none()
       && let Some(body) = self.checker.procedure_body(decl)
       && body
         .flags
@@ -1233,12 +1234,18 @@ impl Lowering<'_, '_> {
       return None;
     }
 
-    let (callee, flags) = match plan.callee {
-      Some(decl) => {
+    let (callee, flags) = match (plan.instance, plan.callee) {
+      // A polymorphic call names a specialization, not the header it was
+      // written as (**L§7.8**).
+      (Some(instance), _) => {
+        let id = self.instance_id(instance);
+        (Callee::Direct(id), self.procedures[id.0 as usize].flags)
+      }
+      (None, Some(decl)) => {
         let id = self.procedure_id(decl);
         (Callee::Direct(id), self.procedures[id.0 as usize].flags)
       }
-      None => {
+      (None, None) => {
         let NodeData::ProcedureCall(call) = self.checker.tree_of(source)?.data(node).clone() else {
           return None;
         };

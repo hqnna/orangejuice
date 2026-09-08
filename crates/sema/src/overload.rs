@@ -6,6 +6,7 @@ use oj_types::TypeId;
 
 use crate::checker::{Checker, Expr};
 use crate::convert;
+use crate::poly::InstanceId;
 
 /// One parameter of a candidate, as a call site sees it (**L§7.3**).
 #[derive(Clone, Debug)]
@@ -32,6 +33,9 @@ pub(crate) struct Signature {
   /// evaluated in.
   pub header: Option<(SourceId, NodeId)>,
   pub type_id: TypeId,
+  /// The specialization a polymorphic candidate produced for these arguments
+  /// (**L§7.8**). A candidate that needed no instantiation has none.
+  pub instance: Option<InstanceId>,
 }
 
 impl Signature {
@@ -70,8 +74,8 @@ impl Checker<'_> {
         return Resolved::Ambiguous;
       };
       any_signature = true;
-      if let Some(distance) = self.score(&signature, arguments) {
-        scored.push((distance, signature));
+      if let Some(scored_candidate) = self.score_candidate(signature, arguments) {
+        scored.push(scored_candidate);
       }
     }
     if !any_signature {
@@ -95,6 +99,24 @@ impl Checker<'_> {
     arguments: &[(Option<Symbol>, Expr)],
   ) -> bool {
     self.score(signature, arguments).is_some()
+  }
+
+  /// Scores one candidate, instantiating it first when it is polymorphic
+  /// (**L§7.8**): what a call site is really matched against is the
+  /// specialization its arguments produce, so a `$T` that cannot be solved is
+  /// a candidate that does not accept them.
+  fn score_candidate(
+    &mut self,
+    signature: Signature,
+    arguments: &[(Option<Symbol>, Expr)],
+  ) -> Option<(u32, Signature)> {
+    if !signature.polymorphic {
+      let distance = self.score(&signature, arguments)?;
+      return Some((distance, signature));
+    }
+    let specialized = self.specialize(&signature, arguments)?;
+    let distance = self.score(&specialized, arguments)?;
+    Some((distance.saturating_add(convert::POLYMORPH), specialized))
   }
 
   /// How far the arguments are from a candidate's parameters, or `None` when
@@ -219,6 +241,7 @@ impl Checker<'_> {
       decl: Some(candidate),
       header,
       type_id: resolved.value,
+      instance: None,
     })
   }
 
@@ -245,10 +268,11 @@ impl Checker<'_> {
       decl: None,
       header: None,
       type_id,
+      instance: None,
     })
   }
 
-  fn header_parameters(
+  pub(crate) fn header_parameters(
     &mut self,
     source: SourceId,
     header: NodeId,

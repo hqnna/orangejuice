@@ -7,6 +7,7 @@ use oj_syntax::ast::{Ast, NodeData, NodeId};
 use oj_types::{EnumId, StructId, TypeId, Types};
 
 use crate::constants::Const;
+use crate::poly::{Instance, InstanceId, InstanceKey};
 
 /// What a declared name stands for once its type is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,7 +206,11 @@ pub struct Checker<'a> {
   interner: &'a Interner,
   types: Types,
   names: Names,
-  states: HashMap<DeclId, State>,
+  /// The type of every declaration that has one, keyed by the instantiation it
+  /// was resolved in: a parameter of a polymorphic procedure has one type per
+  /// specialization, an ordinary declaration one for the whole program
+  /// (**L§7.8**).
+  states: HashMap<(Option<InstanceId>, DeclId), State>,
   finished: Vec<DeclId>,
   scope_of_node: HashMap<(SourceId, NodeId), ScopeId>,
   struct_scopes: HashMap<StructId, ScopeId>,
@@ -213,7 +218,7 @@ pub struct Checker<'a> {
   /// The aggregate body a member scope belongs to, so that asking for one
   /// member's type can build the whole definition.
   aggregate_owners: HashMap<ScopeId, (SourceId, NodeId)>,
-  decl_constants: HashMap<DeclId, Const>,
+  decl_constants: HashMap<(Option<InstanceId>, DeclId), Const>,
   /// The bodies of the structs whose members have not been resolved yet, and
   /// the ones being resolved right now, which is what makes a struct that
   /// contains itself by value an error rather than a hang.
@@ -255,6 +260,17 @@ pub struct Checker<'a> {
   /// walks both when it cannot tell which one that is, so a `#run` or an
   /// `#assert` in there has to stay quiet (`docs/spec.md` §10).
   pub(crate) undecided_static_ifs: u32,
+  /// Every instantiation of a polymorphic procedure and every macro expansion
+  /// the program has reached (**L§7.8**, **L§7.13**).
+  pub(crate) instances: Vec<Instance>,
+  /// One instantiation per set of constants, program-wide (**L§7.8**).
+  pub(crate) instance_cache: HashMap<InstanceKey, InstanceId>,
+  /// The instantiation whose body is being checked, which is what gives the
+  /// `$T`s on the way out of it their values.
+  pub(crate) current_instance: Option<InstanceId>,
+  /// Instantiations whose bodies nobody has checked yet.
+  pub(crate) pending_instances: Vec<InstanceId>,
+  pub(crate) checked_instances: HashSet<InstanceId>,
 }
 
 /// Deep enough for the module tree's nested types, shallow enough that a
@@ -347,6 +363,11 @@ impl<'a> Checker<'a> {
       runs_in_flight: HashSet::new(),
       run_index: 0,
       undecided_static_ifs: 0,
+      instances: Vec::new(),
+      instance_cache: HashMap::new(),
+      current_instance: None,
+      pending_instances: Vec::new(),
+      checked_instances: HashSet::new(),
     }
   }
 
@@ -373,6 +394,7 @@ impl<'a> Checker<'a> {
     }
     self.check_bodies();
     self.check_file_runs();
+    self.check_instances();
   }
 
   pub(crate) fn record_pending_body(
@@ -483,10 +505,55 @@ impl<'a> Checker<'a> {
   }
 
   pub fn resolved(&self, id: DeclId) -> Option<DeclType> {
-    match self.states.get(&id) {
+    match self.states.get(&self.decl_key(id)) {
       Some(State::Done(type_id)) => Some(*type_id),
       _ => None,
     }
+  }
+
+  /// Which active instantiation a declaration's type belongs to. A declaration
+  /// outside every polymorphic body has one type for the whole program; one
+  /// inside the instantiation being checked has one per specialization
+  /// (**L§7.8**).
+  pub(crate) fn decl_key(&self, id: DeclId) -> (Option<InstanceId>, DeclId) {
+    (
+      self.instance_of_scope(self.program.tree().decl(id).scope),
+      id,
+    )
+  }
+
+  /// The innermost active instantiation that encloses a scope, or `None` when
+  /// the scope is not inside one — which is the case for everything outside a
+  /// polymorphic procedure or a macro.
+  pub(crate) fn instance_of_scope(&self, scope: ScopeId) -> Option<InstanceId> {
+    if !self.program.is_uninstantiated(scope) {
+      return None;
+    }
+    let mut current = self.current_instance;
+    while let Some(id) = current {
+      let instance = &self.instances[id.0 as usize];
+      if self.scope_encloses(instance.body_root(), scope) {
+        return Some(id);
+      }
+      current = instance.parent;
+    }
+    None
+  }
+
+  pub(crate) fn scope_encloses(&self, outer: ScopeId, inner: ScopeId) -> bool {
+    let tree = self.program.tree();
+    let mut current = Some(inner);
+    while let Some(id) = current {
+      if id == outer {
+        return true;
+      }
+      current = tree.scope(id).parent;
+    }
+    false
+  }
+
+  pub(crate) fn instance(&self, id: InstanceId) -> &Instance {
+    &self.instances[id.0 as usize]
   }
 
   pub fn struct_scope(&self, id: StructId) -> Option<ScopeId> {
@@ -557,7 +624,7 @@ impl<'a> Checker<'a> {
   /// how a local that shadows an outer name is kept out of its own initializer
   /// (**L§6.13**).
   pub(crate) fn is_resolving(&self, id: DeclId) -> bool {
-    matches!(self.states.get(&id), Some(State::Resolving))
+    matches!(self.states.get(&self.decl_key(id)), Some(State::Resolving))
   }
 
   pub(crate) fn compound_properties(
@@ -590,7 +657,8 @@ impl<'a> Checker<'a> {
   }
 
   pub(crate) fn record_constant(&mut self, id: DeclId, value: Const) {
-    self.decl_constants.insert(id, value);
+    let key = self.decl_key(id);
+    self.decl_constants.insert(key, value);
   }
 
   /// The value of a constant declaration, computed on first use (**L§5.11**).
@@ -610,8 +678,11 @@ impl<'a> Checker<'a> {
   }
 
   pub fn decl_constant(&mut self, id: DeclId) -> Option<Const> {
+    if let Some(value) = self.bound_constant(id) {
+      return Some(value);
+    }
     self.decl_type(id);
-    if let Some(value) = self.decl_constants.get(&id) {
+    if let Some(value) = self.decl_constants.get(&self.decl_key(id)) {
       return Some(value.clone());
     }
     let decl = self.program.tree().decl(id).clone();
@@ -640,7 +711,8 @@ impl<'a> Checker<'a> {
       }
       _ => value,
     };
-    self.decl_constants.insert(id, value.clone());
+    let key = self.decl_key(id);
+    self.decl_constants.insert(key, value.clone());
     Some(value)
   }
 
@@ -696,6 +768,12 @@ impl<'a> Checker<'a> {
   /// declaration it belongs to and again when its body is checked — so the
   /// same complaint reaches here more than once. It is reported once.
   fn report(&mut self, diagnostic: Diagnostic) {
+    // The reference never typechecks the branch a `#if` rejected (**L§6.10**).
+    // orangejuice walks both when it cannot decide which that is, so what it
+    // finds in there is not known to be about real code (`docs/spec.md` §10).
+    if self.undecided_static_ifs > 0 {
+      return;
+    }
     if self.reported.insert((
       diagnostic.source,
       diagnostic.span,
@@ -717,7 +795,16 @@ impl<'a> Checker<'a> {
 
   /// The type of a declaration, resolving it on first use.
   pub fn decl_type(&mut self, id: DeclId) -> DeclType {
-    match self.states.get(&id) {
+    // A constant the active instantiation bound is that value, whatever the
+    // declaration says (**L§7.8**).
+    if let Some(value) = self.bound_constant(id) {
+      return match value.as_type() {
+        Some(denoted) => DeclType::type_name(denoted),
+        None => DeclType::value(value.type_id),
+      };
+    }
+    let key = self.decl_key(id);
+    match self.states.get(&key) {
       Some(State::Done(type_id)) => return *type_id,
       Some(State::Resolving) => {
         self.report_cycle(id);
@@ -726,14 +813,14 @@ impl<'a> Checker<'a> {
       None => {}
     }
 
-    self.states.insert(id, State::Resolving);
+    self.states.insert(key, State::Resolving);
     self.stack.push(id);
     let resolved = self.compute_decl_type(id);
     self.stack.pop();
     // A nominal type publishes itself while its members are still being built,
     // so only overwrite a slot that is still marked as being resolved.
-    if matches!(self.states.get(&id), Some(State::Resolving)) {
-      self.states.insert(id, State::Done(resolved));
+    if matches!(self.states.get(&key), Some(State::Resolving)) {
+      self.states.insert(key, State::Done(resolved));
       self.finished.push(id);
     }
     self.resolved(id).unwrap_or(resolved)
@@ -742,7 +829,8 @@ impl<'a> Checker<'a> {
   /// Publishes a declaration's type before the rest of it is built, so that a
   /// struct may refer to itself through a pointer (**L§8.1**).
   pub(crate) fn publish(&mut self, id: DeclId, resolved: DeclType) {
-    self.states.insert(id, State::Done(resolved));
+    let key = self.decl_key(id);
+    self.states.insert(key, State::Done(resolved));
     self.finished.push(id);
   }
 
