@@ -3,8 +3,8 @@
 //! The `Compiler` module of the distribution declares its procedures
 //! `#compiler` and the compiler answers them; these tests declare the same
 //! headers in the program itself, so that what is exercised is the compiler's
-//! half rather than the distribution's — importing the real module pulls in
-//! `Basic` and `Thread`, whose `#asm` blocks are M9's.
+//! half rather than the distribution's. The last one imports the real module,
+//! which reaches `Basic` and `Thread` and everything M9 assembles.
 
 use std::path::{Path, PathBuf};
 
@@ -86,7 +86,13 @@ fn build(fixture: &Fixture, body: &str) -> Option<oj_driver::Report> {
     eprintln!("skipping: no C driver on PATH to link with");
     return None;
   }
-  fixture.write("main.jai", &format!("{COMPILER}\n{body}"));
+  // A body that imports the real module must not also get the headers, or the
+  // program would declare `Build_Options` twice.
+  let source = match body.contains("#import \"Compiler\"") {
+    true => body.to_string(),
+    false => format!("{COMPILER}\n{body}"),
+  };
+  fixture.write("main.jai", &source);
   // SAFETY: cargo runs each integration test binary in its own process, and
   // nothing else in this one reads it.
   unsafe {
@@ -606,4 +612,35 @@ fn set_build_options_dc_renames_the_output() {
     return;
   };
   assert_built(&report, &fixture.path("renamed"));
+}
+
+/// The `Compiler` module itself, rather than the headers the tests above
+/// declare: importing it reaches `Basic` and `Thread`, whose `#asm` blocks the
+/// back end assembles since M9.
+#[test]
+fn a_metaprogram_imports_the_compiler_module_of_the_distribution() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "Basic :: #import \"Basic\";\n\
+     C :: #import \"Compiler\";\n\
+     drive :: () {\n\
+       w := C.compiler_create_workspace(\"target\");\n\
+       options := C.get_build_options(w);\n\
+       options.output_executable_name = \"generated\";\n\
+       C.set_build_options(options, w);\n\
+       C.add_build_string(\"main :: () { }\", w);\n\
+       Basic.print(\"workspace %\\n\", w);\n\
+     }\n\
+     #run drive();\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("main"));
+  assert!(
+    fixture.path("generated").exists(),
+    "the workspace should have produced its own executable; diagnostics:\n{}",
+    report.diagnostics.join("")
+  );
 }

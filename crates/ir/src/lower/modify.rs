@@ -80,9 +80,20 @@ impl Lowering<'_, '_> {
     self.entry = Some(id);
 
     let out = self.value(result_pointer);
-    let context = self.new_local(String::from("context"), self.context_type);
-    let context_address = self.local_address(context);
-    self.clear(context_address, self.context_type);
+    // A `#modify` runs through the same engine a `#run` does, and gets the same
+    // `#Context` (**C§6.3**).
+    let context_address = match self.checker.procedure_named("__jai_runtime_init") {
+      Some(decl) => {
+        let init = self.procedure_id(decl);
+        self.call_runtime_init(init)
+      }
+      None => {
+        let context = self.new_local(String::from("context"), self.context_type);
+        let address = self.local_address(context);
+        self.clear(address, self.context_type);
+        address
+      }
+    };
     self.context_value = Some(context_address);
 
     let previous = self.checker.enter_instance(Some(modify.instance));

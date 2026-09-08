@@ -79,11 +79,22 @@ impl Lowering<'_, '_> {
     // be its first value.
     let out = self.value(result_pointer);
 
-    // Compile-time code runs with a zeroed context, the same one the generated
-    // entry point hands `main` (`docs/spec.md` §10).
-    let context = self.new_local(String::from("context"), self.context_type);
-    let context_address = self.local_address(context);
-    self.clear(context_address, self.context_type);
+    // A run gets the `#Context` `Runtime_Support.__jai_runtime_init` builds,
+    // the same one the program itself starts with, so that what it calls can
+    // allocate and print (**C§13**). A program that does not reach
+    // Runtime_Support runs with zeroed storage instead.
+    let context_address = match self.checker.procedure_named("__jai_runtime_init") {
+      Some(decl) => {
+        let init = self.procedure_id(decl);
+        self.call_runtime_init(init)
+      }
+      None => {
+        let context = self.new_local(String::from("context"), self.context_type);
+        let address = self.local_address(context);
+        self.clear(address, self.context_type);
+        address
+      }
+    };
     self.context_value = Some(context_address);
 
     match run.value {
@@ -100,6 +111,32 @@ impl Lowering<'_, '_> {
     procedure.entry = BlockId(0);
 
     self.drain_queue();
+  }
+
+  /// `__jai_runtime_init(0, null)`: no command line, and the `#Context` it
+  /// leaves in `first_thread_context` comes back.
+  pub(super) fn call_runtime_init(&mut self, init: ProcId) -> ValueId {
+    let abi = self.procedures[init.0 as usize].abi.clone();
+    let signature = self.procedures[init.0 as usize].type_id;
+    let mut arguments = Vec::with_capacity(abi.parameters.len());
+    for parameter in &abi.parameters {
+      let dest = self.value(parameter.type_id);
+      let value = match self.checker.types().is_pointer(parameter.type_id) {
+        true => Constant::Null,
+        false => Constant::Int(0),
+      };
+      self.emit(Inst::Const { dest, value });
+      arguments.push(dest);
+    }
+    let pointer = self.pointer_to(self.context_type);
+    let dest = self.value(pointer);
+    self.emit(Inst::Call {
+      dest: Some(dest),
+      callee: Callee::Direct(init),
+      signature,
+      arguments,
+    });
+    dest
   }
 
   /// `#run expr`: the wrapper evaluates the expression itself, since a single
