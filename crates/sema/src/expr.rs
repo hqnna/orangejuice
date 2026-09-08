@@ -550,11 +550,11 @@ impl Checker<'_> {
           };
         }
       }
-      // `p[i]` indexes a pointer as if it were an array (**L§5.4**). A
-      // pointer to a struct is left alone: that is where an `operator *[]`
-      // would apply, and resolving one is M7's own business.
+      // `p[i]` indexes a pointer as if it were an array (**L§5.4**), for a
+      // pointee that has no subscript operator of its own to prefer.
       if let Some(pointee) = self.types().pointee(operands[0].type_id)
-        && self.types().struct_of(pointee).is_none()
+        && !self.has_operator(scope, source, node, ADDRESS_SUBSCRIPT)
+        && !self.has_operator(scope, source, node, OperatorType::ARRAY_SUBSCRIPT)
       {
         return Expr::place(pointee);
       }

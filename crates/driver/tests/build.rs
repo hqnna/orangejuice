@@ -1297,3 +1297,17 @@ fn a_named_for_expansion_is_chosen_over_the_default() {
     "0\n-3\n9\n0\n--\n9\n",
   );
 }
+
+#[test]
+fn a_pointer_to_a_struct_is_indexed_when_nothing_overloads_the_subscript() {
+  assert_output(
+    "Point :: struct { x: int; y: int; }\n\
+     main :: () {\n\
+       points: [3] Point;\n\
+       points[1].x = 11;\n\
+       p := points.data;\n\
+       put_number(p[1].x);\n\
+     }\n",
+    "11\n",
+  );
+}

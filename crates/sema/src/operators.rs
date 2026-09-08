@@ -53,6 +53,24 @@ impl Checker<'_> {
     Some(Expr::value(self.upcast_back(operands, result)))
   }
 
+  /// Whether an operator of that name is declared anywhere in scope
+  /// (**L§7.7**). A subscript falls back to plain pointer indexing only when
+  /// nothing would rather handle it.
+  pub(crate) fn has_operator(
+    &self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: OperatorType,
+  ) -> bool {
+    let name = self.interned().intern(operator.text().as_bytes());
+    let scope = self.nearest_scope(source, node, scope);
+    matches!(
+      self.program().tree().lookup(scope, name),
+      Resolution::Found(_)
+    )
+  }
+
   /// A call that downcast an `isa` operand to its base and returned the base
   /// gives the variant back (**L§3.11**).
   fn upcast_back(&self, operands: &[Expr], result: TypeId) -> TypeId {
