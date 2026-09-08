@@ -10,7 +10,7 @@ impl Checker<'_> {
   /// The type of a `for` loop's `it` or `it_index` (**L§6.5**): the index is
   /// always `s64`, and the value is the range's type or the array's element —
   /// a pointer to it under `for *`. A `for` over anything else needs a
-  /// `for_expansion`, which is M7.
+  /// `for_expansion`, which decides both names' types itself (**LÂ§7.14**).
   pub(crate) fn iterator_type(
     &mut self,
     scope: ScopeId,

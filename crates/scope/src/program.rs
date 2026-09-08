@@ -171,7 +171,7 @@ pub struct Program<'a> {
   procedure_scopes: HashMap<(SourceId, NodeId), ProcedureScopes>,
   /// The constants scope of every polymorphic procedure and macro. Nothing
   /// inside one of those exists until an instantiation makes it exist, so a
-  /// `#run` written there waits for M7 rather than executing (**L§12.1**).
+  /// `#run` written there waits for an instantiation rather than running (**L§12.1**).
   uninstantiated_scopes: HashSet<ScopeId>,
   /// The constants scope of every macro. A name that misses inside one of
   /// these is a wait for the expansion, not an error: the macro's body sees
@@ -181,7 +181,7 @@ pub struct Program<'a> {
   references: Vec<Reference>,
   /// Names some macro declares with a backtick, which land in whatever block
   /// the macro expands into rather than where they are written (**L§7.13**).
-  /// A miss on one of these is a wait for macro expansion (M7), not an error.
+  /// A miss on one of these is a wait for the expansion, not an error.
   macro_injected: HashSet<Symbol>,
   diagnostics: Vec<Diagnostic>,
   pending_ifs: Vec<PendingIf>,
@@ -703,7 +703,7 @@ impl<'a> Program<'a> {
     let overloadable = self.is_overloadable(parsed, &declaration, kind);
     // `` `name := … `` inside a macro declares into whichever block the macro
     // expands into (**L§7.13**), so the name is provisional here and expected
-    // to turn up unresolved at the call sites until M7 expands them.
+    // to turn up unresolved at the call sites until the macro expands.
     let backticked = declaration
       .flags
       .contains(DeclarationFlags::HAS_SCOPE_MODIFIER);

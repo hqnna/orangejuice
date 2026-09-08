@@ -86,7 +86,6 @@ impl Checker<'_> {
     }
 
     let callee = self.expression_type(scope, source, call.procedure_expression);
-    // `Holder(float, 5)` instantiates a polymorphic struct, which is M7.
     if callee.denoted.is_some() {
       return None;
     }
