@@ -15,6 +15,7 @@ clap.workspace = true
 oj-diag.workspace = true
 oj-lexer.workspace = true
 oj-source.workspace = true
+oj-syntax.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

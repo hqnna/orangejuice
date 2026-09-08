@@ -184,7 +184,7 @@ fn execute(cli: &Cli) -> u8 {
     Some(Command::Run(_)) => not_implemented("oj run", "M5"),
     Some(Command::Dump { stage }) => match stage {
       DumpStage::Tokens { file } => dump_tokens(file),
-      DumpStage::Ast { .. } => not_implemented("oj dump ast", "M2"),
+      DumpStage::Ast { file, tree } => dump_ast(file, *tree),
       DumpStage::Ir { .. } => not_implemented("oj dump ir", "M5"),
       DumpStage::Asm { .. } => not_implemented("oj dump asm", "M5"),
     },
@@ -214,6 +214,44 @@ fn dump_tokens(path: &Path) -> u8 {
   }
 
   if lexed.has_errors() {
+    EXIT_FAILURE
+  } else {
+    EXIT_SUCCESS
+  }
+}
+
+/// `oj dump ast`: parses one file and prints it back as source, or as the tree
+/// form with `--tree`.
+fn dump_ast(path: &Path, tree: bool) -> u8 {
+  let sources = SourceMap::new();
+  let id = match oj_source::load_file(&sources, path) {
+    Ok(id) => id,
+    Err(error) => {
+      eprintln!("error: could not read {}: {error}", path.display());
+      return EXIT_FAILURE;
+    }
+  };
+
+  let file = sources.file(id);
+  let interner = Interner::new();
+  let parsed = oj_syntax::parse(file.bytes(), id, &interner);
+
+  if tree {
+    print!(
+      "{}",
+      oj_syntax::print_tree(&parsed.ast, parsed.root, &interner)
+    );
+  } else {
+    print!(
+      "{}",
+      oj_syntax::print_source(&parsed.ast, parsed.root, &interner)
+    );
+  }
+  for diagnostic in &parsed.diagnostics {
+    eprint!("{}", oj_diag::render(diagnostic, &file));
+  }
+
+  if parsed.has_errors() {
     EXIT_FAILURE
   } else {
     EXIT_SUCCESS
@@ -303,6 +341,32 @@ mod tests {
   #[test]
   fn dump_tokens_tolerates_a_file_that_only_warns() {
     assert_eq!(dump_tokens_of("x :: \"a\\q\";\n").0, EXIT_SUCCESS);
+  }
+
+  fn dump_ast_of(source: &str, tree: bool) -> (u8, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("input.jai");
+    std::fs::write(&path, source).expect("the input should be writable");
+    let mut argv = vec!["oj", "dump", "ast", path.to_str().unwrap()];
+    if tree {
+      argv.push("--tree");
+    }
+    (exit_code(argv), dir)
+  }
+
+  #[test]
+  fn dump_ast_succeeds_on_a_well_formed_file() {
+    assert_eq!(dump_ast_of("main :: () {\n}\n", false).0, EXIT_SUCCESS);
+    assert_eq!(dump_ast_of("main :: () {\n}\n", true).0, EXIT_SUCCESS);
+  }
+
+  #[test]
+  fn dump_ast_fails_on_a_parse_error_or_a_missing_file() {
+    assert_eq!(dump_ast_of("main :: ( {\n", false).0, EXIT_FAILURE);
+    assert_eq!(
+      exit_code(["oj", "dump", "ast", "no/such/file.jai"]),
+      EXIT_FAILURE
+    );
   }
 
   #[test]
