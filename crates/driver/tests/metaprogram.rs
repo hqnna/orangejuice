@@ -644,3 +644,93 @@ fn a_metaprogram_imports_the_compiler_module_of_the_distribution() {
     report.diagnostics.join("")
   );
 }
+
+/// `get_build_options()` on the compilation the program itself is: it exists
+/// before the compiler has folded the defaults, so its options are empty and
+/// what it hands back has to be the defaults rather than the caller's own
+/// storage (**C§3.1**). A metaprogram reports what it saw, since that is what
+/// reaches the driver.
+#[test]
+fn the_options_of_the_programs_own_workspace_are_the_defaults() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "Basic :: #import \"Basic\";\n\
+     C :: #import \"Compiler\";\n\
+     look :: () {\n\
+       options := C.get_build_options();\n\
+       C.compiler_report(\n\
+         Basic.tprint(\"saw count % type %\", options.compile_time_command_line.count,\n\
+                      options.output_type),\n\
+         mode = .WARNING);\n\
+     }\n\
+     #run look();\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  let output = report.diagnostics.join("");
+  assert!(output.contains("saw count 0 type EXECUTABLE"), "{output}");
+}
+
+/// The arguments after a lone `-` reach a metaprogram through
+/// `Build_Options.compile_time_command_line` (**C§2.1**).
+#[test]
+fn the_compile_time_command_line_reaches_a_metaprogram() {
+  let jai_dir = match oj_testsupport::jai_dir() {
+    Some(dir) => dir,
+    None => {
+      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+      return;
+    }
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let fixture = Fixture::new();
+  fixture.write(
+    "main.jai",
+    "Basic :: #import \"Basic\";\n\
+     C :: #import \"Compiler\";\n\
+     look :: () {\n\
+       for arg: C.get_build_options().compile_time_command_line {\n\
+         C.compiler_report(Basic.tprint(\"saw %\", arg), mode = .WARNING);\n\
+       }\n\
+     }\n\
+     #run look();\n\
+     main :: () {}\n",
+  );
+  // SAFETY: as in `build`.
+  unsafe {
+    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+  }
+  let mut options = oj_driver::BuildOptions::new();
+  options.compile_time_command_line = vec![String::from("debug"), String::from("release")];
+  let report = oj_driver::run(
+    &fixture.path("main.jai"),
+    &options,
+    oj_driver::Stage::Executable,
+    None,
+  );
+  let output = report.diagnostics.join("");
+  assert!(output.contains("saw debug"), "{output}");
+  assert!(output.contains("saw release"), "{output}");
+}
+
+/// A metaprogram that turns the output off is the whole program: there is
+/// nothing to lower and no entry point to ask for (**C§4**).
+#[test]
+fn a_program_that_outputs_nothing_needs_no_entry_point() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "C :: #import \"Compiler\";\n\
+     drive :: () { C.set_build_options_dc(.{do_output = false}); }\n\
+     #run drive();\n",
+  ) else {
+    return;
+  };
+  assert!(!report.failed, "{}", report.diagnostics.join(""));
+  assert!(!fixture.path("main").exists(), "nothing should be written");
+}

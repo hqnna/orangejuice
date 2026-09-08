@@ -200,6 +200,13 @@ pub fn run_input(
   // Whatever compile time wrote into an ordinary global is thrown away before
   // the executable is written; `#no_reset` is what survives (**L§12.3**).
   engine.reset_globals();
+  // `NO_OUTPUT` produces nothing, so there is nothing to lower and no entry
+  // point to ask for (**C§4**) — a metaprogram that sets `do_output = false`
+  // is the whole program. A dump stage was asked for explicitly, so it still
+  // gets its answer.
+  if options.output_type == oj_link::OutputType::NoOutput && stage == Stage::Executable {
+    return report;
+  }
   // A library has no `main`; what it holds is whatever its exports reach
   // (**L§11.6**).
   let mut lowered = match options.output_type {
@@ -333,6 +340,9 @@ fn metaprogram_state(checker: &mut oj_sema::Checker<'_>, options: &BuildOptions)
   meta.version_numbers = JAI_VERSION_NUMBERS;
   if let Some(build_options) = checker.type_named("Build_Options") {
     meta.default_build_options = checker.default_bytes(build_options).unwrap_or_default();
+    if let Some(at) = build_options_layout(checker, build_options).compile_time_command_line {
+      meta.seed_command_line(at);
+    }
     meta.build_options_layout = build_options_layout(checker, build_options);
   }
   if let Some(during_compile) = checker.type_named("Build_Options_During_Compile") {
@@ -352,6 +362,7 @@ fn build_options_layout(
       "output_executable_name" => layout.output_executable_name = Some(offset),
       "output_path" => layout.output_path = Some(offset),
       "output_type" => layout.output_type = Some(offset),
+      "compile_time_command_line" => layout.compile_time_command_line = Some(offset),
       "append_executable_filename_extension" => {
         layout.append_executable_filename_extension = Some(offset);
       }

@@ -301,9 +301,12 @@ unsafe extern "C" fn get_name(result: *mut Str, w: i64, _context: *mut c_void) {
 
 /// `get_build_options :: (w: Workspace = -1) -> Build_Options`
 unsafe extern "C" fn get_build_options(result: *mut u8, w: i64, _context: *mut c_void) {
+  // A workspace whose options were never set — the compilation the program
+  // itself is, which exists before the compiler has folded the defaults — has
+  // the defaults, not nothing: the caller's storage is its own otherwise.
   let options = with(|meta| match meta.workspace(w) {
-    Some(workspace) => workspace.options.clone(),
-    None => meta.default_build_options.clone(),
+    Some(workspace) if !workspace.options.is_empty() => workspace.options.clone(),
+    _ => meta.default_build_options.clone(),
   });
   let Some(options) = options else {
     return;

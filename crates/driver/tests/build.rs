@@ -1872,3 +1872,26 @@ fn a_constant_array_carries_its_count_into_a_view() {
     "10\n",
   );
 }
+
+#[test]
+fn a_case_over_strings_compares_their_bytes() {
+  assert_output(
+    "classify :: (word: string) {\n\
+       if word == {\n\
+         case \"debug\";\n\
+           put(\"a debug build\\n\");\n\
+         case \"release\";\n\
+           put(\"a release build\\n\");\n\
+         case;\n\
+           put(\"something else\\n\");\n\
+       }\n\
+     }\n\
+     main :: () {\n\
+       classify(\"debug\");\n\
+       classify(\"release\");\n\
+       classify(\"debugg\");\n\
+       classify(\"\");\n\
+     }\n",
+    "a debug build\na release build\nsomething else\nsomething else\n",
+  );
+}

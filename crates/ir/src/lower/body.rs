@@ -745,7 +745,13 @@ impl Lowering<'_, '_> {
       return;
     };
     let subject_type = subject.type_id;
-    let subject = self.scalar(subject);
+    // The subject is compared once per case, so it is worked out once and kept
+    // where the comparisons can reach it.
+    let subject = Val {
+      id: self.address_of(subject),
+      type_id: subject_type,
+      indirect: true,
+    };
     let Some(block) = payload.then_block else {
       return;
     };
@@ -774,14 +780,19 @@ impl Lowering<'_, '_> {
           let Some(value) = self.expression(scope, source, condition, Some(subject_type)) else {
             continue;
           };
-          let value = self.scalar(value);
-          let compared = self.value(TypeId::BOOL);
-          self.emit(Inst::Binary {
-            dest: compared,
-            operator: crate::ir::BinaryOp::Equal,
-            left: subject,
-            right: value,
-          });
+          // A case is `subject == value`, and it is compared the way that
+          // expression would be — two strings by their bytes (**L§3.4**).
+          let Some(compared) = self.binary_values(
+            source,
+            condition,
+            crate::ir::BinaryOp::Equal,
+            subject,
+            value,
+            TypeId::BOOL,
+          ) else {
+            continue;
+          };
+          let compared = self.scalar(compared);
           let next = self.new_block();
           self.terminate(Terminator::Branch {
             condition: compared,

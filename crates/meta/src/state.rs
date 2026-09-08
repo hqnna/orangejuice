@@ -59,6 +59,9 @@ pub struct BuildOptionsLayout {
   pub output_path: Option<u64>,
   pub output_type: Option<u64>,
   pub append_executable_filename_extension: Option<u64>,
+  /// Where the arguments after a lone `-` are handed to a metaprogram
+  /// (**C§2.1**).
+  pub compile_time_command_line: Option<u64>,
 }
 
 /// Where the `Build_Options_During_Compile` members the driver acts on sit
@@ -278,6 +281,29 @@ impl Meta {
     Slice {
       count: items.len() as i64,
       data,
+    }
+  }
+
+  /// Writes the arguments after a lone `-` into the `Build_Options` every
+  /// workspace starts from, which is where a metaprogram reads them
+  /// (**C§2.1**). The slice points into the compilation's arena, so it lives
+  /// as long as the compile-time code that reads it.
+  pub fn seed_command_line(&mut self, at: u64) {
+    let size = size_of::<Slice>();
+    let at = at as usize;
+    if self.default_build_options.len() < at + size {
+      return;
+    }
+    let items = self.command_line.clone();
+    let slice = self.intern_strings(&items);
+    let mut bytes = Vec::with_capacity(size);
+    bytes.extend_from_slice(&slice.count.to_ne_bytes());
+    bytes.extend_from_slice(&(slice.data as usize).to_ne_bytes());
+    self.default_build_options[at..at + size].copy_from_slice(&bytes);
+    for workspace in &mut self.workspaces {
+      if workspace.options.len() >= at + size {
+        workspace.options[at..at + size].copy_from_slice(&bytes);
+      }
     }
   }
 
