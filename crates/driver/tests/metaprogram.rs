@@ -39,6 +39,17 @@ add_build_string :: (data: string, w: Workspace, code := #code,null, loc := #cal
 compiler_report :: (message: string, loc := #caller_location, mode := Report.ERROR) #compiler;
 compiler_get_version_info :: (version_info_return: *Version_Info) -> string #compiler;
 compiler_get_base_path :: () -> string #compiler;
+
+Build_Options_During_Compile :: struct {
+  do_output := true;
+  write_added_strings := true;
+  append_executable_filename_extension := true;
+  interactive_bytecode_debugger := false;
+  append_linker_arguments: [] string;
+  output_executable_name: string;
+  output_path           : string;
+}
+set_build_options_dc :: (options: Build_Options_During_Compile, w: Workspace = -1) #compiler;
 ";
 
 struct Fixture {
@@ -565,4 +576,34 @@ fn a_workspace_can_be_a_library_with_no_main() {
     return;
   };
   assert_built(&report, &fixture.path("shared.so"));
+}
+
+#[test]
+fn set_build_options_dc_can_turn_this_compilations_own_output_off() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#run set_build_options_dc(.{do_output = false});\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(!report.failed, "{}", report.diagnostics.join(""));
+  assert!(
+    !fixture.path("main").exists(),
+    "a metaprogram that asked for no output should get none"
+  );
+}
+
+#[test]
+fn set_build_options_dc_renames_the_output() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#run set_build_options_dc(.{output_executable_name = \"renamed\"});\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("renamed"));
 }

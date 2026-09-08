@@ -163,6 +163,7 @@ pub fn run_input(
     options,
     stage,
     state.build_options_layout,
+    state.during_compile_layout,
     watched.clone(),
   ));
   let outer = oj_meta::install(state);
@@ -182,6 +183,19 @@ pub fn run_input(
   if report.failed {
     return report;
   }
+
+  // `set_build_options_dc` changes a compilation that is already running, so
+  // what the metaprogram said about this one is read here rather than before
+  // it started (**C§3.1**).
+  let mut effective = options.clone();
+  if let Some(current) = meta
+    .workspaces
+    .iter()
+    .find(|workspace| workspace.id == meta.current)
+  {
+    apply_during_compile(current, &meta.during_compile_layout, &mut effective);
+  }
+  let options = &effective;
 
   // Whatever compile time wrote into an ordinary global is thrown away before
   // the executable is written; `#no_reset` is what survives (**L§12.3**).
@@ -321,6 +335,9 @@ fn metaprogram_state(checker: &mut oj_sema::Checker<'_>, options: &BuildOptions)
     meta.default_build_options = checker.default_bytes(build_options).unwrap_or_default();
     meta.build_options_layout = build_options_layout(checker, build_options);
   }
+  if let Some(during_compile) = checker.type_named("Build_Options_During_Compile") {
+    meta.during_compile_layout = during_compile_layout(checker, during_compile);
+  }
   meta
 }
 
@@ -330,22 +347,7 @@ fn build_options_layout(
   build_options: oj_types::TypeId,
 ) -> oj_meta::BuildOptionsLayout {
   let mut layout = oj_meta::BuildOptionsLayout::default();
-  let Some(definition) = checker.types().struct_of(build_options) else {
-    return layout;
-  };
-  let members: Vec<(String, u64)> = checker
-    .types()
-    .struct_info(definition)
-    .members
-    .iter()
-    .map(|member| {
-      (
-        checker.interner().resolve_lossy(member.name).into_owned(),
-        member.offset,
-      )
-    })
-    .collect();
-  for (name, offset) in members {
+  for (name, offset) in struct_members(checker, build_options) {
     match name.as_str() {
       "output_executable_name" => layout.output_executable_name = Some(offset),
       "output_path" => layout.output_path = Some(offset),
@@ -404,12 +406,13 @@ fn workspace_compiler(
   options: &BuildOptions,
   stage: Stage,
   layout: oj_meta::BuildOptionsLayout,
+  dc_layout: oj_meta::DuringCompileLayout,
   sink: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
 ) -> oj_meta::Compiler {
   let outer = outer.to_path_buf();
   let options = options.clone();
   std::rc::Rc::new(move |workspace: &oj_meta::Workspace| {
-    let (input, nested) = workspace_input(workspace, &layout, &outer, &options);
+    let (input, nested) = workspace_input(workspace, &layout, &dc_layout, &outer, &options);
     let report = run_input(&input, &nested, stage, None);
     let mut compiled = report.compiled;
     compiled.errors = report.diagnostics.len();
@@ -424,6 +427,7 @@ fn workspace_compiler(
 fn workspace_input(
   workspace: &oj_meta::Workspace,
   layout: &oj_meta::BuildOptionsLayout,
+  dc_layout: &oj_meta::DuringCompileLayout,
   outer: &Path,
   options: &BuildOptions,
 ) -> (Input, BuildOptions) {
@@ -451,6 +455,7 @@ fn workspace_input(
   {
     nested.append_extension = append != 0;
   }
+  apply_during_compile(workspace, dc_layout, &mut nested);
   nested.import_remaps = workspace
     .remaps
     .iter()
@@ -476,6 +481,85 @@ fn workspace_input(
   };
   (input, nested)
 }
+/// Where the `Build_Options_During_Compile` members the driver acts on sit
+/// (**C§3.1**).
+fn during_compile_layout(
+  checker: &mut oj_sema::Checker<'_>,
+  during_compile: oj_types::TypeId,
+) -> oj_meta::DuringCompileLayout {
+  let mut layout = oj_meta::DuringCompileLayout {
+    size: checker
+      .layout(during_compile)
+      .map_or(0, |l| l.size as usize),
+    ..oj_meta::DuringCompileLayout::default()
+  };
+  for (name, offset) in struct_members(checker, during_compile) {
+    match name.as_str() {
+      "do_output" => layout.do_output = Some(offset),
+      "append_executable_filename_extension" => {
+        layout.append_executable_filename_extension = Some(offset);
+      }
+      "output_executable_name" => layout.output_executable_name = Some(offset),
+      "output_path" => layout.output_path = Some(offset),
+      _ => {}
+    }
+  }
+  layout
+}
+
+/// The members of a struct the checker laid out, by name and offset.
+fn struct_members(
+  checker: &mut oj_sema::Checker<'_>,
+  type_id: oj_types::TypeId,
+) -> Vec<(String, u64)> {
+  let Some(definition) = checker.types().struct_of(type_id) else {
+    return Vec::new();
+  };
+  checker
+    .types()
+    .struct_info(definition)
+    .members
+    .iter()
+    .map(|member| {
+      (
+        checker.interner().resolve_lossy(member.name).into_owned(),
+        member.offset,
+      )
+    })
+    .collect()
+}
+
+/// What a `set_build_options_dc` changes about a compilation that is already
+/// running (**C§3.1**).
+fn apply_during_compile(
+  workspace: &oj_meta::Workspace,
+  layout: &oj_meta::DuringCompileLayout,
+  options: &mut BuildOptions,
+) {
+  if workspace.during_compile.is_none() {
+    return;
+  }
+  if workspace.during_compile_bool(layout, |layout| layout.do_output) == Some(false) {
+    options.output_type = oj_link::OutputType::NoOutput;
+  }
+  if let Some(append) =
+    workspace.during_compile_bool(layout, |layout| layout.append_executable_filename_extension)
+  {
+    options.append_extension = append;
+  }
+  if let Some(name) =
+    workspace.during_compile_string(layout, |layout| layout.output_executable_name)
+    && !name.is_empty()
+  {
+    options.output_executable_name = Some(name);
+  }
+  if let Some(path) = workspace.during_compile_string(layout, |layout| layout.output_path)
+    && !path.is_empty()
+  {
+    options.output_path = Some(PathBuf::from(path));
+  }
+}
+
 /// Turns what a metaprogram reported into diagnostics of the compilation
 /// (**C§3.3**).
 fn report_metaprogram_diagnostics(meta: &oj_meta::Meta, report: &mut Report) {
@@ -507,7 +591,13 @@ fn build_workspaces(
   report: &mut Report,
 ) {
   for workspace in meta.buildable() {
-    let (input, nested) = workspace_input(workspace, &meta.build_options_layout, outer, options);
+    let (input, nested) = workspace_input(
+      workspace,
+      &meta.build_options_layout,
+      &meta.during_compile_layout,
+      outer,
+      options,
+    );
     let inner = run_input(&input, &nested, stage, None);
     report.diagnostics.extend(inner.diagnostics);
     if inner.failed {

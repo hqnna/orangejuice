@@ -61,6 +61,17 @@ pub struct BuildOptionsLayout {
   pub append_executable_filename_extension: Option<u64>,
 }
 
+/// Where the `Build_Options_During_Compile` members the driver acts on sit
+/// (**C§3.1**).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DuringCompileLayout {
+  pub size: usize,
+  pub do_output: Option<u64>,
+  pub append_executable_filename_extension: Option<u64>,
+  pub output_executable_name: Option<u64>,
+  pub output_path: Option<u64>,
+}
+
 /// A compilation a metaprogram asked for (**C§3.1**). Its build options are
 /// kept as the bytes the program sees, since `Build_Options` is the
 /// distribution's struct rather than one of ours; what the driver acts on is
@@ -82,6 +93,9 @@ pub struct Workspace {
   pub implicit: bool,
   /// `remap_import` calls: host module, import name, replacement (**C§3.3**).
   pub remaps: Vec<(String, String, String)>,
+  /// The bytes of the last `set_build_options_dc`, which may be set while the
+  /// workspace is already compiling (**C§3.1**).
+  pub during_compile: Option<Vec<u8>>,
   /// Whether a metaprogram watched this workspace compile, in which case the
   /// driver has nothing left to do for it.
   pub intercepted: bool,
@@ -102,21 +116,47 @@ impl Workspace {
     self.options.get(offset).copied()
   }
 
+  /// One `string` member of a `Build_Options_During_Compile` a metaprogram
+  /// set, or `None` when it set none at all.
+  pub fn during_compile_string(
+    &self,
+    layout: &DuringCompileLayout,
+    member: impl FnOnce(&DuringCompileLayout) -> Option<u64>,
+  ) -> Option<String> {
+    let bytes = self.during_compile.as_ref()?;
+    let offset = member(layout)? as usize;
+    read_string(bytes.get(offset..offset + size_of::<Str>())?)
+  }
+
+  /// One `bool` member of a `Build_Options_During_Compile`.
+  pub fn during_compile_bool(
+    &self,
+    layout: &DuringCompileLayout,
+    member: impl FnOnce(&DuringCompileLayout) -> Option<u64>,
+  ) -> Option<bool> {
+    let bytes = self.during_compile.as_ref()?;
+    let offset = member(layout)? as usize;
+    bytes.get(offset).map(|value| *value != 0)
+  }
   pub fn option_string(
     &self,
     layout: &BuildOptionsLayout,
     member: impl FnOnce(&BuildOptionsLayout) -> Option<u64>,
   ) -> Option<String> {
     let offset = member(layout)? as usize;
-    let bytes = self.options.get(offset..offset + size_of::<Str>())?;
-    let count = i64::from_ne_bytes(bytes[..8].try_into().ok()?);
-    let data = usize::from_ne_bytes(bytes[8..16].try_into().ok()?) as *const u8;
-    if count <= 0 || data.is_null() {
-      return Some(String::new());
-    }
-    let text = unsafe { std::slice::from_raw_parts(data, count as usize) };
-    Some(String::from_utf8_lossy(text).into_owned())
+    read_string(self.options.get(offset..offset + size_of::<Str>())?)
   }
+}
+
+/// A Jai `string` sitting in compile-time memory, followed back to its bytes.
+fn read_string(bytes: &[u8]) -> Option<String> {
+  let count = i64::from_ne_bytes(bytes[..8].try_into().ok()?);
+  let data = usize::from_ne_bytes(bytes[8..16].try_into().ok()?) as *const u8;
+  if count <= 0 || data.is_null() {
+    return Some(String::new());
+  }
+  let text = unsafe { std::slice::from_raw_parts(data, count as usize) };
+  Some(String::from_utf8_lossy(text).into_owned())
 }
 /// What compiling one workspace produced, as the message stream needs it
 /// (**C§3.2**). The driver fills this in; `oj-meta` turns it into messages.
@@ -181,6 +221,8 @@ pub struct Meta {
   pub default_build_options: Vec<u8>,
   /// Where the members of those bytes are.
   pub build_options_layout: BuildOptionsLayout,
+  /// Where the members of a `Build_Options_During_Compile` are.
+  pub during_compile_layout: DuringCompileLayout,
   /// The workspace the metaprogram is watching, if it began intercepting.
   pub intercept: Option<Intercept>,
   /// Every message produced so far. A metaprogram keeps the pointers it was
@@ -255,6 +297,7 @@ impl Meta {
       destroyed: false,
       implicit: false,
       remaps: Vec::new(),
+      during_compile: None,
       intercepted: false,
     });
     id

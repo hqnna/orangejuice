@@ -69,9 +69,29 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
       get_current_workspace as *const () as usize,
     ),
     ("remap_import", remap_import as *const () as usize),
+    (
+      "set_build_options_dc",
+      set_build_options_dc as *const () as usize,
+    ),
   ]
 }
 
+/// `set_build_options_dc :: (options: Build_Options_During_Compile, w: Workspace = -1)`
+unsafe extern "C" fn set_build_options_dc(options: *const u8, w: i64, _context: *mut c_void) {
+  if options.is_null() {
+    return;
+  }
+  with(|meta| {
+    let size = meta.during_compile_layout.size;
+    if size == 0 {
+      return;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(options, size) }.to_vec();
+    if let Some(workspace) = meta.workspace(w) {
+      workspace.during_compile = Some(bytes);
+    }
+  });
+}
 /// `get_current_workspace :: () -> Workspace` (Preload)
 unsafe extern "C" fn get_current_workspace(_context: *mut c_void) -> i64 {
   with(|meta| meta.current).unwrap_or(0)

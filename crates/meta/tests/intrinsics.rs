@@ -21,7 +21,10 @@ fn declared_symbols(text: &str) -> HashSet<String> {
     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
       continue;
     }
+    // Only what stands between `#compiler` and the `;` renames it; a trailing
+    // comment may have quotes of its own.
     let tail = &line[line.find("#compiler").expect("just checked") + "#compiler".len()..];
+    let tail = tail.split_once(';').map_or(tail, |(head, _)| head);
     let renamed = tail
       .split_once('"')
       .and_then(|(_, rest)| rest.split_once('"'))

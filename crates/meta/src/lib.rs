@@ -28,8 +28,8 @@ pub use message::{
   Phase, Stored,
 };
 pub use state::{
-  BuildOptionsLayout, Compiled, CompiledFile, CompiledModule, Compiler, Intercept, Meta, Report,
-  ReportMode, Workspace, WorkspaceStatus,
+  BuildOptionsLayout, Compiled, CompiledFile, CompiledModule, Compiler, DuringCompileLayout,
+  Intercept, Meta, Report, ReportMode, Workspace, WorkspaceStatus,
 };
 
 thread_local! {
