@@ -18,6 +18,7 @@ mod decl;
 mod dump;
 mod expr;
 mod fold;
+mod insert;
 mod literal;
 mod loops;
 mod member;

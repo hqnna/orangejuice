@@ -87,6 +87,44 @@ pub struct Unit {
   pub parsed: Arc<Parsed>,
 }
 
+/// A parsed `#insert` string: the program it stands for, and where it went.
+/// It is not a [`Unit`] — nothing loaded it, and a `#run` written in it belongs
+/// to whatever scope the `#insert` expanded into rather than to a file.
+pub struct Insertion {
+  pub path: PathBuf,
+  pub scope: ScopeId,
+  pub parsed: Arc<Parsed>,
+}
+
+/// An `#insert` the scope tree left for the typechecker, and where its
+/// program goes once the text is known (**L§13.2**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingInsert {
+  pub source: SourceId,
+  pub node: NodeId,
+  pub scope: ScopeId,
+  pub kind: InsertKind,
+}
+
+/// What one `#insert` expanded to (**L§13.2**): the block its string parsed
+/// into, and the scope its statements were admitted to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Expansion {
+  pub source: SourceId,
+  pub root: NodeId,
+  pub scope: ScopeId,
+}
+
+/// The kind of scope an `#insert` expands into (**L§13.2**). A data scope
+/// obeys the `#scope_*` directive in effect; a struct or enum body has one
+/// target; a block takes the statements in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InsertKind {
+  Data(Visibility),
+  Members,
+  Imperative,
+}
+
 /// Where declarations written at this point in a data scope go. A file's
 /// `#scope_*` directive moves the target between the file scope and the module
 /// scope (**L§4.4**); a struct or enum body has only one target.
@@ -157,6 +195,14 @@ pub struct Program<'a> {
   tree: ScopeTree,
   units: boxcar::Vec<Unit>,
   unit_of_source: RefCell<HashMap<SourceId, usize>>,
+  /// The programs `#insert`s expanded to, which grow after the tree is first
+  /// built: this is the mutable program of **L§13.2**.
+  inserted: boxcar::Vec<Insertion>,
+  inserted_of_source: RefCell<HashMap<SourceId, usize>>,
+  expansions: RefCell<HashMap<(SourceId, NodeId), Expansion>>,
+  /// The `#insert`s whose text the scope tree could not work out on its own:
+  /// they need a type or a `#run`, so the typechecker expands them.
+  pending_inserts: RefCell<Vec<PendingInsert>>,
   modules: RefCell<HashMap<ModuleKey, ScopeId>>,
   loaded: RefCell<HashSet<(ScopeId, PathBuf)>>,
   /// The member scope of each struct and enum definition, so that a `using` of
@@ -206,8 +252,11 @@ pub struct Program<'a> {
 
 impl AstSource for Program<'_> {
   fn ast_of(&self, source: SourceId) -> Option<&oj_syntax::ast::Ast> {
-    let index = *self.unit_of_source.borrow().get(&source)?;
-    Some(&self.units[index].parsed.ast)
+    if let Some(index) = self.unit_of_source.borrow().get(&source).copied() {
+      return Some(&self.units[index].parsed.ast);
+    }
+    let index = *self.inserted_of_source.borrow().get(&source)?;
+    Some(&self.inserted[index].parsed.ast)
   }
 }
 
@@ -244,6 +293,10 @@ impl<'a> Program<'a> {
       tree,
       units: boxcar::Vec::new(),
       unit_of_source: RefCell::default(),
+      inserted: boxcar::Vec::new(),
+      inserted_of_source: RefCell::default(),
+      expansions: RefCell::default(),
+      pending_inserts: RefCell::default(),
       modules: RefCell::default(),
       loaded: RefCell::default(),
       aggregate_scopes: RefCell::default(),
@@ -556,11 +609,14 @@ impl<'a> Program<'a> {
   }
 
   fn path_of(&self, source: SourceId) -> PathBuf {
+    if let Some(index) = self.unit_of_source.borrow().get(&source).copied() {
+      return self.units[index].path.clone();
+    }
     self
-      .unit_of_source
+      .inserted_of_source
       .borrow()
       .get(&source)
-      .map(|index| self.units[*index].path.clone())
+      .map(|index| self.inserted[*index].path.clone())
       .unwrap_or_default()
   }
 
@@ -624,6 +680,13 @@ impl<'a> Program<'a> {
       NodeData::Placeholder => {
         // `#placeholder NAME;` parses as a declaration whose value is the
         // placeholder marker; a bare marker has nothing to declare.
+      }
+      NodeData::DirectiveInsert(_) => {
+        let kind = match target.module {
+          Some(_) => InsertKind::Data(target.visibility),
+          None => InsertKind::Members,
+        };
+        self.insert(parsed, statement, target.scope, kind, source);
       }
       NodeData::Struct(_) => self.anonymous_aggregate(parsed, statement, target, source),
       // An enum body's `#if` branches parse as imperative statements, so a bare
@@ -1597,11 +1660,11 @@ impl<'a> Program<'a> {
   }
 
   fn parsed_of(&self, source: SourceId) -> Option<Arc<Parsed>> {
-    self
-      .unit_of_source
-      .borrow()
-      .get(&source)
-      .map(|index| Arc::clone(&self.units[*index].parsed))
+    if let Some(index) = self.unit_of_source.borrow().get(&source).copied() {
+      return Some(Arc::clone(&self.units[index].parsed));
+    }
+    let index = *self.inserted_of_source.borrow().get(&source)?;
+    Some(Arc::clone(&self.inserted[index].parsed))
   }
 
   fn fold_condition(&self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<bool> {
@@ -1613,6 +1676,124 @@ impl<'a> Program<'a> {
       .eval(scope, source, node)
   }
 
+  // --------------------------------------------------------------- insert ---
+
+  /// The `#insert`s still waiting for the typechecker to say what their text
+  /// is (**L§13.2**).
+  pub fn pending_inserts(&self) -> Vec<PendingInsert> {
+    self.pending_inserts.borrow().clone()
+  }
+
+  /// The program an `#insert` expanded to, when one has expanded (**L§13.2**).
+  pub fn expansion_of(&self, source: SourceId, node: NodeId) -> Option<Expansion> {
+    self.expansions.borrow().get(&(source, node)).copied()
+  }
+
+  /// Parses `text` as the statements an `#insert` stands for and admits its
+  /// declarations into `scope`, which is the mutable program of **L§13.2**: the
+  /// names it declares are visible from the insertion point on, and the block
+  /// it returns is what the back end lowers in the `#insert`'s place.
+  ///
+  /// The string is lexed under the path of the file the `#insert` was written
+  /// in, so a `#load` inside it resolves the way one written there would.
+  /// Expanding the same `#insert` twice is not possible: the first expansion is
+  /// remembered and handed back.
+  pub fn insert_source(
+    &self,
+    scope: ScopeId,
+    kind: InsertKind,
+    at: (SourceId, NodeId),
+    text: &[u8],
+  ) -> Option<Expansion> {
+    if let Some(existing) = self.expansion_of(at.0, at.1) {
+      return Some(existing);
+    }
+
+    let path = self.path_of(at.0);
+    let source = self.sources.add_bytes(path.clone(), text.to_vec());
+    let file = self.sources.file(source);
+    let parsed = Arc::new(oj_syntax::parse(file.bytes(), source, self.interner));
+    self
+      .diagnostics
+      .borrow_mut()
+      .extend(parsed.diagnostics.iter().cloned());
+
+    self
+      .inserted_of_source
+      .borrow_mut()
+      .insert(source, self.inserted.count());
+    self.inserted.push(Insertion {
+      path,
+      scope,
+      parsed: Arc::clone(&parsed),
+    });
+
+    let expansion = Expansion {
+      source,
+      root: parsed.root,
+      scope,
+    };
+    self.expansions.borrow_mut().insert(at, expansion);
+
+    let NodeData::Block(block) = parsed.ast.data(parsed.root) else {
+      return Some(expansion);
+    };
+    let statements = block.statements.clone();
+    match kind {
+      InsertKind::Data(visibility) => {
+        let mut target = DataTarget {
+          scope,
+          module: self.tree.enclosing_module(scope),
+          visibility,
+          conditional: self.conditional.get() > 0,
+        };
+        self.data_statements(&parsed, &statements, &mut target, source);
+      }
+      InsertKind::Members => {
+        let mut target = DataTarget::nested(scope);
+        self.data_statements(&parsed, &statements, &mut target, source);
+      }
+      InsertKind::Imperative => {
+        for statement in &statements {
+          self.imperative_statement(&parsed, *statement, scope, source);
+        }
+      }
+    }
+    Some(expansion)
+  }
+
+  /// Expands an `#insert` whose operand already folds to a string, which is
+  /// every one whose text does not have to wait for a type or a `#run`. The
+  /// rest keep the scope waiting (**L§4.3**) until the typechecker gets to
+  /// them.
+  fn insert(
+    &self,
+    parsed: &Parsed,
+    node: NodeId,
+    scope: ScopeId,
+    kind: InsertKind,
+    source: SourceId,
+  ) {
+    let NodeData::DirectiveInsert(insert) = parsed.ast.data(node) else {
+      return;
+    };
+    let expression = insert.expression;
+    if let Some(ConstValue::String(text)) = self.fold(scope, source, expression) {
+      self.insert_source(scope, kind, (source, node), &text);
+      return;
+    }
+    // An `#insert` may declare anything; without a `#placeholder` the
+    // reference does not wait for it, but it may still provide names
+    // (**L§11.7**).
+    self.tree.add_pending(scope, PendingProvider::Insert);
+    self.pending_inserts.borrow_mut().push(PendingInsert {
+      source,
+      node,
+      scope,
+      kind,
+    });
+    self.walk(parsed, expression, scope, source);
+  }
   // ------------------------------------------------------- diagnostics ------
 
   fn error(&self, source: SourceId, span: Span, message: impl Into<String>) {
@@ -1910,13 +2091,18 @@ impl Program<'_> {
           source,
         );
       }
-      NodeData::DirectiveInsert(insert) => {
-        let expression = insert.expression;
-        // An `#insert` may declare anything; without a `#placeholder` the
-        // reference does not wait for it, but it may still provide names
-        // (**L§11.7**).
-        self.tree.add_pending(scope, PendingProvider::Insert);
-        self.walk(parsed, expression, scope, source);
+      NodeData::DirectiveInsert(_) => {
+        let kind = if self.tree.scope_kind(scope).is_program_scope() {
+          InsertKind::Data(Visibility::Export)
+        } else if matches!(
+          self.tree.scope_kind(scope),
+          ScopeKind::StructMembers | ScopeKind::Enum
+        ) {
+          InsertKind::Members
+        } else {
+          InsertKind::Imperative
+        };
+        self.insert(parsed, node, scope, kind, source);
       }
       NodeData::DirectiveProcedureName { argument } => {
         if let Some(argument) = *argument {

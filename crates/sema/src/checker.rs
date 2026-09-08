@@ -261,6 +261,10 @@ pub struct Checker<'a> {
   /// Every declaration by the node it was written at, built on first use: a
   /// back end walking a body finds the local a statement introduced this way.
   pub(crate) decl_nodes: Option<HashMap<(SourceId, NodeId), DeclId>>,
+  /// How much of the tree that index covers. An `#insert` declares names into
+  /// a tree the checker is already walking, so the index has to catch up
+  /// (**L§13.2**).
+  pub(crate) decl_nodes_indexed: u32,
   diagnostics: Vec<Diagnostic>,
   reported: HashSet<(SourceId, Span, String)>,
   depth: u32,
@@ -385,6 +389,7 @@ impl<'a> Checker<'a> {
       member_defaults: HashMap::new(),
       stack: Vec::new(),
       decl_nodes: None,
+      decl_nodes_indexed: 0,
       diagnostics: Vec::new(),
       reported: HashSet::new(),
       depth: 0,
@@ -420,8 +425,13 @@ impl<'a> Checker<'a> {
   /// Types every declaration of the program, then lays out every struct whose
   /// members nothing asked for.
   pub fn check(&mut self) {
-    for index in 0..self.program.tree().declaration_count() {
+    self.expand_inserts();
+    // An `#insert` declares names into a scope the tree already holds, so the
+    // count grows while the pass runs (**L§13.2**).
+    let mut index = 0;
+    while index < self.program.tree().declaration_count() {
       self.decl_type(DeclId(index as u32));
+      index += 1;
     }
     while let Some(definition) = self.pending_bodies.keys().copied().next() {
       self.complete_struct(definition);

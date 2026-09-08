@@ -1423,3 +1423,51 @@ fn bake_constants_binds_a_polymorph_variable() {
     "42\n",
   );
 }
+
+#[test]
+fn an_inserted_string_declares_names_in_the_block_around_it() {
+  assert_output(
+    "main :: () {\n\
+       #insert \"a := 20; b := 22;\";\n\
+       put_number(a + b);\n\
+     }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn an_inserted_string_can_be_produced_by_a_run() {
+  assert_output(
+    "gen :: () -> string { return \"answer := 42;\"; }\n\
+     main :: () {\n\
+       #insert #run gen();\n\
+       put_number(answer);\n\
+     }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn an_inserted_string_generates_struct_members_and_enum_values() {
+  assert_output(
+    "Pair :: struct { #insert \"left: int; right: int;\"; }\n\
+     Color :: enum { #insert \"RED; GREEN; BLUE;\"; }\n\
+     main :: () {\n\
+       p: Pair;\n\
+       p.left = 20;\n\
+       p.right = 22;\n\
+       put_number(p.left + p.right);\n\
+       put_number(cast(int) Color.BLUE);\n\
+     }\n",
+    "42\n2\n",
+  );
+}
+
+#[test]
+fn an_inserted_string_declares_names_at_file_scope() {
+  assert_output(
+    "#insert \"TWENTY :: 20; TWENTY_TWO :: 22;\";\n\
+     main :: () { put_number(TWENTY + TWENTY_TWO); }\n",
+    "42\n",
+  );
+}

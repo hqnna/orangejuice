@@ -510,3 +510,22 @@ fn a_local_is_not_in_scope_in_its_own_initializer() {
     |checker| assert!(errors(checker).is_empty()),
   );
 }
+
+#[test]
+fn an_inserted_string_declares_names_the_checker_then_types() {
+  check(
+    "
+    #insert \"TOP :: 20;\";
+    Pair :: struct { #insert \"left: int; right: int;\"; }
+    Color :: enum { #insert \"RED; GREEN; BLUE;\"; }
+    total :: TOP + 22;
+    ",
+    |checker| {
+      assert_eq!(errors(checker), Vec::<String>::new());
+      assert_eq!(type_of(checker, "TOP"), "s64");
+      assert_eq!(type_of(checker, "total"), "s64");
+      assert_eq!(size_of(checker, "Pair"), Some(16));
+      assert_eq!(type_of(checker, "BLUE"), "Color");
+    },
+  );
+}

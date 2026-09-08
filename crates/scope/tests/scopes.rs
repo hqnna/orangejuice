@@ -727,3 +727,57 @@ fn every_diagnostic_names_a_source_the_map_can_render() {
     assert!(oj_diag::render(diagnostic, &file).contains("Could not read"));
   }
 }
+
+#[test]
+fn an_insert_of_a_literal_string_declares_its_names_where_it_was_written() {
+  let fixture = Fixture::new();
+  fixture.write(
+    "main.jai",
+    "#insert \"TOP :: 1;\";\n\
+     Pair :: struct { #insert \"left: int; right: int;\"; }\n\
+     main :: () {\n\
+       #insert \"a := 7;\";\n\
+       b := a + TOP;\n\
+     }\n",
+  );
+
+  resolve(&fixture, "main.jai", |program, interner| {
+    assert_eq!(errors(program), Vec::<String>::new());
+    assert_eq!(undeclared(program), Vec::<String>::new());
+
+    let dump = oj_scope::print_scopes(program);
+    assert!(dump.contains("constant TOP"), "{dump}");
+    assert!(dump.contains("variable left"), "{dump}");
+    assert!(dump.contains("variable right"), "{dump}");
+    assert!(dump.contains("variable a"), "{dump}");
+
+    let tree = program.tree();
+    let a = interner.intern(b"a");
+    let block = tree
+      .scope_ids()
+      .find(|id| tree.scope_kind(*id) == ScopeKind::Imperative)
+      .expect("the body opens a block");
+    assert!(matches!(tree.lookup(block, a), Resolution::Found(_)));
+  });
+}
+
+#[test]
+fn an_insert_whose_text_needs_the_typechecker_leaves_the_scope_waiting() {
+  let fixture = Fixture::new();
+  fixture.write(
+    "main.jai",
+    "gen :: () -> string { return \"a := 7;\"; }\n\
+     main :: () {\n\
+       #insert #run gen();\n\
+       b := a;\n\
+     }\n",
+  );
+
+  resolve(&fixture, "main.jai", |program, _| {
+    assert_eq!(errors(program), Vec::<String>::new());
+    // The name is not there yet, but nothing complains: the scope holds an
+    // `#insert` nobody has expanded (**L§4.3**).
+    assert_eq!(undeclared(program), Vec::<String>::new());
+    assert_eq!(program.pending_inserts().len(), 1);
+  });
+}

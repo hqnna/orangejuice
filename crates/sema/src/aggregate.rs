@@ -271,6 +271,17 @@ impl Checker<'_> {
         }
       }
       NodeData::Block(_) => self.struct_statements(state, statement),
+      // An `#insert` in a struct body generates members (**L§13.2**); they are
+      // laid out where the directive stands.
+      NodeData::DirectiveInsert(_) => {
+        let (scope, source) = (state.scope, state.source);
+        let Some(expansion) = self.expand_insert(scope, source, statement) else {
+          return;
+        };
+        let previous = std::mem::replace(&mut state.source, expansion.source);
+        self.struct_statements(state, expansion.root);
+        state.source = previous;
+      }
       _ => {}
     }
   }
@@ -517,6 +528,27 @@ impl Checker<'_> {
         NodeData::Block(_) => {
           self.enum_statements(definition, type_id, scope, source, live, *statement)
         }
+        // A bare name is a member with the next value, which is how one
+        // written in a `#if` branch or in an `#insert`ed body parses.
+        NodeData::Ident(ident) => {
+          if live.contains(statement) {
+            let name = ident.name;
+            self.enum_named_member(definition, type_id, scope, source, *statement, name, None);
+          }
+        }
+        // An `#insert` in an enum body generates members (**L§13.2**).
+        NodeData::DirectiveInsert(_) => {
+          if let Some(expansion) = self.expand_insert(scope, source, *statement) {
+            self.enum_statements(
+              definition,
+              type_id,
+              scope,
+              expansion.source,
+              live,
+              expansion.root,
+            );
+          }
+        }
         _ => {}
       }
     }
@@ -534,13 +566,38 @@ impl Checker<'_> {
     let Some(name) = declaration.name.and_then(|n| self.ident_name(source, n)) else {
       return;
     };
+    self.enum_named_member(
+      definition,
+      type_id,
+      scope,
+      source,
+      node,
+      name,
+      declaration.expression,
+    );
+  }
+
+  /// One member of an enum, however it was written. An `#insert`ed body is
+  /// parsed the way a file is, so a bare `RED;` arrives as an identifier
+  /// rather than as a declaration (**L§9**, **L§13.2**).
+  #[allow(clippy::too_many_arguments)]
+  fn enum_named_member(
+    &mut self,
+    definition: oj_types::EnumId,
+    type_id: TypeId,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    name: oj_lexer::Symbol,
+    expression: Option<NodeId>,
+  ) {
     // The member has to exist before its own expression is folded, so that a
     // member naming an earlier one resolves.
     if let Some(id) = self.decl_in_scope(scope, node) {
       self.publish(id, DeclType::value(type_id));
     }
 
-    let value = match declaration.expression {
+    let value = match expression {
       Some(expression) => self.enum_expression_value(definition, scope, source, expression),
       None => None,
     };

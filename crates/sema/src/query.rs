@@ -174,16 +174,18 @@ impl Checker<'_> {
   }
 
   fn decl_index(&mut self) -> &HashMap<(SourceId, NodeId), DeclId> {
-    if self.decl_nodes.is_none() {
+    let count = self.program().tree().declaration_count() as u32;
+    if self.decl_nodes.is_none() || self.decl_nodes_indexed < count {
       let tree = self.program().tree();
-      let mut index = HashMap::new();
-      for id in (0..tree.declaration_count() as u32).map(DeclId) {
+      let mut index = self.decl_nodes.take().unwrap_or_default();
+      for id in (self.decl_nodes_indexed..count).map(DeclId) {
         let decl = tree.decl(id);
         if let (Some(source), Some(node)) = (decl.source, decl.node) {
           index.entry((source, node)).or_insert(id);
         }
       }
       self.decl_nodes = Some(index);
+      self.decl_nodes_indexed = count;
     }
     self
       .decl_nodes
@@ -529,5 +531,17 @@ impl Checker<'_> {
       varargs,
       varargs_spread,
     })
+  }
+
+  /// The program an `#insert` splices in, expanding it if nobody has yet
+  /// (**L§13.2**). The block it names is lowered where the `#insert` stands,
+  /// in the scope the expansion recorded.
+  pub fn insert_expansion(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<oj_scope::Expansion> {
+    self.expand_insert(scope, source, node)
   }
 }

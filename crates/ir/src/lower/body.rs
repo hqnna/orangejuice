@@ -336,31 +336,20 @@ impl Lowering<'_, '_> {
       // A `#run` statement already happened, when the front end typechecked
       // the body around it (**L§6.11**); the executable holds nothing for it.
       NodeData::DirectiveRun(_) => {}
-      // An `#insert` adds declarations to a scope the front end already built,
-      // which is the mutable program a metaprogram works on (`docs/spec.md`
-      // §10).
-      // `#insert code;` splices the piece of program a `Code` value names, in
-      // the scope it was written in (**L§13.2**).
-      NodeData::DirectiveInsert(insert) => {
-        let expression = insert.expression;
-        let scope = self.checker.scope_for(source, expression, self.body_scope);
-        match self.checker.expression(scope, source, expression).constant {
-          Some(Const {
-            value:
-              Value::Code {
-                source: code_source,
-                node: code,
-                scope: code_scope,
-              },
-            ..
-          }) => {
-            let previous_source = std::mem::replace(&mut self.body_source, code_source);
-            let previous_scope = std::mem::replace(&mut self.body_scope, code_scope);
-            self.statement(code);
+      // An `#insert` splices a piece of program into the block around it: the
+      // statements a string parsed into, or the ones a `Code` value names, in
+      // the scope the front end admitted them to (**L§13.2**).
+      NodeData::DirectiveInsert(_) => {
+        let scope = self.body_scope;
+        match self.checker.insert_expansion(scope, source, node) {
+          Some(expansion) => {
+            let previous_source = std::mem::replace(&mut self.body_source, expansion.source);
+            let previous_scope = std::mem::replace(&mut self.body_scope, expansion.scope);
+            self.statement(expansion.root);
             self.body_source = previous_source;
             self.body_scope = previous_scope;
           }
-          _ => self.unsupported(source, node, "'#insert'", "M8"),
+          None => self.unsupported(source, node, "'#insert'", "M8"),
         }
       }
       // An `#asm` block is assembled by the back end, which is the milestone

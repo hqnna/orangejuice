@@ -262,6 +262,11 @@ impl Checker<'_> {
         let block = *block;
         self.check_statement(context, block);
       }
+      // An `#insert` splices a program into the block around it (**L§13.2**);
+      // what it spliced is checked here, in the scope it was admitted to.
+      NodeData::DirectiveInsert(_) => {
+        self.check_insert(context, node);
+      }
       NodeData::PushContext { to_push, block, .. } => {
         let (to_push, block) = (*to_push, *block);
         if let Some(to_push) = to_push {
@@ -285,6 +290,30 @@ impl Checker<'_> {
       _ => {
         self.expression_type(scope, source, node);
       }
+    }
+  }
+
+  /// Checks what an `#insert` spliced into the block around it. The statements
+  /// are the caller's, so they are checked with the caller's return types and
+  /// in the scope they were admitted to (**L§13.2**).
+  fn check_insert(&mut self, context: &Context, node: NodeId) {
+    let Some(expansion) = self.expand_insert(context.scope, context.source, node) else {
+      return;
+    };
+    let Some(ast) = self.ast(expansion.source) else {
+      return;
+    };
+    let NodeData::Block(block) = ast.data(expansion.root) else {
+      return;
+    };
+    let statements = block.statements.clone();
+    let inner = Context {
+      returns: context.returns.clone(),
+      scope: expansion.scope,
+      source: expansion.source,
+    };
+    for statement in statements {
+      self.check_statement(&inner, statement);
     }
   }
 

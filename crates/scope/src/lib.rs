@@ -6,7 +6,10 @@ mod tree;
 
 pub use constants::{AstSource, ConstValue, Evaluator};
 pub use dump::{print_scopes, summary};
-pub use program::{Options, ProcedureScopes, Program, Reference, Unit};
+pub use program::{
+  Expansion, InsertKind, Insertion, Options, PendingInsert, ProcedureScopes, Program, Reference,
+  Unit,
+};
 pub use resolve::{Undeclared, undeclared_diagnostics, undeclared_identifiers};
 pub use tree::{
   Branch, Decl, DeclId, DeclKind, ImportEdge, PendingProvider, Resolution, Scope, ScopeId,
