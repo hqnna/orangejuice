@@ -100,6 +100,11 @@ struct Lowering<'c, 'p> {
   /// Global declarations whose initializer is not a constant, in the order
   /// they were reached; they run in a generated procedure before `main`.
   deferred_initializers: Vec<(GlobalId, DeclId)>,
+  /// The `Type_Info` graph of every type the program asked about, and the
+  /// global it is placed in (**L§17**).
+  type_table: crate::typetable::TypeTable,
+  type_table_global: Option<GlobalId>,
+  type_table_symbol: String,
 
   // ------------------------------------------------- the procedure in hand ---
   blocks: Vec<Block>,
@@ -134,6 +139,9 @@ impl<'c, 'p> Lowering<'c, 'p> {
       entry_decl: None,
       context_type,
       deferred_initializers: Vec::new(),
+      type_table: crate::typetable::TypeTable::default(),
+      type_table_global: None,
+      type_table_symbol: String::from(TYPE_TABLE_SYMBOL),
       blocks: Vec::new(),
       locals: Vec::new(),
       value_types: Vec::new(),
@@ -183,7 +191,43 @@ impl<'c, 'p> Lowering<'c, 'p> {
     }
   }
 
-  fn finish(self) -> Lowered {
+  /// The global the type table lives in, created the first time anything asks
+  /// for a `Type_Info` (**L§17**). Its bytes are filled in at the end, once
+  /// every type that was asked about is in the image.
+  fn type_table_id(&mut self) -> GlobalId {
+    if let Some(id) = self.type_table_global {
+      return id;
+    }
+    let id = GlobalId(self.globals.len() as u32);
+    self.globals.push(Global {
+      symbol: self.type_table_symbol.clone(),
+      name: String::from("__type_table"),
+      type_id: TypeId::VOID,
+      init: GlobalInit::Zero,
+      size: 0,
+      alignment: 8,
+      decl: None,
+      no_reset: false,
+      external: false,
+      imported: false,
+    });
+    self.type_table_global = Some(id);
+    id
+  }
+
+  fn place_type_table(&mut self) {
+    let Some(id) = self.type_table_global else {
+      return;
+    };
+    let bytes: Box<[u8]> = Box::from(self.type_table.bytes());
+    let relocations: Box<[(u64, u64)]> = Box::from(self.type_table.relocations());
+    let global = &mut self.globals[id.0 as usize];
+    global.size = bytes.len() as u64;
+    global.init = GlobalInit::Image { bytes, relocations };
+  }
+
+  fn finish(mut self) -> Lowered {
+    self.place_type_table();
     let Self {
       checker,
       procedures,
@@ -711,6 +755,9 @@ impl<'c, 'p> Lowering<'c, 'p> {
 }
 
 const GLOBAL_INIT_SYMBOL: &str = "__oj_global_init";
+
+/// The symbol the `Type_Info` image takes (**L§17**).
+const TYPE_TABLE_SYMBOL: &str = "__oj_type_table";
 
 /// The symbol the program's own entry point gets, so that the generated `main`
 /// the C runtime calls is free (**C§13**).

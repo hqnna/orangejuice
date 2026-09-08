@@ -46,6 +46,13 @@ impl Checker<'_> {
       return built_in;
     }
 
+    // An `Any` is a pair, and Preload writes down what its two members are
+    // called (**L§3.8**).
+    let value_type = match self.types().kind(value_type) {
+      oj_types::TypeKind::Any => self.any_struct_type(),
+      _ => value_type,
+    };
+
     if let Some(definition) = self.types().struct_of(value_type) {
       let member = self.types().struct_info(definition).member(name).cloned();
       if let Some(member) = member {
@@ -70,6 +77,14 @@ impl Checker<'_> {
     }
 
     Expr::UNKNOWN
+  }
+
+  /// `Any_Struct`, which is what an `Any` looks like (**L§17**).
+  pub fn any_struct_type(&mut self) -> TypeId {
+    let name = self.interned().intern(b"Any_Struct");
+    let type_id = self.preload_type(name);
+    self.complete_type(type_id);
+    type_id
   }
 
   /// `T.NAME`: an enum member, or a constant, nested type or procedure

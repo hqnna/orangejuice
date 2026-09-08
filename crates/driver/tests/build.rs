@@ -593,3 +593,115 @@ fn a_run_produces_an_array_the_program_indexes() {
     "abcd\n",
   );
 }
+
+// --------------------------------------------------------------- M6 -------
+//
+// The type table. `type_info(T)` is a pointer into data the compiler laid out,
+// so what is asserted is what the running program reads back out of it.
+
+#[test]
+fn type_info_describes_a_struct() {
+  assert_output(
+    "Point :: struct { x: int; y: float; }\n\
+     main :: () {\n\
+       info := type_info(Point);\n\
+       if info.type == .STRUCT  put(\"struct\\n\");\n\
+       put_number(info.runtime_size);\n\
+       put(info.name);\n\
+       put(\"\\n\");\n\
+       for info.members {\n\
+         put(it.name);\n\
+         put_number(it.offset_in_bytes);\n\
+       }\n\
+     }\n",
+    "struct\n16\nPoint\nx0\ny8\n",
+  );
+}
+
+#[test]
+fn type_info_describes_the_types_a_type_mentions() {
+  assert_output(
+    "main :: () {\n\
+       array := type_info([4] s32);\n\
+       put_number(array.array_count);\n\
+       put_number(array.element_type.runtime_size);\n\
+       pointer := type_info(*float64);\n\
+       put_number(pointer.pointer_to.runtime_size);\n\
+       if type_info(int).signed  put(\"signed\\n\");\n\
+     }\n",
+    "4\n4\n8\nsigned\n",
+  );
+}
+
+#[test]
+fn type_info_describes_an_enum() {
+  assert_output(
+    "Colour :: enum u8 { RED; GREEN; BLUE :: 7; }\n\
+     main :: () {\n\
+       info := type_info(Colour);\n\
+       put(info.name);\n\
+       put(\"\\n\");\n\
+       put_number(info.internal_type.runtime_size);\n\
+       for info.names { put(it); put(\"\\n\"); }\n\
+       for info.values  put_number(it);\n\
+     }\n",
+    "Colour\n1\nRED\nGREEN\nBLUE\n0\n1\n7\n",
+  );
+}
+
+#[test]
+fn a_type_that_mentions_itself_is_laid_out_once() {
+  assert_output(
+    // Following `next` leads back to `Node`'s own record, which only
+    // terminates because the record is placed before it is filled in.
+    "Node :: struct { value: int; next: *Node; }\n\
+     main :: () {\n\
+       info := type_info(Node);\n\
+       next := cast(*Type_Info_Pointer) info.members[1].type;\n\
+       around := cast(*Type_Info_Struct) next.pointer_to;\n\
+       put(around.name);\n\
+       put_number(around.members.count);\n\
+     }\n",
+    "Node2\n",
+  );
+}
+
+#[test]
+fn a_run_reads_the_type_table_at_compile_time() {
+  assert_output(
+    "Point :: struct { x: int; y: float; }\n\
+     count :: () -> int {\n\
+       info := type_info(Point);\n\
+       return info.members.count;\n\
+     }\n\
+     COUNT :: #run count();\n\
+     main :: () { put_number(COUNT); }\n",
+    "2\n",
+  );
+}
+
+#[test]
+fn an_any_carries_the_type_and_the_value_it_was_made_from() {
+  assert_output(
+    "describe :: (value: Any) {\n\
+       if value.type.type == .INTEGER {\n\
+         put(\"integer \");\n\
+         put_number((cast(*int) value.value_pointer).*);\n\
+       } else if value.type.type == .STRING {\n\
+         put(\"string \");\n\
+         put((cast(*string) value.value_pointer).*);\n\
+         put(\"\\n\");\n\
+       } else {\n\
+         put(\"other\\n\");\n\
+       }\n\
+     }\n\
+     Point :: struct { x: int; }\n\
+     main :: () {\n\
+       describe(7);\n\
+       describe(\"hello\");\n\
+       p: Point;\n\
+       describe(p);\n\
+     }\n",
+    "integer 7\nstring hello\nother\n",
+  );
+}

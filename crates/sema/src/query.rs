@@ -177,6 +177,14 @@ impl Checker<'_> {
     self.procedure_body_from(source, header, decl.scope, export_name)
   }
 
+  /// A type Preload declares, by name — the `Type_Info*` structs the type
+  /// table is laid out against (**L§17**). `unknown` when Preload is not
+  /// loaded, which is the case when one file is checked on its own.
+  pub fn preload_named_type(&mut self, name: &str) -> TypeId {
+    let symbol = self.interner().intern(name.as_bytes());
+    self.preload_type(symbol)
+  }
+
   /// The branches a static `#if` decided on, or `None` when its condition did
   /// not fold (**L§6.10**). A back end lowers only what the front end kept.
   pub fn static_if_branches(

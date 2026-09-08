@@ -386,6 +386,14 @@ pub enum GlobalInit {
   /// The bytes compile-time execution left in the global, which is what
   /// `#no_reset` writes into the executable (**L§12.3**).
   Bytes(Box<[u8]>),
+  /// Bytes that point at themselves: the type table is one block of storage
+  /// whose `*Type_Info` fields name other places inside the same block
+  /// (**L§17**). Each `(at, target)` says that the eight bytes at `at` hold
+  /// the address of `target`, both relative to where the block is placed.
+  Image {
+    bytes: Box<[u8]>,
+    relocations: Box<[(u64, u64)]>,
+  },
 }
 
 #[derive(Clone, Debug)]

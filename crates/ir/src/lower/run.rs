@@ -40,6 +40,9 @@ impl Lowering<'_, '_> {
     self.start_procedure();
     self.body_source = run.source;
     self.body_scope = run.scope;
+    // Every run's module is added to the same dylib, so its type table needs a
+    // symbol of its own (`docs/spec.md` §6.5).
+    self.type_table_symbol = format!("__oj_type_table${}", run.symbol);
 
     let result_pointer = self.pointer_to(run.result);
     let id = ProcId(self.procedures.len() as u32);

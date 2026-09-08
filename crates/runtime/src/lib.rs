@@ -116,6 +116,22 @@ impl Segments {
     Some(unsafe { std::slice::from_raw_parts(allocation.pointer, allocation.size) })
   }
 
+  /// Writes an address into a global, which is what the type table's pointers
+  /// into itself need once the image has one (**L§17**).
+  pub fn write_pointer(&mut self, symbol: &str, at: u64, value: u64) {
+    let Some(index) = self.by_symbol.get(symbol) else {
+      return;
+    };
+    let allocation = &self.allocations[*index];
+    let at = at as usize;
+    if at + 8 > allocation.size {
+      return;
+    }
+    unsafe {
+      std::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), allocation.pointer.add(at), 8);
+    }
+  }
+
   pub fn segment(&self, symbol: &str) -> Option<Segment> {
     let index = *self.by_symbol.get(symbol)?;
     Some(self.allocations[index].segment)

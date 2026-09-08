@@ -19,6 +19,9 @@ pub fn print_ir(program: &Program, interner: &Interner, only: Option<&str>) -> S
         GlobalInit::Zero => String::from("zero"),
         GlobalInit::Constant(value) => constant_text(value),
         GlobalInit::Bytes(bytes) => format!("{} bytes kept from compile time", bytes.len()),
+        GlobalInit::Image { relocations, .. } => {
+          format!("an image with {} pointers into itself", relocations.len())
+        }
       };
       let kind = if global.imported {
         "extern global"

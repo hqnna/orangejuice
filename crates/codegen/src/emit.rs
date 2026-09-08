@@ -29,6 +29,9 @@ use oj_types::{FloatKind, TypeId, TypeKind, Types};
 /// through `initializer_of` and a `push_context` (`docs/spec.md` §10).
 const ENTRY_SYMBOL: &str = "main";
 
+/// A pointer on the one target orangejuice has (`docs/spec.md` §2).
+const POINTER_SIZE: usize = 8;
+
 pub struct Emitter<'ctx, 'p> {
   context: ContextRef<'ctx>,
   module: Module<'ctx>,
@@ -156,7 +159,15 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       return;
     }
     for global in &self.program.globals {
+      // The type table points at itself, so it has to exist before its own
+      // initializer can be written (**L§17**).
+      if let GlobalInit::Image { bytes, relocations } = &global.init {
+        let value = self.image_global(&global.symbol, global.alignment as u32, bytes, relocations);
+        self.globals.push(value);
+        continue;
+      }
       let (llvm_type, initializer) = match &global.init {
+        GlobalInit::Image { .. } => unreachable!("handled above"),
         GlobalInit::Zero => {
           let storage = self.context.i8_type().array_type(global.size as u32);
           (
@@ -285,6 +296,66 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     global.set_alignment(1);
     self.strings.insert(Box::from(text), global);
     global
+  }
+
+  /// A block of bytes with pointers into itself: the type table (**L§17**).
+  ///
+  /// LLVM has no "byte array with relocations", so the block becomes a packed
+  /// struct alternating byte runs and pointers, and each pointer is a constant
+  /// offset from the global's own address — which is legal because the global
+  /// is declared before its initializer is written.
+  fn image_global(
+    &mut self,
+    symbol: &str,
+    alignment: u32,
+    bytes: &[u8],
+    relocations: &[(u64, u64)],
+  ) -> GlobalValue<'ctx> {
+    let mut sorted: Vec<(u64, u64)> = relocations.to_vec();
+    sorted.sort_unstable_by_key(|(at, _)| *at);
+
+    let i8_type = self.context.i8_type();
+    let pointer = self.context.ptr_type(AddressSpace::default());
+    let mut fields: Vec<BasicTypeEnum<'ctx>> = Vec::new();
+    let mut cursor = 0usize;
+    for (at, _) in &sorted {
+      let at = *at as usize;
+      if at > cursor {
+        fields.push(i8_type.array_type((at - cursor) as u32).into());
+      }
+      fields.push(pointer.into());
+      cursor = at + POINTER_SIZE;
+    }
+    if cursor < bytes.len() {
+      fields.push(i8_type.array_type((bytes.len() - cursor) as u32).into());
+    }
+    let storage = self.context.struct_type(&fields, true);
+
+    let value = self
+      .module
+      .add_global(storage, Some(AddressSpace::default()), symbol);
+    value.set_alignment(alignment);
+    value.set_constant(true);
+    value.set_linkage(Linkage::Internal);
+
+    let base = value.as_pointer_value();
+    let i64_type = self.context.i64_type();
+    let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+    let mut cursor = 0usize;
+    for (at, target) in &sorted {
+      let at = *at as usize;
+      if at > cursor {
+        values.push(self.context.const_string(&bytes[cursor..at], false).into());
+      }
+      let target = i64_type.const_int(*target, false);
+      values.push(unsafe { base.const_gep(i8_type, &[target]) }.into());
+      cursor = at + POINTER_SIZE;
+    }
+    if cursor < bytes.len() {
+      values.push(self.context.const_string(&bytes[cursor..], false).into());
+    }
+    value.set_initializer(&self.context.const_struct(&values, true));
+    value
   }
 
   /// Read-only storage holding an aggregate constant's bytes, aligned the way

@@ -10,6 +10,7 @@
 mod ir;
 mod lower;
 mod print;
+mod typetable;
 
 pub use ir::{
   Abi, AbiParameter, BinaryOp, Block, BlockId, Callee, Constant, ConvertKind, Global, GlobalId,

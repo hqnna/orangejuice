@@ -15,7 +15,7 @@
 //! it without executing anything (**C§14**).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oj_diag::Diagnostic;
 use oj_ir::{Constant, Global, GlobalInit, Library, Program};
@@ -37,7 +37,10 @@ pub struct Engine {
 #[derive(Default)]
 struct State {
   segments: Segments,
-  /// The globals already bound in the JIT dylib, by segment symbol.
+  /// The symbols already bound in the JIT dylib.
+  defined: HashSet<String>,
+  /// Where each declaration's storage went, so that a `#no_reset` global can
+  /// be read back at the end (**L§12.3**).
   bound: HashMap<DeclId, String>,
   /// The libraries already loaded into the compiler process, so that a
   /// `#foreign` procedure a run calls resolves (**L§12.1**).
@@ -133,14 +136,15 @@ impl Engine {
       if global.imported {
         continue;
       }
-      let Some(decl) = global.decl else { continue };
-      if state.bound.contains_key(&decl) {
+      if !state.defined.insert(global.symbol.clone()) {
         continue;
       }
-      let segment = if global.no_reset {
-        Segment::NoReset
-      } else {
-        Segment::Writable
+      let segment = match &global.init {
+        // The type table is never written to, so it is never reset either
+        // (**L§17**).
+        GlobalInit::Image { .. } => Segment::ReadOnly,
+        _ if global.no_reset => Segment::NoReset,
+        _ => Segment::Writable,
       };
       let initial = initial_bytes(&program.types, global);
       let address = state.segments.allocate(
@@ -150,7 +154,17 @@ impl Engine {
         segment,
         &initial,
       );
-      state.bound.insert(decl, global.symbol.clone());
+      // An image's pointers into itself only become addresses once it has one.
+      if let GlobalInit::Image { relocations, .. } = &global.init {
+        for (at, target) in relocations {
+          state
+            .segments
+            .write_pointer(&global.symbol, *at, address as u64 + *target);
+        }
+      }
+      if let Some(decl) = global.decl {
+        state.bound.insert(decl, global.symbol.clone());
+      }
       self.orc.define(&global.symbol, address as u64)?;
     }
     Ok(())
@@ -241,10 +255,11 @@ impl Drop for Buffer {
 fn initial_bytes(types: &Types, global: &Global) -> Vec<u8> {
   let size = global.size.max(1) as usize;
   let mut bytes = vec![0u8; size];
-  let GlobalInit::Constant(constant) = &global.init else {
-    return bytes;
-  };
-  write_constant(types, global.type_id, constant, &mut bytes);
+  match &global.init {
+    GlobalInit::Constant(constant) => write_constant(types, global.type_id, constant, &mut bytes),
+    GlobalInit::Bytes(source) | GlobalInit::Image { bytes: source, .. } => copy(source, &mut bytes),
+    GlobalInit::Zero => {}
+  }
   bytes
 }
 

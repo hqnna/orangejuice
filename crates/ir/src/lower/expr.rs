@@ -20,21 +20,13 @@ impl Lowering<'_, '_> {
     // again (**L§5.11**).
     if let Some(constant) = info.constant.clone() {
       let target = want.unwrap_or_else(|| self.checker.hardened(info.type_id));
-      if self.is_scalar(target)
-        && let Some(value) = self.fold(&constant, target)
-      {
-        return Some(self.constant(value, target));
-      }
-      if let Value::String(text) = &constant.value
-        && self.is_string_like(target)
-      {
-        let value = self.string_constant(text.clone());
-        return self.convert(source, node, value, target);
-      }
-      // An aggregate a `#run` produced is read-only data the program reads out
-      // of, the same as any other constant (**L§12.1**).
-      if let Value::Bytes(bytes) = &constant.value {
-        let value = self.bytes_constant(bytes.clone(), target);
+      // A constant that is being boxed into an `Any` becomes a value of its
+      // own type first, since that is the type the `Any` records (**L§3.8**).
+      let direct = match self.is_any(target) {
+        true => self.checker.hardened(info.type_id),
+        false => target,
+      };
+      if let Some(value) = self.constant_value(&constant, direct) {
         return self.convert(source, node, value, target);
       }
     }
@@ -56,6 +48,32 @@ impl Lowering<'_, '_> {
     }
   }
 
+  /// A folded constant as a value of `target`, or `None` when it is of a kind
+  /// the back end has no data form for.
+  fn constant_value(&mut self, constant: &Const, target: TypeId) -> Option<Val> {
+    if self.is_scalar(target)
+      && let Some(value) = self.fold(constant, target)
+    {
+      return Some(self.constant(value, target));
+    }
+    if let Value::String(text) = &constant.value
+      && self.is_string_like(target)
+    {
+      return Some(self.string_constant(text.clone()));
+    }
+    // An aggregate a `#run` produced is read-only data the program reads out
+    // of, the same as any other constant (**L§12.1**).
+    if let Value::Bytes(bytes) = &constant.value {
+      return Some(self.bytes_constant(bytes.clone(), target));
+    }
+    None
+  }
+
+  fn is_any(&mut self, type_id: TypeId) -> bool {
+    let underlying = self.checker.types().underlying(type_id);
+    matches!(self.checker.types().kind(underlying), TypeKind::Any)
+  }
+
   /// A string literal is read-only data: the value is the address of the
   /// `{count, data}` pair the back end laid down (**L§3.4**).
   fn string_constant(&mut self, text: Box<[u8]>) -> Val {
@@ -70,6 +88,76 @@ impl Lowering<'_, '_> {
       type_id: TypeId::STRING,
       indirect: true,
     }
+  }
+
+  /// Boxes a value into an `Any`: `{type: *Type_Info, value_pointer: *void}`
+  /// (**L§3.8**, **L§17**). The value has to be somewhere addressable, so one
+  /// that only lived in a register is spilled first.
+  fn box_any(&mut self, value: Val, target: TypeId) -> Option<Val> {
+    let hardened = self.checker.hardened(value.type_id);
+    let value = match hardened == value.type_id {
+      true => value,
+      // A literal has no type of its own to record, so it takes the one it
+      // defaults to (**L§5.10**).
+      false => Val {
+        type_id: hardened,
+        ..value
+      },
+    };
+    let pointer = self.pointer_to(TypeId::VOID);
+    let info_type = self.pointer_to(TypeId::VOID);
+    let info = self.type_info_value(hardened, info_type)?;
+    let stored = self.address_of(value);
+
+    let local = self.new_local(String::from("any"), target);
+    let address = self.local_address(local);
+    self.emit(Inst::Store {
+      address,
+      value: info.id,
+    });
+    let slot = self.offset(address, ANY_VALUE_POINTER, pointer);
+    self.emit(Inst::Store {
+      address: slot,
+      value: stored,
+    });
+    Some(Val {
+      id: address,
+      type_id: target,
+      indirect: true,
+    })
+  }
+
+  /// `type_info(T)`: the address of `T`'s record inside the type table
+  /// (**L§17**). Laying the record out drags in every type it mentions, which
+  /// is what makes the table hold exactly what the program can reach.
+  pub(super) fn type_info_value(&mut self, queried: TypeId, pointer: TypeId) -> Option<Val> {
+    // The table borrows the checker while it lays a record out, so it is taken
+    // out of the lowering for the duration.
+    let mut table = std::mem::take(&mut self.type_table);
+    let offset = table.offset_of(self.checker, queried);
+    self.type_table = table;
+
+    let global = self.type_table_id();
+    let base = self.value(pointer);
+    self.emit(Inst::GlobalAddress { dest: base, global });
+    if offset == 0 {
+      return Some(Val {
+        id: base,
+        type_id: pointer,
+        indirect: false,
+      });
+    }
+    let dest = self.value(pointer);
+    self.emit(Inst::Offset {
+      dest,
+      base,
+      offset: offset as i64,
+    });
+    Some(Val {
+      id: dest,
+      type_id: pointer,
+      indirect: false,
+    })
   }
 
   /// The storage of an aggregate constant: the value is its address, the way
@@ -143,8 +231,18 @@ impl Lowering<'_, '_> {
         self.unsupported(source, node, "an anonymous procedure", "M7");
         None
       }
+      NodeData::TypeQuery {
+        query_kind: ast::TypeQueryKind::TypeInfo,
+        type_to_query,
+      } => {
+        let scope = self
+          .checker
+          .scope_for(source, type_to_query, self.body_scope);
+        let queried = self.checker.denoted_type(scope, source, type_to_query);
+        self.type_info_value(queried, info.type_id)
+      }
       NodeData::TypeQuery { .. } | NodeData::ExpressionQuery { .. } => {
-        self.unsupported(source, node, "'type_info' and 'initializer_of'", "M6");
+        self.unsupported(source, node, "'initializer_of'", "M6");
         None
       }
       NodeData::DirectiveLocation(_) => {
@@ -727,6 +825,12 @@ impl Lowering<'_, '_> {
     if let Some((element, kind)) = self.checker.types().array_of(underlying) {
       return self.array_field(source, node, base, name, element, kind);
     }
+    // An `Any` is the pair Preload calls `Any_Struct`, so its two members are
+    // found there (**L§3.8**, **L§17**).
+    let underlying = match self.checker.types().kind(underlying) {
+      TypeKind::Any => self.checker.any_struct_type(),
+      _ => underlying,
+    };
     let definition = self.checker.types().struct_of(underlying)?;
     let member = self
       .checker
@@ -1163,6 +1267,12 @@ impl Lowering<'_, '_> {
       }
     }
 
+    // An `Any` is the pair `{type, value_pointer}`, so boxing is writing the
+    // value's `Type_Info` beside its address (**L§3.8**).
+    if matches!(to_kind, TypeKind::Any) {
+      return self.box_any(value, target);
+    }
+
     if !self.is_scalar(from) || !self.is_scalar(to) {
       self.unsupported(
         source,
@@ -1322,3 +1432,6 @@ fn binary_operator(operator: OperatorType) -> Option<BinaryOp> {
     _ => return None,
   })
 }
+
+/// Where `Any_Struct.value_pointer` sits: after the `*Type_Info` (**L§17**).
+const ANY_VALUE_POINTER: u64 = 8;
