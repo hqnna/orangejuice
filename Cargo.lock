@@ -329,6 +329,10 @@ dependencies = [
 [[package]]
 name = "oj-types"
 version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "oj-lexer",
+]
 
 [[package]]
 name = "once_cell"

@@ -278,7 +278,7 @@ Two types are the same if they have the same structure *and* identity: every str
 
 ### 3.14 Sizes and alignment
 
-`size_of(T)` is a constant `s64`, including trailing padding; `size_of` of a value (not a Type) is an error — use `size_of(type_of(v))`. Struct alignment is the largest member alignment (natural alignment: 1/2/4/8; 16 for `v128`; larger with `#align`). Struct end padding is rounded to the alignment. `#align N` on a declaration sets its alignment (members, globals, stack variables, array literals, constant global data); `#align` on a constant declaration is an error. `#no_padding` on a struct removes padding (packed). Members are laid out in declaration order; the compiler never reorders members (except `#place`, section 8.6).
+`size_of(T)` is a constant `s64`, including trailing padding; `size_of` of a value (not a Type) is an error — use `size_of(type_of(v))`. Struct alignment is the largest member alignment (natural alignment: 1/2/4/8; 16 for `v128`; changed by `#align`). Struct end padding is rounded to the alignment. `#align N` on a member, global, stack variable, array literal or constant global data *replaces* the natural alignment and so may lower it as well as raise it (`b: s64 #align 4;` sits at offset 4 and gives its struct alignment 4); `#align` on a constant declaration — a struct declaration included — is an error. `#no_padding` on a struct drops only the *trailing* padding: members keep their natural offsets and the struct keeps its alignment, but its size is not rounded up (`struct { a: u8; b: s32; c: u8; } #no_padding` is 9 bytes, aligned to 4, where the same struct without it is 12). Members are laid out in declaration order; the compiler never reorders members (except `#place`, section 8.6). An empty struct, a `void` member and a `[0] T` member all occupy no bytes, but `[0] T` still aligns to `T`.
 
 `align_forward` and `NewArray(..., alignment)` in Basic provide aligned allocation.
 
@@ -1189,15 +1189,16 @@ Holder :: struct (N: int, T: Type) #modify { if N < 8 N = 8; return true; } { ..
 
 ### 8.7 Struct directives and flags
 
-| Directive (after `struct`/`union` and parameters, before `{`) | Effect |
+| Directive (after `struct`/`union` and its parameters, or after the closing `}`) | Effect |
 |---|---|
 | `#type_info_none` | no runtime `Type_Info` contents (members omitted); `print` cannot print it |
 | `#type_info_procedures_are_void_pointers` | procedure-typed members are reported as `*void` in `Type_Info` (reduces type table) |
 | `#type_info_no_size_complaint` | suppress the "this Type_Info is large" complaint |
-| `#no_padding` | packed layout, no alignment padding |
+| `#no_padding` | drop the struct's trailing padding; member offsets and struct alignment are unchanged (3.14) |
 | `#foreign` | struct from foreign code (textual flag; informational) |
 | `#modify { }` | see 8.5 |
-| `#align N` (on the declaration) | struct alignment |
+
+`#align N` is *not* a struct directive: the reference rejects it on a struct declaration ("#align does not have any meaning on constant declarations, since they do not have storage."), so a struct's alignment only ever comes from its members (3.14).
 
 These flags live in `Type_Info_Struct.textual_flags` (`FOREIGN 1, UNION 2, NO_PADDING 4, TYPE_INFO_NONE 8, TYPE_INFO_NO_SIZE_COMPLAINT 0x10, TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS 0x20`) and may also be set from a metaprogram with `compiler_set_type_info_flags(T, .NO_TYPE_INFO | .PROCEDURES_ARE_VOID_POINTERS | .NO_SIZE_COMPLAINT)`. `nontextual_flags`: `NOT_INSTANTIABLE 4, ALL_MEMBERS_UNINITIALIZED 0x40, POLYMORPHIC 0x100`; `status_flags`: `INCOMPLETE 1, LOCAL 4`.
 
