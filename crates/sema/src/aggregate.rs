@@ -57,7 +57,14 @@ impl Checker<'_> {
     node: NodeId,
     outer: ScopeId,
   ) -> TypeId {
-    if let Some(existing) = self.aggregate_type_in(outer, source, node) {
+    // Keyed by the members scope, which is what an instantiation of a
+    // polymorphic struct is inside of: `Holder(float, 5)` and `Holder(int, 3)`
+    // are two types out of one body (**L§8.5**).
+    let scope = self
+      .program()
+      .aggregate_scope(source, node)
+      .unwrap_or(outer);
+    if let Some(existing) = self.aggregate_type_in(scope, source, node) {
       if let Some(owner) = owner {
         self.publish(owner, DeclType::type_name(existing));
       }
@@ -72,20 +79,17 @@ impl Checker<'_> {
 
     let textual = StructTextualFlags::from_bits_truncate(payload.textual_flags.bits());
     let (definition, type_id) = self.types_mut().new_struct(StructInfo::new(name, textual));
-    self.record_aggregate_type_in(outer, source, node, type_id);
+    self.record_aggregate_type_in(scope, source, node, type_id);
     if let Some(owner) = owner {
       self.publish(owner, DeclType::type_name(type_id));
     }
 
-    let scope = self
-      .program()
-      .aggregate_scope(source, node)
-      .unwrap_or(outer);
     self.record_struct_scope(definition, scope);
 
-    // A polymorphic struct is a family, not a type: its members need the
-    // arguments of an instantiation (**L§8.5**, M7).
-    if payload.has_argument_list && !payload.arguments.is_empty() {
+    // A polymorphic struct with no instantiation in hand is a family, not a
+    // type: its members need the arguments (**L§8.5**).
+    let instantiated = self.instance_of_scope(scope).is_some();
+    if payload.has_argument_list && !payload.arguments.is_empty() && !instantiated {
       self
         .types_mut()
         .struct_info_mut(definition)
@@ -101,9 +105,23 @@ impl Checker<'_> {
   /// Fills a struct's members and layout in. Re-entering one is the genuine
   /// circular dependency: a struct that contains itself by value.
   pub(crate) fn complete_struct(&mut self, definition: StructId) {
-    let Some((source, node, scope)) = self.take_pending_body(definition) else {
+    let Some(body) = self.take_pending_body(definition) else {
       return;
     };
+    // A polymorphic struct's members mention its arguments, so they are
+    // resolved under the instantiation the body belongs to (**L§8.5**).
+    self.with_instance(body.instance, |checker| {
+      checker.complete_struct_body(definition, body)
+    });
+  }
+
+  fn complete_struct_body(&mut self, definition: StructId, body: crate::checker::PendingBody) {
+    let crate::checker::PendingBody {
+      source,
+      node,
+      scope,
+      ..
+    } = body;
     let Some(ast) = self.ast(source) else {
       return;
     };

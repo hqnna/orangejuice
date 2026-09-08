@@ -122,6 +122,17 @@ impl Expr {
   }
 }
 
+/// A struct body whose members nobody has resolved yet.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PendingBody {
+  pub source: SourceId,
+  pub node: NodeId,
+  pub scope: ScopeId,
+  /// The instantiation the body belongs to, for a polymorphic struct
+  /// (**L§8.5**).
+  pub instance: Option<InstanceId>,
+}
+
 enum State {
   Resolving,
   Done(DeclType),
@@ -229,7 +240,7 @@ pub struct Checker<'a> {
   /// The bodies of the structs whose members have not been resolved yet, and
   /// the ones being resolved right now, which is what makes a struct that
   /// contains itself by value an error rather than a hang.
-  pending_bodies: HashMap<StructId, (SourceId, NodeId, ScopeId)>,
+  pending_bodies: HashMap<StructId, PendingBody>,
   completing: Vec<(StructId, SourceId, NodeId)>,
   /// The shared `declaration_properties` of each name in a compound
   /// declaration (**L§4.5**): `a, b: float;` declares two names off one type.
@@ -416,17 +427,24 @@ impl<'a> Checker<'a> {
     node: NodeId,
     scope: ScopeId,
   ) {
-    self
-      .pending_bodies
-      .insert(definition, (source, node, scope));
+    // A polymorphic struct's members are laid out against the arguments of an
+    // instantiation, so the body remembers which one it belongs to
+    // (**L§8.5**).
+    let instance = self.instance_of_scope(scope);
+    self.pending_bodies.insert(
+      definition,
+      PendingBody {
+        source,
+        node,
+        scope,
+        instance,
+      },
+    );
   }
 
   /// Claims a struct body for resolution. A second claim while the first is
   /// still running is a struct that contains itself.
-  pub(crate) fn take_pending_body(
-    &mut self,
-    definition: StructId,
-  ) -> Option<(SourceId, NodeId, ScopeId)> {
+  pub(crate) fn take_pending_body(&mut self, definition: StructId) -> Option<PendingBody> {
     if let Some((_, source, node)) = self
       .completing
       .iter()
@@ -437,7 +455,7 @@ impl<'a> Checker<'a> {
       return None;
     }
     let body = self.pending_bodies.remove(&definition)?;
-    self.completing.push((definition, body.0, body.1));
+    self.completing.push((definition, body.source, body.node));
     Some(body)
   }
 

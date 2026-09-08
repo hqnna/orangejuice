@@ -11,6 +11,11 @@ impl Checker<'_> {
   /// (**L§5.5**). Which procedure it calls is decided by overload resolution
   /// (**L§7.5**).
   pub(crate) fn call_type(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
+    // `Holder(float, 5)` bakes a polymorphic struct rather than calling
+    // anything (**L§8.5**).
+    if let Some(baked) = self.instantiate_struct(scope, source, node) {
+      return Expr::type_expression(baked);
+    }
     let Some(signature) = self.resolve_call(scope, source, node) else {
       return Expr::UNKNOWN;
     };

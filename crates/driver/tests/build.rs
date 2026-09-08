@@ -1218,3 +1218,25 @@ fn a_bitwise_operator_takes_a_pointer_without_a_cast() {
     "1\n",
   );
 }
+
+#[test]
+fn a_polymorphic_struct_lays_its_members_out_per_instantiation() {
+  assert_output(
+    "Holder :: struct ($T: Type, $N: s64) { array: [N] T; }\n\
+     sum :: (h: Holder(int, 4)) -> int {\n\
+       s := 0;\n\
+       for h.array  s += it;\n\
+       return s;\n\
+     }\n\
+     main :: () {\n\
+       a: Holder(int, 4);\n\
+       a.array[0] = 1;\n\
+       a.array[3] = 41;\n\
+       b: Holder(N = 4, T = int);\n\
+       b = a;\n\
+       put_number(sum(b));\n\
+       put_number(size_of(Holder(float64, 2)));\n\
+     }\n",
+    "42\n16\n",
+  );
+}

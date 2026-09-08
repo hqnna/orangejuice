@@ -256,3 +256,26 @@ fn a_using_of_a_value_reaches_the_constants_of_its_struct() {
     },
   );
 }
+
+#[test]
+fn a_polymorphic_struct_is_baked_per_argument_set() {
+  build(
+    "
+    Holder :: struct ($T: Type, $N: s64) { array: [N] T; }
+    main :: () {
+      floats: Holder(float32, 5);
+      ints: Holder(s64, 3);
+      named: Holder(N = 5, T = float32);
+      same := floats;
+    }
+    ",
+    |checker| {
+      assert!(errors(checker).is_empty(), "{:?}", errors(checker));
+      assert_eq!(type_of(checker, "floats"), "Holder(float32, 5)");
+      assert_eq!(type_of(checker, "ints"), "Holder(s64, 3)");
+      // The same arguments in another order are the same type (**L§8.5**).
+      assert_eq!(type_of(checker, "named"), "Holder(float32, 5)");
+      assert_eq!(type_of(checker, "same"), "Holder(float32, 5)");
+    },
+  );
+}

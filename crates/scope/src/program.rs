@@ -2215,6 +2215,11 @@ impl Program<'_> {
       self.declare_parameter(parsed, *parameter, &mut argument_target, source);
     }
 
+    // A polymorphic struct is a family, not a type: nothing written in its
+    // body exists until an instantiation supplies the arguments (**L§8.5**).
+    if payload.has_argument_list && !payload.arguments.is_empty() {
+      self.uninstantiated_scopes.insert(arguments);
+    }
     let members = self
       .tree
       .push_scope(ScopeKind::StructMembers, Some(arguments));

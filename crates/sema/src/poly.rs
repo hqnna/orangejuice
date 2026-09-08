@@ -64,8 +64,11 @@ pub(crate) struct Instance {
   /// The declaration the header was written at, when it has one.
   pub decl: Option<DeclId>,
   pub source: SourceId,
+  /// The header, or the `struct` node for an instantiated polymorphic struct.
   pub header: NodeId,
-  pub scopes: ProcedureScopes,
+  /// The scope everything belonging to the instantiation hangs under: a
+  /// procedure's constants block, or a struct's argument list (**L§8.5**).
+  pub root: ScopeId,
   /// The scope the header was written in, which is where its own names resolve.
   pub outer_scope: ScopeId,
   /// The constants this specialization binds, by the declaration each names.
@@ -93,9 +96,8 @@ pub struct Expansion {
 }
 
 impl Instance {
-  /// The scope everything belonging to the instantiation hangs under.
   pub fn body_root(&self) -> ScopeId {
-    self.scopes.constants
+    self.root
   }
 }
 
@@ -169,6 +171,146 @@ impl Checker<'_> {
 
   pub(crate) fn instance_type(&self, id: InstanceId) -> TypeId {
     self.instance(id).type_id
+  }
+
+  /// `Holder(float, 5)` bakes a polymorphic struct down to a type of its own
+  /// (**L§8.5**). `None` when the call names something else.
+  pub(crate) fn instantiate_struct(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<TypeId> {
+    let NodeData::ProcedureCall(call) = self.ast(source)?.data(node) else {
+      return None;
+    };
+    let call = call.clone();
+    let family = self
+      .expression_type(scope, source, call.procedure_expression)
+      .denoted?;
+    let definition = self.types().struct_of(family)?;
+    if !self
+      .types()
+      .struct_info(definition)
+      .nontextual_flags
+      .contains(oj_types::StructNontextualFlags::POLYMORPHIC)
+    {
+      return None;
+    }
+    let members = self.struct_scope(definition)?;
+    let (body_source, body) = self.aggregate_owner(members)?;
+    let arguments_scope = self.program().tree().scope(members).parent?;
+    let outer_scope = self.program().tree().scope(arguments_scope).parent?;
+
+    // Every argument has to be a constant, since the members are laid out
+    // against them (**L§8.5**).
+    let parameters = self
+      .program()
+      .tree()
+      .scope(arguments_scope)
+      .declarations
+      .clone();
+    // Struct arguments may be given by name, in any order, and two
+    // instantiations that agree on them are one type (**L§8.5**).
+    let mut given: Vec<Option<NodeId>> = vec![None; parameters.len()];
+    let mut next = 0usize;
+    for argument in &call.arguments {
+      let index = match argument.name.and_then(|node| self.ident_name(source, node)) {
+        Some(name) => parameters
+          .iter()
+          .position(|id| self.program().tree().decl(*id).name == name)?,
+        None => {
+          next += 1;
+          next - 1
+        }
+      };
+      *given.get_mut(index)? = Some(argument.expression);
+    }
+    let mut bindings = Vec::with_capacity(parameters.len());
+    for (parameter, expression) in parameters.iter().zip(given) {
+      let declared = self.decl_type(*parameter).value;
+      let value = match expression {
+        Some(expression) => self.expression_type(scope, source, expression).constant?,
+        // A parameter the instantiation left out takes its default.
+        None => self.decl_constant(*parameter)?,
+      };
+      let value = match self.types().is_unknown(declared) {
+        true => value,
+        false => value.convert(self.types(), declared).unwrap_or(value),
+      };
+      bindings.push((*parameter, value));
+    }
+
+    let key: InstanceKey = (
+      body_source,
+      body,
+      None,
+      bindings
+        .iter()
+        .map(|(id, value)| (*id, value.type_id, const_key(value)))
+        .collect(),
+    );
+    let instance = match self.instance_cache.get(&key) {
+      Some(existing) => *existing,
+      None => {
+        let id = InstanceId(self.instances.len() as u32);
+        self.instances.push(Instance {
+          decl: None,
+          source: body_source,
+          header: body,
+          root: arguments_scope,
+          outer_scope,
+          bindings,
+          type_id: TypeId::UNKNOWN,
+          parent: self.current_instance,
+          expansion: None,
+        });
+        self.instance_cache.insert(key, id);
+        id
+      }
+    };
+
+    // The specialization is printed the way it was written, `Holder(float, 5)`
+    // (**L§8.5**), whichever order the arguments were given in.
+    let name = self.instantiation_name(family, instance);
+    let baked = self.with_instance(Some(instance), |checker| {
+      checker.build_struct(None, name, body_source, body, outer_scope)
+    });
+    self.instances[instance.0 as usize].type_id = baked;
+    if let Some(baked) = self.types().struct_of(baked) {
+      self.types_mut().struct_info_mut(baked).polymorph_source = Some(definition);
+    }
+    Some(baked)
+  }
+
+  /// `Holder(float, 5)`: the family's name with the arguments it was baked
+  /// with (**L§8.5**).
+  fn instantiation_name(&mut self, family: TypeId, instance: InstanceId) -> Option<Symbol> {
+    let base = self.types().declared_name(family)?;
+    let mut text = self.symbol_text(base);
+    text.push('(');
+    let bindings = self.instance(instance).bindings.clone();
+    for (index, (_, value)) in bindings.iter().enumerate() {
+      if index > 0 {
+        text.push_str(", ");
+      }
+      match value.as_type() {
+        Some(type_id) => text.push_str(&self.type_name(type_id)),
+        None => match &value.value {
+          Value::Int(number) => text.push_str(&number.to_string()),
+          Value::Float(number) => text.push_str(&number.to_string()),
+          Value::Bool(value) => text.push_str(if *value { "true" } else { "false" }),
+          Value::String(bytes) => {
+            text.push('"');
+            text.push_str(&String::from_utf8_lossy(bytes));
+            text.push('"');
+          }
+          _ => text.push('?'),
+        },
+      }
+    }
+    text.push(')');
+    Some(self.interned().intern(text.as_bytes()))
   }
 
   /// The candidate a polymorphic header becomes for one call site's arguments:
@@ -288,7 +430,7 @@ impl Checker<'_> {
       decl: signature.decl,
       source,
       header,
-      scopes,
+      root: scopes.constants,
       outer_scope,
       bindings: solution.bindings,
       type_id: TypeId::UNKNOWN,
