@@ -204,8 +204,8 @@ impl Checker<'_> {
           None => DeclType::UNKNOWN,
         }
       }
-      _ if index == 0 => self.declaration_type(id, decl_scope, source, declaration),
-      _ => DeclType::UNKNOWN,
+      // One value on the right is every name's (**L§4.5**).
+      _ => self.declaration_type(id, decl_scope, source, declaration),
     }
   }
 

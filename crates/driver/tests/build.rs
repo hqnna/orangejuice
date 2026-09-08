@@ -1584,3 +1584,19 @@ fn the_standard_print_reaches_the_terminal() {
     "42 and a string\n37\n",
   );
 }
+
+#[test]
+fn a_compound_declaration_spreads_its_values_across_its_names() {
+  assert_output(
+    "main :: () {\n\
+       a := 1; b := 2; c := 3; d := 4;\n\
+       e, f, g, h := a, b, c, d;\n\
+       put_number(e + f * 10 + g * 100 + h * 1000);\n\
+       a, b += 10;\n\
+       put_number(a + b);\n\
+       x, y := 7;\n\
+       put_number(x + y);\n\
+     }\n",
+    "4321\n23\n14\n",
+  );
+}

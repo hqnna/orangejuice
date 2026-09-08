@@ -479,10 +479,6 @@ impl Lowering<'_, '_> {
     // `a, b = f();` assigns to names that already exist; only `:=` and a
     // typed form declare them (**L§4.5**).
     let assigns = compound.operator_type.is_some();
-    if assigns && compound.operator_type != Some(OperatorType::ASSIGN) {
-      self.unsupported(source, node, "this assignment operator", "M10");
-      return;
-    }
     let mut places = Vec::new();
     for name in &names {
       if assigns {
@@ -520,6 +516,39 @@ impl Lowering<'_, '_> {
     };
     let scope = self.checker.scope_for(source, expression, self.body_scope);
     let targets: Vec<Option<(ValueId, TypeId)>> = places;
+    // `a, b := 1, 2;` gives each name its own value; one value on the right is
+    // every name's (**L§4.5**).
+    let values = match self.checker.tree_of(source).map(|ast| ast.data(expression)) {
+      Some(NodeData::CommaSeparatedArguments { arguments }) => arguments
+        .iter()
+        .map(|argument| argument.node)
+        .collect::<Vec<NodeId>>(),
+      _ => vec![expression],
+    };
+    let value_at = |index: usize| -> NodeId {
+      match values.len() {
+        1 => values[0],
+        _ => values[index.min(values.len() - 1)],
+      }
+    };
+
+    // `a, b += 1;` applies the operator to each name in turn (**L§5.2**).
+    if let Some(operator) = compound.operator_type
+      && operator != OperatorType::ASSIGN
+    {
+      let Some(binary) = compound_operator(operator) else {
+        self.unsupported(source, node, "this assignment operator", "M10");
+        return;
+      };
+      for (index, target) in targets.iter().enumerate() {
+        let Some(place) = *target else {
+          continue;
+        };
+        self.read_modify_write(node, binary, place, value_at(index));
+      }
+      return;
+    }
+
     let is_call = matches!(
       self.checker.tree_of(source).map(|ast| ast.data(expression)),
       Some(NodeData::ProcedureCall(_))
@@ -528,11 +557,28 @@ impl Lowering<'_, '_> {
       self.call_into(scope, source, expression, &targets);
       return;
     }
-    // `a, b := 1, 2;` is not a call: each name takes its own value.
-    if let Some(Some((address, type_id))) = targets.first().copied()
-      && let Some(value) = self.expression(scope, source, expression, Some(type_id))
-    {
-      self.store(address, value);
+    // One value on the right is every name's, and is worked out once.
+    if values.len() == 1 {
+      let Some((_, type_id)) = targets.iter().flatten().next().copied() else {
+        return;
+      };
+      let Some(value) = self.expression(scope, source, expression, Some(type_id)) else {
+        return;
+      };
+      for (address, _) in targets.into_iter().flatten() {
+        self.store(address, value);
+      }
+      return;
+    }
+    for (index, target) in targets.iter().enumerate() {
+      let Some((address, type_id)) = *target else {
+        continue;
+      };
+      let value_node = value_at(index);
+      let scope = self.checker.scope_for(source, value_node, self.body_scope);
+      if let Some(value) = self.expression(scope, source, value_node, Some(type_id)) {
+        self.store(address, value);
+      }
     }
   }
 
@@ -854,6 +900,19 @@ impl Lowering<'_, '_> {
       self.unsupported(source, node, "this assignment operator", "M7");
       return;
     };
+    self.read_modify_write(node, binary, (place.id, place.type_id), right);
+  }
+
+  /// `x op= e`: the storage is read, combined and written back (**L§5.2**).
+  fn read_modify_write(
+    &mut self,
+    node: NodeId,
+    binary: crate::ir::BinaryOp,
+    place: (ValueId, TypeId),
+    right: NodeId,
+  ) {
+    let source = self.body_source;
+    let (address, type_id) = place;
     // `a &&= b` and `a ||= b` only assign when the operator would change the
     // value, which a plain read-modify-write already does (**L§5.2**).
     // `x &= ~.A` reads the right operand as one of `x`'s own type. A shift's
@@ -865,22 +924,20 @@ impl Lowering<'_, '_> {
         | crate::ir::BinaryOp::ShiftRight
         | crate::ir::BinaryOp::RotateLeft
         | crate::ir::BinaryOp::RotateRight
-    ) || self.checker.types().is_pointer(place.type_id);
+    ) || self.checker.types().is_pointer(type_id);
     let scope = self.checker.scope_for(source, right, self.body_scope);
-    let wanted = (!keeps_left).then_some(place.type_id);
+    let wanted = (!keeps_left).then_some(type_id);
     let Some(value) = self.expression(scope, source, right, wanted) else {
       return;
     };
     let current = Val {
-      id: place.id,
-      type_id: place.type_id,
+      id: address,
+      type_id,
       indirect: true,
     };
-    let Some(result) = self.binary_values(source, node, binary, current, value, place.type_id)
-    else {
+    let Some(result) = self.binary_values(source, node, binary, current, value, type_id) else {
       return;
     };
-    let address = place.id;
     self.store(address, result);
   }
 
