@@ -119,7 +119,10 @@ main :: () {
     push_context .{allocator = temp} {
         print("hello %, % %\n", name, style, ..NAMES,, allocator = temp);
     }
-    #asm { mov.64 a:, 10; add a, a; }
+    #asm {
+        mov.64 a:, 10;
+        add a, a;
+    }
     #bytes .[0x90, 0x90];
     #run print("compile time");
     #assert size_of(Vector2) == 8 "Vector2 must be two floats";

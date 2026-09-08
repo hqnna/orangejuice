@@ -3167,8 +3167,9 @@ impl Parser<'_> {
     ))
   }
 
-  /// `#asm` operands are opaque to metaprograms (`Code_Asm`), so the parser
-  /// keeps the block's text and leaves it to **M9**.
+  /// `#asm [features] { instruction; ... }` (**L§15**). The block is parsed
+  /// rather than kept as text, because its operands name high-level variables
+  /// and constants that the scope tree and the checker have to see.
   fn parse_asm(&mut self, start: u32) -> Option<NodeId> {
     self.bump();
     self.bump();
@@ -3184,35 +3185,253 @@ impl Parser<'_> {
       }
     }
 
-    let open = self.expect(TokenKind::OPEN_BRACE, "'{' after '#asm'")?;
-    let body_start = open.span.end as usize;
-    let mut depth = 1i32;
-    let mut body_end = body_start;
-    while depth > 0 && !self.at_end() {
-      match self.kind() {
-        TokenKind::OPEN_BRACE => depth += 1,
-        TokenKind::CLOSE_BRACE => {
-          depth -= 1;
-          if depth == 0 {
-            body_end = self.span().start as usize;
-            self.bump();
-            break;
-          }
-        }
-        _ => {}
+    self.expect(TokenKind::OPEN_BRACE, "'{' after '#asm'")?;
+    let mut instructions = Vec::new();
+    loop {
+      if self.eat(TokenKind::SEMICOLON) {
+        continue;
       }
-      self.bump();
+      if self.at(TokenKind::CLOSE_BRACE) || self.at_end() {
+        break;
+      }
+      let instruction = self.parse_asm_instruction()?;
+      instructions.push(instruction);
+      if !self.eat(TokenKind::SEMICOLON) && !self.at(TokenKind::CLOSE_BRACE) {
+        self.error_here(format!(
+          "Expected ';' after an '#asm' instruction, but got '{}'.",
+          self.token_text()
+        ));
+        return None;
+      }
     }
-    if depth > 0 {
-      self.error_here("Reached the end of the file inside an '#asm' block.");
-      return None;
-    }
+    self.expect(TokenKind::CLOSE_BRACE, "'}' to close an '#asm' block")?;
 
-    let body = self.input[body_start..body_end].to_vec().into_boxed_slice();
     Some(self.push(
       self.span_from(start),
-      NodeData::Asm(Box::new(AsmNode { features, body })),
+      NodeData::Asm(Box::new(AsmNode {
+        features,
+        instructions,
+      })),
     ))
+  }
+
+  fn parse_asm_instruction(&mut self) -> Option<AsmInstruction> {
+    let start = self.span().start;
+    // `t: gpr === a;` and `x === a;` are statements without a mnemonic: what
+    // follows the name says so.
+    let is_bare_operand = self.at(TokenKind::IDENT)
+      && matches!(self.kind_at(1), TokenKind::COLON | TokenKind::TRIPLE_EQUALS);
+    if is_bare_operand {
+      let operand = self.parse_asm_operand()?;
+      return Some(AsmInstruction {
+        span: self.span_from(start),
+        mnemonic: None,
+        size: AsmSize::Inferred,
+        operands: vec![operand],
+      });
+    }
+
+    let token = self.expect(TokenKind::IDENT, "an '#asm' instruction mnemonic")?;
+    let TokenValue::Name(mnemonic) = token.value else {
+      return None;
+    };
+    let size = self.parse_asm_size()?;
+
+    let mut operands = Vec::new();
+    if !self.at(TokenKind::SEMICOLON) && !self.at(TokenKind::CLOSE_BRACE) {
+      loop {
+        operands.push(self.parse_asm_operand()?);
+        if !self.eat(TokenKind::COMMA) {
+          break;
+        }
+      }
+    }
+    Some(AsmInstruction {
+      span: self.span_from(start),
+      mnemonic: Some(mnemonic),
+      size,
+      operands,
+    })
+  }
+
+  /// The `.64`/`.q`/`?T` a mnemonic can carry. A size written in digits
+  /// reaches the parser as a float literal, since the lexer sees `.64` before
+  /// it sees the mnemonic it belongs to, so its text is read back instead of
+  /// its value.
+  fn parse_asm_size(&mut self) -> Option<AsmSize> {
+    // `mov?T [input], temp` sizes the mnemonic by `T` alone: the operand list
+    // starts at the space, so the `[input]` after it is not a subscript.
+    if self.eat(TokenKind::QUESTION) {
+      let expression = self.parse_primary()?;
+      return Some(AsmSize::Of(expression));
+    }
+    if self.at(TokenKind::NUMBER) {
+      let span = self.span();
+      let text = &self.input[span.range()];
+      if let Some(digits) = text.strip_prefix(b".")
+        && let Some(bits) = std::str::from_utf8(digits)
+          .ok()
+          .and_then(|digits| digits.parse::<u32>().ok())
+      {
+        self.bump();
+        return Some(AsmSize::Bits(bits));
+      }
+    }
+    if self.at(TokenKind::DOT) && self.kind_at(1) == TokenKind::IDENT {
+      let letter = self.name_of(self.token_at(1));
+      if let Some(bits) = asm_size_letter(letter) {
+        self.bump();
+        self.bump();
+        return Some(AsmSize::Bits(bits));
+      }
+      let letter = String::from_utf8_lossy(letter).into_owned();
+      self.error_here(format!("'{letter}' is not an '#asm' operand size."));
+      return None;
+    }
+    Some(AsmSize::Inferred)
+  }
+
+  fn parse_asm_operand(&mut self) -> Option<AsmOperand> {
+    let start = self.span().start;
+    let kind = if self.at(TokenKind::OPEN_BRACKET) {
+      AsmOperandKind::Memory(Box::new(self.parse_asm_memory()?))
+    } else {
+      let expression = self.parse_unary()?;
+      if self.eat(TokenKind::COLON) {
+        let class = self.parse_asm_class();
+        let register = if self.eat(TokenKind::TRIPLE_EQUALS) {
+          Some(self.parse_asm_register()?)
+        } else {
+          None
+        };
+        AsmOperandKind::Declaration(AsmDeclaration {
+          name: expression,
+          class,
+          register,
+        })
+      } else if self.eat(TokenKind::TRIPLE_EQUALS) {
+        AsmOperandKind::Pin {
+          name: expression,
+          register: self.parse_asm_register()?,
+        }
+      } else {
+        AsmOperandKind::Expression(expression)
+      }
+    };
+
+    let mask = if self.at(TokenKind::BITWISE_AND) {
+      self.bump();
+      let zeroing = self.eat(TokenKind::ASTERISK);
+      let register = self.parse_unary()?;
+      Some(AsmMask { register, zeroing })
+    } else {
+      None
+    };
+
+    let flag = if self.eat(TokenKind::BANG) {
+      match self.kind() {
+        TokenKind::IDENT => {
+          let letter = self.name_of(self.token());
+          match asm_rounding_mode(letter) {
+            Some(mode) => {
+              self.bump();
+              Some(AsmFlag::Rounding(mode))
+            }
+            None => Some(AsmFlag::Plain),
+          }
+        }
+        _ => Some(AsmFlag::Plain),
+      }
+    } else {
+      None
+    };
+
+    Some(AsmOperand {
+      span: self.span_from(start),
+      kind,
+      mask,
+      flag,
+    })
+  }
+
+  fn parse_asm_class(&mut self) -> Option<AsmClass> {
+    if !self.at(TokenKind::IDENT) {
+      return None;
+    }
+    let class = match self.name_of(self.token()) {
+      b"gpr" => AsmClass::Gpr,
+      b"str" => AsmClass::Str,
+      b"vec" => AsmClass::Vec,
+      b"omr" => AsmClass::Omr,
+      _ => return None,
+    };
+    self.bump();
+    Some(class)
+  }
+
+  fn parse_asm_register(&mut self) -> Option<AsmRegister> {
+    if self.at(TokenKind::NUMBER) {
+      let token = self.bump();
+      return match token.value {
+        TokenValue::Integer(number) => Some(AsmRegister::Numbered(number as u32)),
+        _ => {
+          self.error(token.span, "An '#asm' register number must be an integer.");
+          None
+        }
+      };
+    }
+    let token = self.expect(TokenKind::IDENT, "an '#asm' register after '==='")?;
+    match token.value {
+      TokenValue::Name(symbol) => Some(AsmRegister::Named(symbol)),
+      _ => None,
+    }
+  }
+
+  /// `[base + index*scale + displacement]`, in that order and no other
+  /// (**L§15**). A term written as a number or in parentheses is the
+  /// displacement; anything else in the second slot is the index.
+  fn parse_asm_memory(&mut self) -> Option<AsmMemory> {
+    self.expect(TokenKind::OPEN_BRACKET, "'[' to start a memory operand")?;
+    let by_reference = self.eat(TokenKind::ASTERISK);
+    let base = self.parse_unary()?;
+
+    let mut index = None;
+    let mut scale = None;
+    let mut displacement = None;
+    let mut displacement_is_negative = false;
+    while !self.at(TokenKind::CLOSE_BRACKET) && !self.at_end() {
+      let negative = if self.eat(TokenKind::MINUS) {
+        true
+      } else {
+        self.expect(TokenKind::PLUS, "'+' or '-' in a memory operand")?;
+        false
+      };
+      let term = self.parse_unary()?;
+      let is_displacement = negative
+        || displacement.is_some()
+        || index.is_some()
+        || matches!(self.ast.data(term), NodeData::Literal(_))
+        || self.ast.flags(term).contains(NodeFlags::IS_PARENTHESIZED);
+      if is_displacement {
+        displacement = Some(term);
+        displacement_is_negative = negative;
+        continue;
+      }
+      index = Some(term);
+      if self.eat(TokenKind::ASTERISK) {
+        scale = Some(self.parse_unary()?);
+      }
+    }
+    self.expect(TokenKind::CLOSE_BRACKET, "']' to close a memory operand")?;
+
+    Some(AsmMemory {
+      by_reference,
+      base,
+      index,
+      scale,
+      displacement,
+      displacement_is_negative,
+    })
   }
 
   /// Whether the directive the parser stands on can appear in an expression.
@@ -3781,6 +4000,31 @@ impl Parser<'_> {
   }
 }
 
+/// The letter spellings of an `#asm` operand size, which are still accepted
+/// alongside the digits (**L§15**).
+fn asm_size_letter(name: &[u8]) -> Option<u32> {
+  Some(match name {
+    b"b" => 8,
+    b"w" => 16,
+    b"d" => 32,
+    b"q" => 64,
+    b"x" => 128,
+    b"y" => 256,
+    b"z" => 512,
+    _ => return None,
+  })
+}
+
+fn asm_rounding_mode(name: &[u8]) -> Option<RoundingMode> {
+  Some(match name {
+    b"n" => RoundingMode::Nearest,
+    b"d" => RoundingMode::Down,
+    b"u" => RoundingMode::Up,
+    b"z" => RoundingMode::Zero,
+    _ => return None,
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -4078,5 +4322,56 @@ mod tests {
     assert!(errors("x := ;")[0].contains("Expected an expression"));
     assert!(errors("f :: () { g(a; }")[0].contains("Expected ')'"));
     assert!(errors("#frobnicate x;")[0].contains("Unknown directive"));
+  }
+  #[test]
+  fn asm_blocks_keep_their_operands_as_expressions() {
+    assert_eq!(
+      printed("f :: () { #asm { mov apple:, 10; banana: gpr; mov.64 banana, apple; } }"),
+      "f :: () {\n    #asm {\n        mov apple:, 10;\n        banana: gpr;\n        mov.64 banana, apple;\n    }\n}\n"
+    );
+  }
+
+  #[test]
+  fn asm_sizes_are_written_in_bits_whichever_spelling_they_had() {
+    assert!(
+      printed("f :: () { #asm { mov.q a:, 1; mov.8 b:, 2; popcnt?T c, d; } }")
+        .contains("mov.64 a:, 1;")
+    );
+    assert!(printed("f :: () { #asm { movdqu.x v:, w; } }").contains("movdqu.128 v:, w;"));
+    assert!(printed("f :: () { #asm { popcnt?BITS r, v; } }").contains("popcnt?BITS r, v;"));
+  }
+
+  #[test]
+  fn asm_registers_are_pinned_by_name_or_by_number() {
+    let printed =
+      printed("f :: () { #asm { t: gpr === a; v: vec === 9; x === a; mov w: gpr === 15, 10; } }");
+    assert!(printed.contains("t: gpr === a;"));
+    assert!(printed.contains("v: vec === 9;"));
+    assert!(printed.contains("x === a;"));
+    assert!(printed.contains("mov w: gpr === 15, 10;"));
+  }
+
+  #[test]
+  fn asm_memory_operands_keep_the_rigid_order_of_l_15() {
+    let printed = printed(
+      "f :: () { #asm { mov t:, [b]; mov t, [b + 10]; mov t, [b - 10]; mov t, [b + i]; \
+       mov t, [b + i*4 + 10]; mov t, [*p + 8]; mov t, [b + (SIZE + 1)]; } }",
+    );
+    assert!(printed.contains("mov t:, [b];"));
+    assert!(printed.contains("mov t, [b + 10];"));
+    assert!(printed.contains("mov t, [b - 10];"));
+    assert!(printed.contains("mov t, [b + i];"));
+    assert!(printed.contains("mov t, [b + i*4 + 10];"));
+    assert!(printed.contains("mov t, [*p + 8];"));
+    assert!(printed.contains("mov t, [b + (SIZE + 1)];"));
+  }
+
+  #[test]
+  fn asm_operands_carry_their_evex_masks_and_flags() {
+    let printed =
+      printed("f :: () { #asm AVX512F { cvtps2dq v1:, [ptr]!; cvtps2dq v5: &* mask, v4 !z; } }");
+    assert!(printed.contains("#asm AVX512F {"));
+    assert!(printed.contains("cvtps2dq v1:, [ptr]!;"));
+    assert!(printed.contains("cvtps2dq v5: &* mask, v4 !z;"));
   }
 }

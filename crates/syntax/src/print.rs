@@ -341,15 +341,7 @@ impl Printer<'_> {
       }
       NodeData::Asm(node) => {
         let node = node.clone();
-        self.write("#asm");
-        for (index, feature) in node.features.iter().enumerate() {
-          self.write(if index == 0 { " " } else { ", " });
-          self.name(*feature);
-        }
-        self.write(" {");
-        let body = String::from_utf8_lossy(&node.body).into_owned();
-        self.write(&body);
-        self.write("}");
+        self.asm(&node);
       }
       NodeData::DirectiveBake {
         procedure_call,
@@ -1506,6 +1498,153 @@ impl Printer<'_> {
       self.write(" ");
       self.block(block, BlockForm::Statements);
     }
+  }
+
+  /// An `#asm` block, one instruction per line (**L§15**). Sizes are written
+  /// in bits, which is the spelling that survives a round trip: the letters
+  /// mean the same thing.
+  fn asm(&mut self, node: &AsmNode) {
+    self.write("#asm");
+    for (index, feature) in node.features.iter().enumerate() {
+      self.write(if index == 0 { " " } else { ", " });
+      self.name(*feature);
+    }
+    self.write(" {\n");
+    self.depth += 1;
+    for instruction in &node.instructions {
+      self.indent();
+      if let Some(mnemonic) = instruction.mnemonic {
+        self.name(mnemonic);
+        match instruction.size {
+          AsmSize::Inferred => {}
+          AsmSize::Bits(bits) => {
+            let _ = write!(self.out, ".{bits}");
+          }
+          AsmSize::Of(expression) => {
+            self.write("?");
+            self.expression(expression);
+          }
+        }
+        if !instruction.operands.is_empty() {
+          self.write(" ");
+        }
+      }
+      for (index, operand) in instruction.operands.iter().enumerate() {
+        if index > 0 {
+          self.write(", ");
+        }
+        self.asm_operand(operand);
+      }
+      self.write(";\n");
+    }
+    self.depth -= 1;
+    self.indent();
+    self.write("}");
+  }
+
+  fn asm_operand(&mut self, operand: &AsmOperand) {
+    match &operand.kind {
+      AsmOperandKind::Declaration(declaration) => {
+        self.expression(declaration.name);
+        self.write(":");
+        if let Some(class) = declaration.class {
+          self.write(" ");
+          self.write(asm_class_name(class));
+        }
+        if let Some(register) = declaration.register {
+          self.write(" === ");
+          self.asm_register(register);
+        }
+      }
+      AsmOperandKind::Pin { name, register } => {
+        self.expression(*name);
+        self.write(" === ");
+        self.asm_register(*register);
+      }
+      AsmOperandKind::Expression(expression) => self.expression(*expression),
+      AsmOperandKind::Memory(memory) => self.asm_memory(memory),
+    }
+    if let Some(mask) = &operand.mask {
+      self.write(if mask.zeroing { " &* " } else { " & " });
+      self.expression(mask.register);
+    }
+    // A `!` binds tightly to a memory operand and stands apart from a register
+    // one, which is how the reference writes each (**L§15**).
+    if operand.flag.is_some() && !matches!(operand.kind, AsmOperandKind::Memory(_)) {
+      self.write(" ");
+    }
+    match operand.flag {
+      None => {}
+      Some(AsmFlag::Plain) => self.write("!"),
+      Some(AsmFlag::Rounding(mode)) => {
+        self.write("!");
+        self.write(match mode {
+          RoundingMode::Nearest => "n",
+          RoundingMode::Down => "d",
+          RoundingMode::Up => "u",
+          RoundingMode::Zero => "z",
+        });
+      }
+    }
+  }
+
+  /// `[base + index*scale + displacement]`. A displacement that is not a bare
+  /// number is written in parentheses, which is what tells it apart from an
+  /// index when the operand is read back (**L§15**).
+  fn asm_memory(&mut self, memory: &AsmMemory) {
+    self.write("[");
+    if memory.by_reference {
+      self.write("*");
+    }
+    self.expression(memory.base);
+    if let Some(index) = memory.index {
+      self.write(" + ");
+      self.expression(index);
+      if let Some(scale) = memory.scale {
+        self.write("*");
+        self.expression(scale);
+      }
+    }
+    if let Some(displacement) = memory.displacement {
+      self.write(if memory.displacement_is_negative {
+        " - "
+      } else {
+        " + "
+      });
+      let bare = memory.index.is_some()
+        || memory.displacement_is_negative
+        || matches!(self.ast.data(displacement), NodeData::Literal(_))
+        || self
+          .ast
+          .flags(displacement)
+          .contains(NodeFlags::IS_PARENTHESIZED);
+      if bare {
+        self.expression(displacement);
+      } else {
+        self.write("(");
+        self.expression(displacement);
+        self.write(")");
+      }
+    }
+    self.write("]");
+  }
+
+  fn asm_register(&mut self, register: AsmRegister) {
+    match register {
+      AsmRegister::Named(symbol) => self.name(symbol),
+      AsmRegister::Numbered(number) => {
+        let _ = write!(self.out, "{number}");
+      }
+    }
+  }
+}
+
+fn asm_class_name(class: AsmClass) -> &'static str {
+  match class {
+    AsmClass::Gpr => "gpr",
+    AsmClass::Str => "str",
+    AsmClass::Vec => "vec",
+    AsmClass::Omr => "omr",
   }
 }
 

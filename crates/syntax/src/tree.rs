@@ -320,18 +320,39 @@ impl TreePrinter<'_> {
         self.child("name", *name);
       }
       NodeData::Asm(node) => {
+        let node = node.clone();
         let features: Vec<String> = node
           .features
           .iter()
           .map(|feature| self.text_of(self.interner.resolve(*feature)))
           .collect();
-        let _ = write!(
-          header,
-          " features={:?} body={:?}",
-          features,
-          self.text_of(&node.body)
-        );
+        let _ = write!(header, " features={features:?}");
         self.line(label, &header);
+        self.depth += 1;
+        for (index, instruction) in node.instructions.iter().enumerate() {
+          let mnemonic = instruction
+            .mnemonic
+            .map(|mnemonic| self.text_of(self.interner.resolve(mnemonic)))
+            .unwrap_or_default();
+          let mut line = format!("INSTRUCTION {mnemonic}");
+          match instruction.size {
+            AsmSize::Inferred => {}
+            AsmSize::Bits(bits) => {
+              let _ = write!(line, ".{bits}");
+            }
+            AsmSize::Of(_) => line.push_str(" size_of"),
+          }
+          self.line(&format!("instruction[{index}]"), &line);
+          self.depth += 1;
+          if let AsmSize::Of(expression) = instruction.size {
+            self.child("size", expression);
+          }
+          for (index, operand) in instruction.operands.iter().enumerate() {
+            self.asm_operand(index, operand);
+          }
+          self.depth -= 1;
+        }
+        self.depth -= 1;
       }
       NodeData::DirectiveBake {
         procedure_call,
@@ -458,6 +479,67 @@ impl TreePrinter<'_> {
         let _ = write!(header, " {}", which.text());
         self.line(label, &header);
       }
+    }
+  }
+
+  fn asm_operand(&mut self, index: usize, operand: &AsmOperand) {
+    let label = format!("operand[{index}]");
+    match &operand.kind {
+      AsmOperandKind::Declaration(declaration) => {
+        let mut line = String::from("DECLARE");
+        if let Some(class) = declaration.class {
+          let _ = write!(line, " {class:?}");
+        }
+        if let Some(register) = declaration.register {
+          let _ = write!(line, " === {}", self.asm_register(register));
+        }
+        self.line(&label, &line);
+        self.child("name", declaration.name);
+      }
+      AsmOperandKind::Pin { name, register } => {
+        let line = format!("PIN === {}", self.asm_register(*register));
+        self.line(&label, &line);
+        self.child("name", *name);
+      }
+      AsmOperandKind::Expression(expression) => self.node(&label, *expression),
+      AsmOperandKind::Memory(memory) => {
+        let mut line = String::from("MEMORY");
+        if memory.by_reference {
+          line.push_str(" by_reference");
+        }
+        self.line(&label, &line);
+        self.depth += 1;
+        self.node("base", memory.base);
+        self.optional("index", memory.index);
+        self.optional("scale", memory.scale);
+        if let Some(displacement) = memory.displacement {
+          let label = if memory.displacement_is_negative {
+            "displacement_negative"
+          } else {
+            "displacement"
+          };
+          self.node(label, displacement);
+        }
+        self.depth -= 1;
+      }
+    }
+    self.depth += 1;
+    if let Some(mask) = &operand.mask {
+      self.node(
+        if mask.zeroing { "mask_zeroing" } else { "mask" },
+        mask.register,
+      );
+    }
+    if let Some(flag) = operand.flag {
+      self.line("flag", &format!("{flag:?}"));
+    }
+    self.depth -= 1;
+  }
+
+  fn asm_register(&self, register: AsmRegister) -> String {
+    match register {
+      AsmRegister::Named(symbol) => self.text_of(self.interner.resolve(symbol)),
+      AsmRegister::Numbered(number) => number.to_string(),
     }
   }
 }

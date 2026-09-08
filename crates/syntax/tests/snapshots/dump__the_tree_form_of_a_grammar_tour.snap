@@ -549,7 +549,14 @@ BLOCK DataDeclarations BlockFlags(0x0)
                 context[0]: BINARY_OPERATOR = BinaryFlags(0x0)
                   left: IDENT allocator IdentFlags(0x0)
                   right: IDENT temp IdentFlags(0x0)
-          statement[16]: ASM features=[] body=" mov.64 a:, 10; add a, a; "
+          statement[16]: ASM features=[]
+            instruction[0]: INSTRUCTION mov.64
+              operand[0]: DECLARE
+                name: IDENT a IdentFlags(0x0)
+              operand[1]: LITERAL int 10 LiteralFlags(IS_A_NUMBER)
+            instruction[1]: INSTRUCTION add
+              operand[0]: IDENT a IdentFlags(0x0)
+              operand[1]: IDENT a IdentFlags(0x0)
           statement[17]: DIRECTIVE_BYTES
             expression: LITERAL array LiteralFlags(0x0)
               member[0]: LITERAL int 144 LiteralFlags(IS_A_NUMBER | HEX)

@@ -909,10 +909,128 @@ pub struct DirectiveModuleParameters {
   pub common_code: Option<NodeId>,
 }
 
+/// One `#asm` block (**L§15**). Everything an operand can name — a high-level
+/// variable, a constant, the type behind a `?T` size — is an ordinary
+/// expression node, so the scope tree and the checker see those names the way
+/// they see any other.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AsmNode {
+  /// The `x86_Feature_Flag` names the block was tagged with.
   pub features: Vec<Symbol>,
-  pub body: Box<[u8]>,
+  pub instructions: Vec<AsmInstruction>,
+}
+
+/// One statement of an `#asm` block. A statement with no mnemonic is a
+/// declaration or a pinning on its own (`t: gpr === a;`, `x === a;`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmInstruction {
+  pub span: Span,
+  pub mnemonic: Option<Symbol>,
+  pub size: AsmSize,
+  pub operands: Vec<AsmOperand>,
+}
+
+/// The operand size a mnemonic was tagged with (**L§15**).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AsmSize {
+  /// No tag: the block's feature set and the operands decide.
+  Inferred,
+  /// `.8` … `.512`, and the letter spellings `.b .w .d .q .x .y .z`.
+  Bits(u32),
+  /// `?T`, where a type means its size in bits and an integer means itself.
+  Of(NodeId),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmOperand {
+  pub span: Span,
+  pub kind: AsmOperandKind,
+  /// `&mask` merges into the destination, `&* mask` zeroes what the mask
+  /// leaves out (**L§15**).
+  pub mask: Option<AsmMask>,
+  /// The `!` suffix: broadcast on a memory operand, suppress-all-exceptions
+  /// with an optional rounding mode on a register one.
+  pub flag: Option<AsmFlag>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AsmOperandKind {
+  /// `name:`, `name: gpr`, `name: gpr === a` — a register the block declares.
+  /// The declaration is visible in the scope the block stands in, not in a
+  /// scope of the block's own.
+  Declaration(AsmDeclaration),
+  /// `x === a` — pins a name the block already knows to a register.
+  Pin { name: NodeId, register: AsmRegister },
+  /// A register the block declared earlier, a high-level variable, or a
+  /// constant.
+  Expression(NodeId),
+  /// `[base + index*scale + displacement]`.
+  Memory(Box<AsmMemory>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmDeclaration {
+  /// The `Ident` node the name was written as, so that the declaration has a
+  /// node of its own the way every other declaration does.
+  pub name: NodeId,
+  pub class: Option<AsmClass>,
+  pub register: Option<AsmRegister>,
+}
+
+/// A register pool (**L§15**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsmClass {
+  Gpr,
+  Str,
+  Vec,
+  Omr,
+}
+
+/// Where a `===` pinned an operand: `a b c d si di sp bp` name one of the
+/// first eight general-purpose registers, a number names any of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsmRegister {
+  Named(Symbol),
+  Numbered(u32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmMask {
+  pub register: NodeId,
+  /// `&*` rather than `&`.
+  pub zeroing: bool,
+}
+
+/// The `!` suffix of an operand (**L§15**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsmFlag {
+  /// `!` on a memory operand broadcasts it, on a register one suppresses all
+  /// exceptions.
+  Plain,
+  /// `!n`, `!d`, `!u`, `!z`.
+  Rounding(RoundingMode),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoundingMode {
+  Nearest,
+  Down,
+  Up,
+  Zero,
+}
+
+/// A memory operand, whose components come in the rigid order the reference
+/// requires (**L§15**).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmMemory {
+  /// `[*p + 8]`: the base names a value by reference rather than by value.
+  pub by_reference: bool,
+  pub base: NodeId,
+  pub index: Option<NodeId>,
+  pub scale: Option<NodeId>,
+  pub displacement: Option<NodeId>,
+  /// Whether the displacement was written after a `-`.
+  pub displacement_is_negative: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
