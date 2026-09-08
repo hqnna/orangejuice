@@ -10,6 +10,7 @@ license.workspace = true
 oj-codegen.workspace = true
 oj-diag.workspace = true
 oj-ir.workspace = true
+oj-meta.workspace = true
 oj-runtime.workspace = true
 oj-scope.workspace = true
 oj-sema.workspace = true

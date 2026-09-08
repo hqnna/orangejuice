@@ -14,6 +14,7 @@ use oj_syntax::ast::{Argument, NodeData, NodeId, ProcedureFlags};
 use oj_types::{Layout, TypeId};
 
 use crate::checker::{Checker, Expr};
+use crate::constants::{Const, Value};
 use crate::overload::Resolved;
 use crate::poly::InstanceId;
 
@@ -86,6 +87,9 @@ pub struct ProcedureBody {
   pub returns: Vec<Option<DeclId>>,
   pub flags: ProcedureFlags,
   pub foreign_name: Option<Box<[u8]>>,
+  /// The name a `#compiler "name"` gave the compiler procedure it declares,
+  /// which is the symbol the compiler binds it under (**C§3.3**).
+  pub intrinsic_name: Option<Box<[u8]>>,
   pub library: Option<Symbol>,
   pub export_name: Option<Box<[u8]>>,
 }
@@ -391,6 +395,7 @@ impl Checker<'_> {
       returns,
       flags: payload.procedure_flags,
       foreign_name: payload.foreign_function_name.clone(),
+      intrinsic_name: payload.intrinsic_name.clone(),
       library,
       export_name,
     })
@@ -543,5 +548,113 @@ impl Checker<'_> {
     node: NodeId,
   ) -> Option<oj_scope::Expansion> {
     self.expand_insert(scope, source, node)
+  }
+
+  /// The bytes a variable of `type_id` starts life with: zero, then whatever
+  /// default each member carries (**L§8.2**). This is what a metaprogram sees
+  /// when it asks the compiler for a struct it has never filled in — a fresh
+  /// `Build_Options`, say (**C§3.1**).
+  ///
+  /// Only what folds is written. A default that needs a `#run`, an address or
+  /// an allocation leaves its member zeroed, which is what the reference does
+  /// for one it cannot put in the executable either.
+  pub fn default_bytes(&mut self, type_id: TypeId) -> Option<Vec<u8>> {
+    let layout = self.layout(type_id)?;
+    let mut bytes = vec![0u8; layout.size as usize];
+    self.write_defaults(type_id, 0, &mut bytes);
+    Some(bytes)
+  }
+
+  fn write_defaults(&mut self, type_id: TypeId, at: usize, bytes: &mut [u8]) {
+    let Some(definition) = self.types().struct_of(type_id) else {
+      return;
+    };
+    let members: Vec<(usize, TypeId, u64, bool)> = self
+      .types()
+      .struct_info(definition)
+      .members
+      .iter()
+      .enumerate()
+      .map(|(index, member)| {
+        (
+          index,
+          member.type_id,
+          member.offset,
+          member.is_constant() || member.imported_through.is_some(),
+        )
+      })
+      .collect();
+    let defaults: Vec<(usize, SourceId, NodeId)> = self.member_defaults_of(definition).to_vec();
+    let scope = self.struct_scope(definition);
+
+    for (index, member_type, offset, skip) in members {
+      if skip {
+        continue;
+      }
+      let at = at + offset as usize;
+      match defaults.iter().find(|(slot, _, _)| *slot == index) {
+        Some((_, source, node)) => {
+          let (source, node) = (*source, *node);
+          let scope = match scope {
+            Some(scope) => self.scope_at(source, node, scope),
+            None => continue,
+          };
+          if let Some(constant) = self.expression(scope, source, node).constant {
+            self.write_constant(&constant, member_type, at, bytes);
+          }
+        }
+        // A member with no default of its own may still be a struct whose
+        // members have theirs.
+        None => self.write_defaults(member_type, at, bytes),
+      }
+    }
+  }
+
+  /// Writes one folded constant into a struct's bytes, as far as a value that
+  /// has to survive without an address can go.
+  fn write_constant(&mut self, constant: &Const, target: TypeId, at: usize, bytes: &mut [u8]) {
+    let Some(layout) = self.layout(target) else {
+      return;
+    };
+    let size = layout.size as usize;
+    if size == 0 || at + size > bytes.len() {
+      return;
+    }
+    let slot = &mut bytes[at..at + size];
+    match &constant.value {
+      Value::Bool(value) => slot[0] = u8::from(*value),
+      Value::Int(value) => {
+        let value = *value as u128;
+        for (index, byte) in slot.iter_mut().enumerate() {
+          *byte = (value >> (index * 8)) as u8;
+        }
+      }
+      Value::Float(value) => match size {
+        4 => slot.copy_from_slice(&(*value as f32).to_ne_bytes()),
+        8 => slot.copy_from_slice(&value.to_ne_bytes()),
+        _ => {}
+      },
+      Value::Bytes(source) if source.len() == size => slot.copy_from_slice(source),
+      _ => {}
+    }
+  }
+
+  /// The type a name denotes anywhere in the program. A metaprogram's own
+  /// structs — `Build_Options`, `Message` — belong to the distribution rather
+  /// than to the compiler, so this is how the compiler finds one without
+  /// writing its scope down (**C§3.2**).
+  pub fn type_named(&mut self, name: &str) -> Option<TypeId> {
+    let symbol = self.interner().intern(name.as_bytes());
+    let tree = self.program().tree();
+    let candidates: Vec<DeclId> = (0..tree.declaration_count() as u32)
+      .map(DeclId)
+      .filter(|id| {
+        let decl = tree.decl(*id);
+        decl.name == symbol && matches!(decl.kind, oj_scope::DeclKind::Struct)
+      })
+      .collect();
+    candidates
+      .into_iter()
+      .find_map(|id| self.decl_type(id).denoted)
   }
 }

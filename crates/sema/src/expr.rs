@@ -107,6 +107,11 @@ impl Checker<'_> {
       NodeData::DirectiveExists(_) => Expr::constant(Const::bool(false)),
       // `#compile_time` is a `bool` but not a constant one (**L§5.14**).
       NodeData::DirectiveCompileTime => Expr::value(TypeId::BOOL),
+      // `#code,null` is the one `Code` that is a constant on its own: it names
+      // no program, tests false, and inserts nothing (**L§13.1**).
+      NodeData::DirectiveCode { flags, .. } if flags.contains(oj_syntax::ast::CodeFlags::NULL) => {
+        Expr::constant(Const::new(TypeId::CODE, Value::Null))
+      }
       NodeData::DirectiveCode { .. } => Expr::value(TypeId::CODE),
       NodeData::DirectiveRun(_) => self.run_type(scope, source, node),
       // A block in expression position is an `ifx` branch: its value is its

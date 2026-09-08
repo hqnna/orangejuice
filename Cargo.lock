@@ -347,9 +347,11 @@ dependencies = [
  "oj-jit",
  "oj-lexer",
  "oj-link",
+ "oj-meta",
  "oj-scope",
  "oj-sema",
  "oj-testsupport",
+ "oj-types",
  "tempfile",
 ]
 
@@ -379,6 +381,7 @@ dependencies = [
  "oj-codegen",
  "oj-diag",
  "oj-ir",
+ "oj-meta",
  "oj-runtime",
  "oj-scope",
  "oj-sema",
@@ -410,6 +413,9 @@ dependencies = [
 [[package]]
 name = "oj-meta"
 version = "0.1.0"
+dependencies = [
+ "oj-testsupport",
+]
 
 [[package]]
 name = "oj-runtime"

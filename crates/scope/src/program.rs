@@ -275,8 +275,27 @@ impl<'a> Program<'a> {
     root: &Path,
     options: Options,
   ) -> Self {
+    Self::build_input(sources, interner, &[root.to_path_buf()], &[], options)
+  }
+
+  /// Resolves a whole workspace: the files a metaprogram added and the strings
+  /// it added beside them, all of them files of the main program (**C§3.1**).
+  /// An added string is a source of its own under the name it is given, so a
+  /// diagnostic in one points somewhere a reader can find.
+  pub fn build_input(
+    sources: &'a SourceMap,
+    interner: &'a Interner,
+    roots: &[PathBuf],
+    strings: &[(PathBuf, String)],
+    options: Options,
+  ) -> Self {
+    let anchor = roots
+      .first()
+      .cloned()
+      .or_else(|| strings.first().map(|(path, _)| path.clone()))
+      .unwrap_or_default();
     let jai_dir = options.jai_dir.clone().unwrap_or_default();
-    let mut import_path = ImportPath::default_for(root, &jai_dir);
+    let mut import_path = ImportPath::default_for(&anchor, &jai_dir);
     for directory in options.import_dirs.iter().rev() {
       import_path.prepend(directory.clone());
     }
@@ -321,7 +340,12 @@ impl<'a> Program<'a> {
     if program.options.load_preload {
       program.load_preload();
     }
-    program.load_file_into(main, root, None);
+    for root in roots {
+      program.load_file_into(main, root, None);
+    }
+    for (path, text) in strings {
+      program.load_text_into(main, path, text);
+    }
     program.settle_pending_ifs();
     program
   }
@@ -566,6 +590,20 @@ impl<'a> Program<'a> {
       }
     };
 
+    self.admit_file(module, source, path);
+  }
+
+  /// Admits a string a metaprogram added as a file of `module`, under a path of
+  /// its own so that a `#load` inside it and a diagnostic about it both have
+  /// somewhere to point (**C§3.1**).
+  fn load_text_into(&self, module: ScopeId, path: &Path, text: &str) {
+    let source = self.sources.add_string(path, text);
+    self.admit_file(module, source, path);
+  }
+
+  /// Parses one already-loaded source as a file scope under `module` and walks
+  /// it.
+  fn admit_file(&self, module: ScopeId, source: SourceId, path: &Path) {
     let file = self.sources.file(source);
     let parsed = Arc::new(oj_syntax::parse(file.bytes(), source, self.interner));
     self

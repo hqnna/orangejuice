@@ -5,3 +5,6 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
+[dev-dependencies]
+oj-testsupport.workspace = true

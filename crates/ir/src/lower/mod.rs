@@ -432,9 +432,22 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let mut library = None;
     let mut symbol = None;
     if let Some(body) = &body {
+      // A `#compiler` procedure has no body either, but the compiler is what
+      // answers it, so it keeps the Jai convention and binds to `oj-meta`
+      // under the name `#compiler "…"` gave it (**C§3.3**).
+      let intrinsic = body
+        .flags
+        .contains(ast::ProcedureFlags::SYNTACTICALLY_MARKED_AS_COMPILER);
+      if intrinsic {
+        flags |= ProcedureFlags::FOREIGN | ProcedureFlags::COMPILER;
+        symbol = Some(match &body.intrinsic_name {
+          Some(name) => String::from_utf8_lossy(name).into_owned(),
+          None => name.clone(),
+        });
+      }
       // A body that lives in a library is called the C way and has no context
       // to be handed (**L§12.1**).
-      if body.block.is_none() {
+      else if body.block.is_none() {
         flags |= ProcedureFlags::FOREIGN | ProcedureFlags::C_CALL | ProcedureFlags::NO_CONTEXT;
       }
       if body.flags.contains(ast::ProcedureFlags::C_CALL) {
@@ -452,7 +465,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       }
       if let Some(foreign) = &body.foreign_name {
         symbol = Some(String::from_utf8_lossy(foreign).into_owned());
-      } else if flags.contains(ProcedureFlags::FOREIGN) {
+      } else if flags.contains(ProcedureFlags::FOREIGN) && symbol.is_none() {
         symbol = Some(name.clone());
       }
       library = body.library.map(|name| self.text(name));
@@ -680,6 +693,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
         | TypeKind::Pointer(_)
         | TypeKind::Procedure(_)
         | TypeKind::Type
+        | TypeKind::Code
     )
   }
 

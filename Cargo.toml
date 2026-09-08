@@ -15,6 +15,7 @@ oj-driver = { path = "crates/driver" }
 oj-ir = { path = "crates/ir" }
 oj-jit = { path = "crates/jit" }
 oj-lexer = { path = "crates/lexer" }
+oj-meta = { path = "crates/meta" }
 oj-link = { path = "crates/link" }
 oj-runtime = { path = "crates/runtime" }
 oj-scope = { path = "crates/scope" }

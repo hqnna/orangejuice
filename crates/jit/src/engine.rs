@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use oj_diag::Diagnostic;
-use oj_ir::{Constant, Global, GlobalInit, Library, Program};
+use oj_ir::{Constant, Global, GlobalInit, Library, ProcedureFlags, Program};
 use oj_runtime::{Segment, Segments};
 use oj_scope::DeclId;
 use oj_sema::{Checker, CompileTime, ModifyOutcome, ModifyRequest, RunOutcome, RunRequest};
@@ -104,6 +104,7 @@ impl Engine {
     }
 
     self.prepare_data(&lowered.program)?;
+    self.bind_intrinsics(&lowered.program)?;
     self.load_libraries(&lowered.program.libraries);
 
     let module = self.orc.context().create_module(&request.symbol);
@@ -180,6 +181,7 @@ impl Engine {
     }
 
     self.prepare_data(&lowered.program)?;
+    self.bind_intrinsics(&lowered.program)?;
     self.load_libraries(&lowered.program.libraries);
 
     let module = self.orc.context().create_module(&request.symbol);
@@ -232,6 +234,30 @@ impl Engine {
     Ok(ModifyOutcome::Accepted(values))
   }
 
+  /// Binds the `#compiler` procedures a run reached to the compiler's own
+  /// answers (**C§3.3**). A symbol this compiler does not answer is left
+  /// undefined, so the run fails naming it rather than calling nothing.
+  fn bind_intrinsics(&self, program: &Program) -> Result<(), String> {
+    for procedure in &program.procedures {
+      if !procedure.flags.contains(ProcedureFlags::COMPILER) {
+        continue;
+      }
+      {
+        let mut state = self.state.borrow_mut();
+        if !state.defined.insert(procedure.symbol.clone()) {
+          continue;
+        }
+      }
+      let Some(address) = oj_meta::intrinsic(&procedure.symbol) else {
+        return Err(format!(
+          "'{}' is a compiler procedure orangejuice does not answer yet",
+          procedure.name
+        ));
+      };
+      self.orc.define(&procedure.symbol, address as u64)?;
+    }
+    Ok(())
+  }
   /// Gives every global the run reached storage the JIT can bind to. A global
   /// already bound keeps the address — and the contents — it had.
   fn prepare_data(&self, program: &Program) -> Result<(), String> {

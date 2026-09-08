@@ -2,10 +2,11 @@
 //! executable.
 //!
 //! `oj-driver` owns the order the stages run in, the `Build_Options` a command
-//! line sets, and where the artefacts land. Everything the reference does
-//! through a metaprogram — workspaces, messages, plugins — is milestone M8;
-//! what is here is the straight-line build the default metaprogram would ask
-//! for.
+//! line sets, and where the artefacts land. A metaprogram joins in through
+//! `oj-meta`: its `#run`s are part of typechecking, so the workspaces it
+//! created are compiled here once the checker is done with the program that
+//! created them (**C§3.1**). The message loop that would let it watch a
+//! workspace compile is still M8 work.
 
 mod options;
 
@@ -53,8 +54,48 @@ impl Report {
   }
 }
 
+/// The source of one compilation: the file a command line named, or the files
+/// and strings a metaprogram added to a workspace (**C§3.1**).
+#[derive(Clone, Debug, Default)]
+pub struct Input {
+  pub files: Vec<PathBuf>,
+  /// Strings added to the program, each under a path of its own so that a
+  /// diagnostic about one can be rendered.
+  pub strings: Vec<(PathBuf, String)>,
+}
+
+impl Input {
+  pub fn file(path: &Path) -> Self {
+    Self {
+      files: vec![path.to_path_buf()],
+      strings: Vec::new(),
+    }
+  }
+
+  /// The file the output is named after and the artefacts land beside.
+  fn anchor(&self) -> PathBuf {
+    self
+      .files
+      .first()
+      .cloned()
+      .or_else(|| self.strings.first().map(|(path, _)| path.clone()))
+      .unwrap_or_default()
+  }
+}
+
 /// Runs the pipeline over one root file.
 pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>) -> Report {
+  run_input(&Input::file(root), options, stage, only)
+}
+
+/// Runs the pipeline over a whole workspace.
+pub fn run_input(
+  input: &Input,
+  options: &BuildOptions,
+  stage: Stage,
+  only: Option<&str>,
+) -> Report {
+  let root = &input.anchor();
   let sources = SourceMap::new();
   let interner = Interner::new();
   let mut scope_options = oj_scope::Options {
@@ -63,7 +104,13 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
   };
   scope_options.import_dirs = options.import_dirs.clone();
 
-  let program = oj_scope::Program::build(&sources, &interner, root, scope_options);
+  let program = oj_scope::Program::build_input(
+    &sources,
+    &interner,
+    &input.files,
+    &input.strings,
+    scope_options,
+  );
   let mut report = Report::default();
   let render = |diagnostics: &[oj_diag::Diagnostic], report: &mut Report| {
     for diagnostic in diagnostics {
@@ -93,10 +140,24 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
     Err(error) => return Report::failure(error),
   };
   checker.set_compile_time(engine.clone());
+
+  // A metaprogram runs as part of typechecking, since its work is done by the
+  // `#run`s the checker executes (**C§3.1**). What it asks the compiler for
+  // lands in this, and the workspaces it created are built once it is done.
+  let outer = oj_meta::install(metaprogram_state(&mut checker, options));
   checker.check();
+  let meta = oj_meta::uninstall().unwrap_or_default();
+  if let Some(outer) = outer {
+    oj_meta::install(outer);
+  }
   render(checker.diagnostics(), &mut report);
-  if checker.has_errors() {
+  report_metaprogram_diagnostics(&meta, &mut report);
+  if checker.has_errors() || meta.has_errors() {
     report.failed = true;
+    return report;
+  }
+  build_workspaces(&meta, root, options, stage, &mut report);
+  if report.failed {
     return report;
   }
 
@@ -184,6 +245,151 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
   }
 }
 
+/// What `compiler_get_version_info` reports: the reference distribution this
+/// compiler is compatible with, spelled the way that compiler spells it
+/// (**C§3.3**).
+pub const JAI_VERSION: &str = "beta 0.2.009, built on 6 February 2025";
+const JAI_VERSION_NUMBERS: (i32, i32, i32) = (0, 2, 9);
+
+/// The compile-time state a metaprogram works on: what the compiler will tell
+/// it about itself, and the `Build_Options` a fresh workspace starts with.
+///
+/// The defaults come out of the distribution's own `Build_Options`, member by
+/// member, rather than being written down here — the struct is the
+/// distribution's, so the only honest source for what a field starts at is the
+/// declaration itself (**C§4**).
+fn metaprogram_state(checker: &mut oj_sema::Checker<'_>, options: &BuildOptions) -> oj_meta::Meta {
+  let mut meta = oj_meta::Meta::new();
+  meta.base_path = oj_meta::base_path_of(jai_dir().as_ref());
+  meta.command_line = options.compile_time_command_line.clone();
+  meta.version = String::from(JAI_VERSION);
+  meta.version_numbers = JAI_VERSION_NUMBERS;
+  if let Some(build_options) = checker.type_named("Build_Options") {
+    meta.default_build_options = checker.default_bytes(build_options).unwrap_or_default();
+    meta.build_options_layout = build_options_layout(checker, build_options);
+  }
+  meta
+}
+
+/// Where the fields the driver acts on sit inside `Build_Options`.
+fn build_options_layout(
+  checker: &mut oj_sema::Checker<'_>,
+  build_options: oj_types::TypeId,
+) -> oj_meta::BuildOptionsLayout {
+  let mut layout = oj_meta::BuildOptionsLayout::default();
+  let Some(definition) = checker.types().struct_of(build_options) else {
+    return layout;
+  };
+  let members: Vec<(String, u64)> = checker
+    .types()
+    .struct_info(definition)
+    .members
+    .iter()
+    .map(|member| {
+      (
+        checker.interner().resolve_lossy(member.name).into_owned(),
+        member.offset,
+      )
+    })
+    .collect();
+  for (name, offset) in members {
+    match name.as_str() {
+      "output_executable_name" => layout.output_executable_name = Some(offset),
+      "output_path" => layout.output_path = Some(offset),
+      _ => {}
+    }
+  }
+  layout
+}
+
+/// Turns what a metaprogram reported into diagnostics of the compilation
+/// (**C§3.3**).
+fn report_metaprogram_diagnostics(meta: &oj_meta::Meta, report: &mut Report) {
+  for entry in &meta.reports {
+    let label = match entry.mode {
+      oj_meta::ReportMode::Error | oj_meta::ReportMode::ErrorContinuable => "Error",
+      oj_meta::ReportMode::Warning => "Warning",
+      oj_meta::ReportMode::Info => "Info",
+    };
+    let location = if entry.filename.is_empty() {
+      String::new()
+    } else {
+      format!("{}:{},{}: ", entry.filename, entry.line, entry.character)
+    };
+    report
+      .diagnostics
+      .push(format!("{location}{label}: {}\n", entry.message));
+  }
+}
+
+/// Compiles the workspaces a metaprogram created (**C§3.1**). Each one is a
+/// program of its own: its own scope tree, its own typechecking, its own
+/// executable, named by the `Build_Options` the metaprogram set on it.
+fn build_workspaces(
+  meta: &oj_meta::Meta,
+  outer: &Path,
+  options: &BuildOptions,
+  stage: Stage,
+  report: &mut Report,
+) {
+  let directory = outer
+    .parent()
+    .map(Path::to_path_buf)
+    .unwrap_or_else(|| PathBuf::from("."));
+  for workspace in meta.buildable() {
+    let mut nested = options.clone();
+    nested.compile_time_command_line = Vec::new();
+    if let Some(name) = meta.workspace_string(workspace, |layout| layout.output_executable_name)
+      && !name.is_empty()
+    {
+      nested.output_executable_name = Some(name);
+    }
+    if let Some(path) = meta.workspace_string(workspace, |layout| layout.output_path)
+      && !path.is_empty()
+    {
+      nested.output_path = Some(PathBuf::from(path));
+    }
+    let input = Input {
+      files: workspace.files.clone(),
+      strings: workspace
+        .strings
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+          (
+            added_string_path(workspace, &directory, index),
+            text.clone(),
+          )
+        })
+        .collect(),
+    };
+    let inner = run_input(&input, &nested, stage, None);
+    report.diagnostics.extend(inner.diagnostics);
+    if inner.failed {
+      report.failed = true;
+      return;
+    }
+    if report.executable.is_none() {
+      report.executable = inner.executable;
+      report.link_line = inner.link_line;
+    }
+  }
+}
+
+/// The name an added string is given, which is where a diagnostic about it
+/// points and what a `#load` inside it resolves against (**C§3.1**).
+fn added_string_path(workspace: &oj_meta::Workspace, outer: &Path, index: usize) -> PathBuf {
+  let directory = workspace
+    .files
+    .first()
+    .and_then(|file| file.parent().map(Path::to_path_buf))
+    .unwrap_or_else(|| outer.to_path_buf());
+  directory.join(format!(
+    ".added_strings_w{}_{}.jai",
+    workspace.id,
+    index + 1
+  ))
+}
 /// Gives every `#no_reset` global the bytes compile-time execution left in it
 /// (**L§12.3**). Everything else keeps the initializer the front end folded,
 /// which is the reset.
