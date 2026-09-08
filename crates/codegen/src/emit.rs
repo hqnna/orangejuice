@@ -168,6 +168,15 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
             None => (llvm_type, Some(llvm_type.const_zero())),
           }
         }
+        // `#no_reset`: the bytes compile time left in the global are what the
+        // program starts with (**L§12.3**).
+        GlobalInit::Bytes(bytes) => {
+          let data = self.context.const_string(bytes, false);
+          (
+            BasicTypeEnum::from(data.get_type()),
+            Some(BasicValueEnum::from(data)),
+          )
+        }
       };
       let value = self
         .module

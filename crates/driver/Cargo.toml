@@ -10,6 +10,7 @@ license.workspace = true
 oj-codegen.workspace = true
 oj-diag.workspace = true
 oj-ir.workspace = true
+oj-jit.workspace = true
 oj-lexer.workspace = true
 oj-link.workspace = true
 oj-scope.workspace = true

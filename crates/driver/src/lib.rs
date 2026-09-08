@@ -86,6 +86,13 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
   }
 
   let mut checker = oj_sema::Checker::new(&program);
+  // Compile-time execution is part of typechecking: a `#run` produces the
+  // constant a declaration was waiting for (**L§12.1**).
+  let engine = match oj_jit::Engine::new() {
+    Ok(engine) => std::rc::Rc::new(engine),
+    Err(error) => return Report::failure(error),
+  };
+  checker.set_compile_time(engine.clone());
   checker.check();
   render(checker.diagnostics(), &mut report);
   if checker.has_errors() {
@@ -93,7 +100,12 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
     return report;
   }
 
-  let lowered = oj_ir::lower(&mut checker);
+  // Whatever compile time wrote into an ordinary global is thrown away before
+  // the executable is written; `#no_reset` is what survives (**L§12.3**).
+  engine.reset_globals();
+  let mut lowered = oj_ir::lower(&mut checker);
+  keep_compile_time_data(&mut lowered.program, &engine);
+  let lowered = lowered;
   render(&lowered.diagnostics, &mut report);
   if stage == Stage::Ir {
     report.output = format!(
@@ -169,6 +181,23 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
         Err(error) => Report::failure(error),
       }
     }
+  }
+}
+
+/// Gives every `#no_reset` global the bytes compile-time execution left in it
+/// (**L§12.3**). Everything else keeps the initializer the front end folded,
+/// which is the reset.
+fn keep_compile_time_data(program: &mut oj_ir::Program, engine: &oj_jit::Engine) {
+  for global in &mut program.globals {
+    if !global.no_reset {
+      continue;
+    }
+    let Some(decl) = global.decl else { continue };
+    let Some(mut bytes) = engine.kept_bytes(decl) else {
+      continue;
+    };
+    bytes.resize(global.size as usize, 0);
+    global.init = oj_ir::GlobalInit::Bytes(bytes.into_boxed_slice());
   }
 }
 

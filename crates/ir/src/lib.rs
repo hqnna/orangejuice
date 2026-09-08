@@ -16,5 +16,5 @@ pub use ir::{
   GlobalInit, Inst, Library, Local, LocalId, ParameterKind, ProcId, Procedure, ProcedureFlags,
   Program, Terminator, UnaryOp, ValueId, abi_of, is_scalar,
 };
-pub use lower::{Lowered, lower};
+pub use lower::{Lowered, Run, lower, lower_run};
 pub use print::{print_ir, summary};

@@ -1,5 +1,8 @@
 mod body;
 mod expr;
+mod run;
+
+pub use run::{Run, lower_run};
 
 use std::collections::{HashMap, VecDeque};
 
@@ -48,23 +51,43 @@ impl Lowered {
   }
 }
 
+/// What a lowering is producing, which is what decides how a symbol is named
+/// and who owns the program's data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+  /// The executable: symbols are as short as the linker allows.
+  Executable,
+  /// One `#run`: symbols have to be the same in every module of the
+  /// compilation, since the JIT dylib holds them all (`docs/spec.md` §6.5).
+  CompileTime,
+}
+
+/// A procedure the lowering has reached. A `#run` block is a procedure with no
+/// declaration, so a node identifies it instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ProcKey {
+  Decl(DeclId),
+  Node(SourceId, NodeId),
+}
+
 /// Lowers a typechecked program to IR, starting from its entry points and
 /// following calls (**L§11.6**): a procedure nothing reachable calls is never
 /// lowered, which is what keeps a module's unused polymorphic procedures out
 /// of the back end.
 pub fn lower(checker: &mut Checker) -> Lowered {
-  let mut lowering = Lowering::new(checker);
+  let mut lowering = Lowering::new(checker, Mode::Executable);
   lowering.run();
   lowering.finish()
 }
 
 struct Lowering<'c, 'p> {
   checker: &'c mut Checker<'p>,
+  mode: Mode,
   procedures: Vec<Procedure>,
   globals: Vec<Global>,
-  procedure_ids: HashMap<DeclId, ProcId>,
+  procedure_ids: HashMap<ProcKey, ProcId>,
   global_ids: HashMap<DeclId, GlobalId>,
-  queue: VecDeque<(ProcId, DeclId)>,
+  queue: VecDeque<(ProcId, ProcKey)>,
   libraries: Vec<Library>,
   symbols: HashMap<String, u32>,
   diagnostics: Vec<Diagnostic>,
@@ -94,10 +117,11 @@ struct Lowering<'c, 'p> {
 }
 
 impl<'c, 'p> Lowering<'c, 'p> {
-  fn new(checker: &'c mut Checker<'p>) -> Self {
+  fn new(checker: &'c mut Checker<'p>, mode: Mode) -> Self {
     let context_type = checker.context_type();
     Self {
       checker,
+      mode,
       procedures: Vec::new(),
       globals: Vec::new(),
       procedure_ids: HashMap::new(),
@@ -154,8 +178,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
   }
 
   fn drain_queue(&mut self) {
-    while let Some((id, decl)) = self.queue.pop_front() {
-      self.lower_procedure(id, decl);
+    while let Some((id, key)) = self.queue.pop_front() {
+      self.lower_procedure(id, key);
     }
   }
 
@@ -235,12 +259,23 @@ impl<'c, 'p> Lowering<'c, 'p> {
       .collect()
   }
 
+  /// The symbol a procedure or a global takes. Inside the executable a name is
+  /// only made unique when it collides; in a compile-time module it also has
+  /// to be the same in every other module of the compilation, so the
+  /// declaration it came from is what makes it unique.
+  fn symbol_for(&mut self, base: &str, decl: DeclId) -> String {
+    match self.mode {
+      Mode::Executable => self.unique_symbol(base),
+      Mode::CompileTime => format!("{base}${}", decl.0),
+    }
+  }
+
   fn procedure_id(&mut self, decl: DeclId) -> ProcId {
-    if let Some(id) = self.procedure_ids.get(&decl) {
+    if let Some(id) = self.procedure_ids.get(&ProcKey::Decl(decl)) {
       return *id;
     }
     let id = ProcId(self.procedures.len() as u32);
-    self.procedure_ids.insert(decl, id);
+    self.procedure_ids.insert(ProcKey::Decl(decl), id);
 
     let info = self.checker.program().tree().decl(decl).clone();
     let name = self.text(info.name);
@@ -286,7 +321,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let symbol = match symbol {
       Some(symbol) => symbol,
       None if self.entry_decl == Some(decl) => self.unique_symbol(PROGRAM_MAIN_SYMBOL),
-      None => self.unique_symbol(&name),
+      None => self.symbol_for(&name, decl),
     };
     let (parameters, returns) = match &signature {
       Some(signature) => (signature.arguments.clone(), signature.returns.clone()),
@@ -331,7 +366,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       entry: BlockId(0),
     });
     if !flags.contains(ProcedureFlags::FOREIGN) {
-      self.queue.push_back((id, decl));
+      self.queue.push_back((id, ProcKey::Decl(decl)));
     }
     id
   }
@@ -402,7 +437,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let symbol = if external {
       name.clone()
     } else {
-      self.unique_symbol(&name)
+      self.symbol_for(&name, decl)
     };
 
     self.globals.push(Global {
@@ -412,6 +447,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       init: GlobalInit::Zero,
       size,
       alignment,
+      decl: Some(decl),
+      no_reset: info.flags.contains(DeclarationFlags::NO_RESET),
       external,
       imported,
     });

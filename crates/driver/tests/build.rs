@@ -1,6 +1,7 @@
-//! **M5**: a Jai program becomes an executable that runs.
+//! A Jai program becomes an executable that runs (**M5**), and what its
+//! `#run`s left behind is part of it (**M6**).
 //!
-//! These are the milestone's acceptance tests: the pipeline is driven end to
+//! These are the milestones' acceptance tests: the pipeline is driven end to
 //! end and the produced program is executed, so what is asserted is its
 //! behaviour rather than any intermediate listing.
 
@@ -378,4 +379,189 @@ fn an_output_name_and_path_are_honoured() {
   );
   assert!(out.join("game").exists());
   assert!(out.join(".build").join("game.o").exists());
+}
+
+// --------------------------------------------------------------- M6 -------
+//
+// Compile-time execution. What is asserted is the *program's* behaviour, so a
+// `#run` that got the wrong answer, ran twice, or did not run at all shows up
+// as wrong output rather than as a listing that reads oddly.
+
+/// Builds a program and returns its diagnostics rather than running it, for
+/// the cases where the point is that the build fails.
+fn diagnostics_of(body: &str) -> Option<String> {
+  let jai_dir = match oj_testsupport::jai_dir() {
+    Some(dir) => dir,
+    None => {
+      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+      return None;
+    }
+  };
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("program.jai");
+  std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
+  unsafe {
+    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+  }
+  let report = oj_driver::run(
+    &path,
+    &oj_driver::BuildOptions::new(),
+    oj_driver::Stage::Executable,
+    None,
+  );
+  Some(report.diagnostics.join(""))
+}
+
+#[test]
+fn a_run_computes_the_constant_a_declaration_was_waiting_for() {
+  assert_output(
+    "factorial :: (x: int) -> int {\n\
+       if x <= 1  return 1;\n\
+       return x * factorial(x - 1);\n\
+     }\n\
+     FACT :: #run factorial(5);\n\
+     main :: () { put_number(FACT); }\n",
+    "120\n",
+  );
+}
+
+#[test]
+fn a_run_is_folded_into_the_code_rather_than_called_again() {
+  let Some(built) = build_and_run(
+    "counter := 0;\n\
+     bump :: () -> int { counter += 1; return counter; }\n\
+     A :: #run bump();\n\
+     B :: #run bump();\n\
+     main :: () { put_number(A); put_number(B); put_number(counter); }\n",
+  ) else {
+    return;
+  };
+  // Each `#run` ran once, in order; and the global it wrote at compile time was
+  // reset before the executable was written (**L§12.3**).
+  assert_eq!(built.output, "1\n2\n0\n");
+}
+
+#[test]
+fn a_run_block_returns_through_its_declared_type() {
+  assert_output(
+    "SUM :: #run -> int {\n\
+       total := 0;\n\
+       for i: 1..10  total += i;\n\
+       return total;\n\
+     };\n\
+     main :: () { put_number(SUM); }\n",
+    "55\n",
+  );
+}
+
+#[test]
+fn a_run_produces_a_string_the_program_prints() {
+  assert_output(
+    "greeting :: () -> string { return \"hello from compile time\\n\"; }\n\
+     GREETING :: #run greeting();\n\
+     main :: () { put(GREETING); }\n",
+    "hello from compile time\n",
+  );
+}
+
+#[test]
+fn a_no_reset_global_keeps_what_compile_time_left_in_it() {
+  assert_output(
+    "plain: int;\n\
+     #no_reset kept: int;\n\
+     #no_reset table: [8] u8;\n\
+     #run {\n\
+       plain = 1;\n\
+       kept = 7;\n\
+       for i: 0..7  table[i] = cast(u8)(65 + i);\n\
+     }\n\
+     main :: () {\n\
+       put_number(plain);\n\
+       put_number(kept);\n\
+       write(1, table.data, 8);\n\
+       put(\"\\n\");\n\
+     }\n",
+    "0\n7\nABCDEFGH\n",
+  );
+}
+
+#[test]
+fn two_runs_share_one_global() {
+  assert_output(
+    "#no_reset total: int;\n\
+     #run { total = 20; }\n\
+     #run { total += 22; }\n\
+     main :: () { put_number(total); }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn a_run_calls_a_foreign_procedure_at_compile_time() {
+  // The `#run` writes to standard output while the compiler is running, so the
+  // program itself prints nothing.
+  assert_output("#run put(\"\");\nmain :: () {}\n", "");
+}
+
+#[test]
+fn a_static_if_decides_on_the_result_of_a_run() {
+  assert_output(
+    "answer :: () -> int { return 42; }\n\
+     main :: () {\n\
+       #if #run answer() == 42 {\n\
+         put(\"yes\\n\");\n\
+       } else {\n\
+         put(\"no\\n\");\n\
+       }\n\
+     }\n",
+    "yes\n",
+  );
+}
+
+#[test]
+fn a_failing_assertion_says_so_the_way_the_reference_does() {
+  let Some(text) = diagnostics_of("#assert 1 == 2;\nmain :: () {}\n") else {
+    return;
+  };
+  assert!(
+    text.contains("Error: Compile-time assertion failed."),
+    "{text}"
+  );
+}
+
+#[test]
+fn a_failing_assertion_quotes_its_message() {
+  let Some(text) = diagnostics_of("#assert 1 == 2 \"one is not two\";\nmain :: () {}\n") else {
+    return;
+  };
+  assert!(
+    text.contains("Error: Compile-time assertion failed. \"one is not two\""),
+    "{text}"
+  );
+}
+
+#[test]
+fn an_assertion_over_a_run_is_executed() {
+  let Some(text) = diagnostics_of(
+    "answer :: () -> int { return 41; }\n\
+     #assert #run answer() == 42 \"the answer moved\";\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(
+    text.contains("Error: Compile-time assertion failed. \"the answer moved\""),
+    "{text}"
+  );
+}
+
+#[test]
+fn an_assertion_that_holds_reports_nothing() {
+  assert_output(
+    "#assert 1 + 1 == 2 \"arithmetic\";\n\
+     answer :: () -> int { return 42; }\n\
+     #assert #run answer() == 42;\n\
+     main :: () { put(\"ok\\n\"); }\n",
+    "ok\n",
+  );
 }

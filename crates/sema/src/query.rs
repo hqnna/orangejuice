@@ -174,6 +174,43 @@ impl Checker<'_> {
     };
     let export_name = declaration.program_export_name.clone();
     let header = declaration.expression?;
+    self.procedure_body_from(source, header, decl.scope, export_name)
+  }
+
+  /// The branches a static `#if` decided on, or `None` when its condition did
+  /// not fold (**L§6.10**). A back end lowers only what the front end kept.
+  pub fn static_if_branches(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    payload: &oj_syntax::ast::IfNode,
+  ) -> Option<Vec<NodeId>> {
+    self.static_branch(scope, source, payload)
+  }
+
+  /// The procedure type a header spells out, for a header nobody declared.
+  pub fn procedure_type_at(&mut self, source: SourceId, header: NodeId, scope: ScopeId) -> TypeId {
+    self.procedure_type(source, header, scope)
+  }
+
+  /// The same, for a header nobody declared: the one the parser wraps a `#run`
+  /// block in (**L§12.1**).
+  pub fn procedure_body_at(
+    &mut self,
+    source: SourceId,
+    header: NodeId,
+    scope: ScopeId,
+  ) -> Option<ProcedureBody> {
+    self.procedure_body_from(source, header, scope, None)
+  }
+
+  fn procedure_body_from(
+    &mut self,
+    source: SourceId,
+    header: NodeId,
+    scope: ScopeId,
+    export_name: Option<Box<[u8]>>,
+  ) -> Option<ProcedureBody> {
     let NodeData::ProcedureHeader(payload) = self.ast(source)?.data(header) else {
       return None;
     };
@@ -204,7 +241,7 @@ impl Checker<'_> {
       source,
       header,
       block,
-      scope: decl.scope,
+      scope,
       parameters,
       returns,
       flags: payload.procedure_flags,

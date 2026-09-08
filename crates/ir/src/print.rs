@@ -18,6 +18,7 @@ pub fn print_ir(program: &Program, interner: &Interner, only: Option<&str>) -> S
       let init = match &global.init {
         GlobalInit::Zero => String::from("zero"),
         GlobalInit::Constant(value) => constant_text(value),
+        GlobalInit::Bytes(bytes) => format!("{} bytes kept from compile time", bytes.len()),
       };
       let kind = if global.imported {
         "extern global"

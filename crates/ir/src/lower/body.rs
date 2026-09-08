@@ -18,7 +18,9 @@ impl Lowering<'_, '_> {
     crate::ir::abi_of(self.checker.types(), type_id, flags, self.context_type)
   }
 
-  pub(super) fn lower_procedure(&mut self, id: ProcId, decl: DeclId) {
+  /// Clears the per-procedure state, so that one lowering can walk one body
+  /// after another.
+  pub(super) fn start_procedure(&mut self) {
     self.blocks = vec![Block::new()];
     self.locals.clear();
     self.value_types.clear();
@@ -29,8 +31,18 @@ impl Lowering<'_, '_> {
     self.returns.clear();
     self.return_pointers.clear();
     self.context_value = None;
+  }
 
-    let Some(body) = self.checker.procedure_body(decl) else {
+  pub(super) fn lower_procedure(&mut self, id: ProcId, key: ProcKey) {
+    self.start_procedure();
+    let body = match key {
+      ProcKey::Decl(decl) => self.checker.procedure_body(decl),
+      ProcKey::Node(source, header) => {
+        let scope = self.checker.scope_for(source, header, self.body_scope);
+        self.checker.procedure_body_at(source, header, scope)
+      }
+    };
+    let Some(body) = body else {
       return;
     };
     let Some(block) = body.block else {
@@ -278,8 +290,11 @@ impl Lowering<'_, '_> {
       NodeData::PushContext { .. } => {
         self.unsupported(source, node, "'push_context'", "M6");
       }
-      NodeData::DirectiveRun(_) | NodeData::DirectiveInsert(_) => {
-        self.unsupported(source, node, "compile-time execution", "M6");
+      // A `#run` statement already happened, when the front end typechecked
+      // the body around it (**L§6.11**); the executable holds nothing for it.
+      NodeData::DirectiveRun(_) => {}
+      NodeData::DirectiveInsert(_) => {
+        self.unsupported(source, node, "'#insert'", "M6");
       }
       _ => {
         let scope = self.checker.scope_for(source, node, self.body_scope);
@@ -451,6 +466,15 @@ impl Lowering<'_, '_> {
     let scope = self
       .checker
       .scope_for(source, payload.condition, self.body_scope);
+    // A `#if` the front end decided contributes only the branch it kept, and
+    // no branch at all (**L§6.10**); the rejected one was never typechecked,
+    // so there is nothing here to lower.
+    if let Some(branches) = self.checker.static_if_branches(scope, source, payload) {
+      for branch in branches {
+        self.statement(branch);
+      }
+      return;
+    }
     let Some(condition) = self.condition(scope, source, payload.condition) else {
       return;
     };

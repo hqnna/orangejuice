@@ -17,3 +17,4 @@ oj-syntax.workspace = true
 oj-types.workspace = true
 inkwell = { version = "0.10", default-features = false, features = ["llvm19-1", "target-x86"] }
 llvm-sys = "191"
+libloading.workspace = true

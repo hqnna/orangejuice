@@ -1,3 +1,4 @@
+use oj_scope::DeclId;
 use oj_types::{TypeId, Types};
 
 /// A virtual register inside one [`Procedure`]. Every value is assigned once,
@@ -378,6 +379,9 @@ impl Procedure {
 pub enum GlobalInit {
   Zero,
   Constant(Constant),
+  /// The bytes compile-time execution left in the global, which is what
+  /// `#no_reset` writes into the executable (**L§12.3**).
+  Bytes(Box<[u8]>),
 }
 
 #[derive(Clone, Debug)]
@@ -388,6 +392,13 @@ pub struct Global {
   pub init: GlobalInit,
   pub size: u64,
   pub alignment: u64,
+  /// The declaration the global came from. Two lowerings of one program agree
+  /// on this where they need not agree on a symbol, which is how the bytes a
+  /// `#run` left in a global find their way into the executable.
+  pub decl: Option<DeclId>,
+  /// `#no_reset`: compile-time writes survive into the executable
+  /// (**L§4.7**).
+  pub no_reset: bool,
   /// `#program_export` or `#elsewhere`: the symbol is shared with the linker
   /// rather than private to the module.
   pub external: bool,

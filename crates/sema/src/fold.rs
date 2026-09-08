@@ -36,6 +36,12 @@ impl Checker<'_> {
     right: &Expr,
   ) -> Option<Const> {
     let (left, right) = (left.constant.as_ref()?, right.constant.as_ref()?);
+    // `.NAME` takes its value from the enum on the other side, which is what
+    // makes `#if OS == .LINUX` a constant (**L§5.12**).
+    let named_left = self.enum_name_value(left, right.type_id);
+    let named_right = self.enum_name_value(right, left.type_id);
+    let left = named_left.as_ref().unwrap_or(left);
+    let right = named_right.as_ref().unwrap_or(right);
 
     if let (Value::String(a), Value::String(b)) = (&left.value, &right.value) {
       return match operator {
@@ -63,6 +69,17 @@ impl Checker<'_> {
 
     let (a, b) = (left.value.as_int()?, right.value.as_int()?);
     fold_int(operator, a, b)
+  }
+
+  /// The value a `.NAME` stands for, once an enum type is known for it
+  /// (**L§5.12**).
+  fn enum_name_value(&mut self, value: &Const, enum_type: TypeId) -> Option<Const> {
+    let Value::EnumName(name) = value.value else {
+      return None;
+    };
+    let definition = self.types().enum_of(enum_type)?;
+    let member = self.types().enum_info(definition).value_of(name)?;
+    Some(Const::new(enum_type, Value::Int(i128::from(member))))
   }
 }
 

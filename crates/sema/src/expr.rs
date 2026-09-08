@@ -95,6 +95,7 @@ impl Checker<'_> {
       // `#compile_time` is a `bool` but not a constant one (**L§5.14**).
       NodeData::DirectiveCompileTime => Expr::value(TypeId::BOOL),
       NodeData::DirectiveCode { .. } | NodeData::DirectiveCallerCode => Expr::value(TypeId::CODE),
+      NodeData::DirectiveRun(_) => self.run_type(scope, source, node),
       // A block in expression position is an `ifx` branch: its value is its
       // last expression statement (**L§5.13**).
       NodeData::Block(block) => match block.statements.last() {
@@ -243,6 +244,7 @@ impl Checker<'_> {
     if decl
       .flags
       .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)
+      || self.is_module_parameter(only)
     {
       if let Some(value) = self.decl_constant(only) {
         return Expr {

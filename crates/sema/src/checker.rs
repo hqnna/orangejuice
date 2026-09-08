@@ -241,6 +241,20 @@ pub struct Checker<'a> {
   diagnostics: Vec<Diagnostic>,
   reported: HashSet<(SourceId, Span, String)>,
   depth: u32,
+  /// Whoever can execute a `#run`, when anything can (**L§12.1**). A dump
+  /// stage installs none, and a run whose expression folds needs none.
+  pub(crate) compile_time: Option<std::rc::Rc<dyn crate::run::CompileTime>>,
+  /// The answer each `#run` gave, so that a run written once executes once.
+  pub(crate) runs: HashMap<(SourceId, NodeId), Expr>,
+  /// The runs being worked out right now, which is what makes a `#run` that
+  /// depends on itself an error rather than a hang.
+  pub(crate) runs_in_flight: HashSet<(SourceId, NodeId)>,
+  run_index: usize,
+  /// How many static `#if`s nobody could decide the checker is inside. The
+  /// reference never typechecks a rejected branch (**L§6.10**); orangejuice
+  /// walks both when it cannot tell which one that is, so a `#run` or an
+  /// `#assert` in there has to stay quiet (`docs/spec.md` §10).
+  pub(crate) undecided_static_ifs: u32,
 }
 
 /// Deep enough for the module tree's nested types, shallow enough that a
@@ -328,7 +342,24 @@ impl<'a> Checker<'a> {
       diagnostics: Vec::new(),
       reported: HashSet::new(),
       depth: 0,
+      compile_time: None,
+      runs: HashMap::new(),
+      runs_in_flight: HashSet::new(),
+      run_index: 0,
+      undecided_static_ifs: 0,
     }
+  }
+
+  /// Installs the engine that executes `#run`s. Without one the checker still
+  /// types a program: a run whose expression folds is answered from the front
+  /// end, and one that does not fold stays `unknown` (`docs/spec.md` §6.5).
+  pub fn set_compile_time(&mut self, engine: std::rc::Rc<dyn crate::run::CompileTime>) {
+    self.compile_time = Some(engine);
+  }
+
+  pub(crate) fn next_run_index(&mut self) -> usize {
+    self.run_index += 1;
+    self.run_index - 1
   }
 
   /// Types every declaration of the program, then lays out every struct whose
@@ -341,6 +372,7 @@ impl<'a> Checker<'a> {
       self.complete_struct(definition);
     }
     self.check_bodies();
+    self.check_file_runs();
   }
 
   pub(crate) fn record_pending_body(
@@ -562,6 +594,21 @@ impl<'a> Checker<'a> {
   }
 
   /// The value of a constant declaration, computed on first use (**L§5.11**).
+  /// Whether a declaration is a `#module_parameters` parameter, which is a
+  /// constant of the module scope rather than a variable (**L§11.3**) — a
+  /// procedure's parameter is the same kind of declaration in a scope of its
+  /// own, so where it was declared is what tells the two apart.
+  pub(crate) fn is_module_parameter(&self, id: DeclId) -> bool {
+    let decl = self.program.tree().decl(id);
+    decl.kind == DeclKind::Parameter
+      && self
+        .program
+        .tree()
+        .scope(decl.scope)
+        .kind
+        .is_program_scope()
+  }
+
   pub fn decl_constant(&mut self, id: DeclId) -> Option<Const> {
     self.decl_type(id);
     if let Some(value) = self.decl_constants.get(&id) {
@@ -571,6 +618,7 @@ impl<'a> Checker<'a> {
     if !decl
       .flags
       .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)
+      && !self.is_module_parameter(id)
     {
       return None;
     }
@@ -628,6 +676,13 @@ impl<'a> Checker<'a> {
 
   pub(crate) fn error(&mut self, source: SourceId, span: Span, message: impl Into<String>) {
     self.report(Diagnostic::error(source, span, message));
+  }
+
+  /// Reports something a compile-time engine found, which is how a `#run` that
+  /// could not be built or that crashed reaches the same diagnostic stream as
+  /// everything else.
+  pub fn push_diagnostic(&mut self, diagnostic: Diagnostic) {
+    self.report(diagnostic);
   }
 
   pub(crate) fn info(&mut self, source: SourceId, span: Span, message: impl Into<String>) {

@@ -27,6 +27,92 @@ impl Checker<'_> {
     }
   }
 
+  /// Executes the `#run`s and `#assert`s written at file scope (**L§6.11**).
+  /// A run inside a declaration has already been reached by whoever asked for
+  /// that declaration's type; these belong to nobody, so the checker walks
+  /// them itself, in the order they were written.
+  pub(crate) fn check_file_runs(&mut self) {
+    let units: Vec<(SourceId, ScopeId, NodeId)> = self
+      .program()
+      .units()
+      .iter()
+      .map(|unit| (unit.source, unit.scope, unit.parsed.root))
+      .collect();
+    for (source, scope, root) in units {
+      self.check_runs_in(source, scope, root);
+    }
+  }
+
+  fn check_runs_in(&mut self, source: SourceId, scope: ScopeId, node: NodeId) {
+    if !self.enter() {
+      return;
+    }
+    self.check_runs_in_inner(source, scope, node);
+    self.leave();
+  }
+
+  fn check_runs_in_inner(&mut self, source: SourceId, scope: ScopeId, node: NodeId) {
+    let Some(ast) = self.ast(source) else {
+      return;
+    };
+    match ast.data(node) {
+      NodeData::Block(block) => {
+        for statement in block.statements.clone() {
+          self.check_runs_in(source, scope, statement);
+        }
+      }
+      NodeData::DirectiveRun(_) => {
+        let scope = self.scope_at(source, node, scope);
+        self.expression_type(scope, source, node);
+      }
+      // A `#if` at file scope contributes only the branch it decided
+      // (**L§6.10**), so only that branch's runs happen. One nobody can decide
+      // yet contributes none, the way the scope tree holds its diagnostics
+      // back (`docs/spec.md` §10).
+      NodeData::If(payload)
+        if payload
+          .if_flags
+          .contains(oj_syntax::ast::IfFlags::IS_STATIC) =>
+      {
+        let payload = payload.clone();
+        for branch in self
+          .static_branch(scope, source, &payload)
+          .unwrap_or_default()
+        {
+          self.check_runs_in(source, scope, branch);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /// The branches a static `#if` decided to keep (**L§6.10**). `None` means
+  /// the condition did not fold, which leaves the decision to whoever asked.
+  pub(crate) fn static_branch(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    payload: &oj_syntax::ast::IfNode,
+  ) -> Option<Vec<NodeId>> {
+    if !payload
+      .if_flags
+      .contains(oj_syntax::ast::IfFlags::IS_STATIC)
+    {
+      return None;
+    }
+    let condition_scope = self.scope_at(source, payload.condition, scope);
+    let truth = self
+      .expression_type(condition_scope, source, payload.condition)
+      .constant
+      .and_then(|value| value.value.truth())?;
+    let branch = if truth {
+      payload.then_block
+    } else {
+      payload.else_block
+    };
+    Some(branch.into_iter().collect())
+  }
+
   fn check_procedure(&mut self, procedure: DeclId) {
     let decl = self.program().tree().decl(procedure).clone();
     let (Some(node), Some(source)) = (decl.node, decl.source) else {
@@ -119,11 +205,28 @@ impl Checker<'_> {
         } else {
           self.check_condition(context, payload.condition);
         }
-        for branch in [payload.then_block, payload.else_block]
-          .into_iter()
-          .flatten()
-        {
+        // The branch a `#if` rejected is never typechecked (**L§6.10**), which
+        // is what lets a module write `#assert false` in the `else` of an
+        // `OS ==` chain.
+        let decided = self.static_branch(scope, source, &payload);
+        let undecided = decided.is_none()
+          && payload
+            .if_flags
+            .contains(oj_syntax::ast::IfFlags::IS_STATIC);
+        let branches = decided.unwrap_or_else(|| {
+          [payload.then_block, payload.else_block]
+            .into_iter()
+            .flatten()
+            .collect()
+        });
+        if undecided {
+          self.undecided_static_ifs += 1;
+        }
+        for branch in branches {
           self.check_statement(context, branch);
+        }
+        if undecided {
+          self.undecided_static_ifs -= 1;
         }
       }
       NodeData::Case(case) => {
