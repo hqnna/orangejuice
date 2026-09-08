@@ -1,6 +1,9 @@
 use oj_diag::{SourceId, Span};
 use oj_scope::{DeclId, DeclKind, ScopeId};
-use oj_syntax::ast::{Argument, DeclarationFlags, NodeData, NodeId, OperatorType, ProcedureFlags};
+use oj_syntax::ast::{
+  Argument, AsmOperandKind, AsmSize, DeclarationFlags, NodeData, NodeId, OperatorType,
+  ProcedureFlags,
+};
 use oj_types::TypeId;
 
 use crate::checker::Checker;
@@ -285,10 +288,55 @@ impl Checker<'_> {
         let (operator, left, right) = (*operator, *left, *right);
         self.check_assignment(context, node, operator, left, right);
       }
+      // The operands of an `#asm` block are expressions of the block around
+      // it (**L§15**).
+      NodeData::Asm(_) => self.check_asm(context, node),
       // Anything else is an expression statement: typing it is what reports
       // the calls inside it.
       _ => {
         self.expression_type(scope, source, node);
+      }
+    }
+  }
+
+  /// An `#asm` block's operands are ordinary expressions (**L§15**): typing
+  /// them here is what tells the back end how wide a high-level operand is and
+  /// what a `?T` size means, and what makes a name written in one report the
+  /// way any other undeclared name would.
+  fn check_asm(&mut self, context: &Context, node: NodeId) {
+    let (scope, source) = (context.scope, context.source);
+    let Some(ast) = self.ast(source) else {
+      return;
+    };
+    let NodeData::Asm(block) = ast.data(node) else {
+      return;
+    };
+    let block = block.clone();
+    for instruction in &block.instructions {
+      if let AsmSize::Of(expression) = instruction.size {
+        self.expression_type(scope, source, expression);
+      }
+      for operand in &instruction.operands {
+        let expressions = match &operand.kind {
+          AsmOperandKind::Declaration(_) => Vec::new(),
+          AsmOperandKind::Pin { name, .. } => vec![*name],
+          AsmOperandKind::Expression(expression) => vec![*expression],
+          AsmOperandKind::Memory(memory) => [
+            Some(memory.base),
+            memory.index,
+            memory.scale,
+            memory.displacement,
+          ]
+          .into_iter()
+          .flatten()
+          .collect(),
+        };
+        for expression in expressions
+          .into_iter()
+          .chain(operand.mask.iter().map(|mask| mask.register))
+        {
+          self.expression_type(scope, source, expression);
+        }
       }
     }
   }

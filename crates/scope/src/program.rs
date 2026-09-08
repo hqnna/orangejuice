@@ -8,7 +8,8 @@ use oj_lexer::{Interner, Symbol};
 use oj_source::{ImportPath, ModuleError};
 use oj_syntax::Parsed;
 use oj_syntax::ast::{
-  Argument, DeclarationFlags, FilterType, ImportType, NodeData, NodeId, ProcedureFlags, ScopeType,
+  Argument, AsmOperandKind, AsmSize, DeclarationFlags, FilterType, ImportType, NodeData, NodeId,
+  ProcedureFlags, ScopeType,
 };
 
 use crate::constants::{AstSource, ConstValue, Evaluator};
@@ -2274,10 +2275,7 @@ impl Program<'_> {
         let mut target = DataTarget::nested(scope);
         self.poke_name(parsed, module, name, &mut target, source);
       }
-      // `mov a:, 12` inside an `#asm` block declares the register `a` in the
-      // block around it (**L§15**), and the body is a blob until M9 assembles
-      // it, so the scope can still gain names.
-      NodeData::Asm(_) => self.tree.add_pending(scope, PendingProvider::Insert),
+      NodeData::Asm(_) => self.asm(parsed, node, scope, source),
       // `#exists` asks whether a name resolves, so a miss is its answer rather
       // than an error (**L§5.14**); a `#place` target names a struct member,
       // not a scope entry.
@@ -2496,6 +2494,69 @@ impl Program<'_> {
 
   /// One parameter or named return value. `using p: Player` also widens the
   /// scope, which needs `Player`'s members and therefore waits (**L§4.3**).
+  /// An `#asm` block declares its registers in the scope it stands in, not in
+  /// one of its own, so they are still visible to the blocks that follow
+  /// (**L§15**). Everything else an operand names — a high-level variable, a
+  /// constant, the type behind a `?T` size — resolves where it was written.
+  fn asm(&self, parsed: &Parsed, node: NodeId, scope: ScopeId, source: SourceId) {
+    let NodeData::Asm(block) = parsed.ast.data(node) else {
+      return;
+    };
+    let block = block.clone();
+    for instruction in &block.instructions {
+      if let AsmSize::Of(expression) = instruction.size {
+        self.walk(parsed, expression, scope, source);
+      }
+      for operand in &instruction.operands {
+        match &operand.kind {
+          AsmOperandKind::Declaration(declaration) => {
+            self.declare_asm_register(parsed, declaration.name, scope, source);
+          }
+          AsmOperandKind::Pin { name, .. } => self.walk(parsed, *name, scope, source),
+          AsmOperandKind::Expression(expression) => self.walk(parsed, *expression, scope, source),
+          AsmOperandKind::Memory(memory) => {
+            self.walk(parsed, memory.base, scope, source);
+            for part in [memory.index, memory.scale, memory.displacement]
+              .into_iter()
+              .flatten()
+            {
+              self.walk(parsed, part, scope, source);
+            }
+          }
+        }
+        if let Some(mask) = &operand.mask {
+          self.walk(parsed, mask.register, scope, source);
+        }
+      }
+    }
+  }
+
+  /// `mov apple:, 10` declares `apple` the way `apple := 10` would, except
+  /// that what it names is a register rather than storage (**L§15**). A name
+  /// an earlier block already declared is the same register, not a second one.
+  fn declare_asm_register(&self, parsed: &Parsed, name: NodeId, scope: ScopeId, source: SourceId) {
+    let NodeData::Ident(ident) = parsed.ast.data(name) else {
+      return;
+    };
+    let symbol = ident.name;
+    if self.tree.declares(scope, symbol) {
+      return;
+    }
+    let _ = self.tree.declare(Decl {
+      name: symbol,
+      scope,
+      kind: DeclKind::AsmRegister,
+      visibility: Visibility::File,
+      flags: DeclarationFlags::empty(),
+      source: Some(source),
+      span: parsed.ast.node(name).span,
+      node: Some(name),
+      conditional: false,
+      branch: self.branch.get(),
+      overloadable: false,
+    });
+  }
+
   fn declare_parameter(
     &self,
     parsed: &Parsed,

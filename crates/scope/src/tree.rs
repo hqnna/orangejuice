@@ -96,6 +96,9 @@ pub enum DeclKind {
   Placeholder,
   /// A name the compiler injects: `OS`, `CPU`, the basic types (**L§4.3**).
   Builtin,
+  /// A register an `#asm` block declared, which is a `__reg` in the scope the
+  /// block stands in rather than in one of its own (**L§15**).
+  AsmRegister,
 }
 
 impl DeclKind {
@@ -111,6 +114,7 @@ impl DeclKind {
       Self::Iterator => "iterator",
       Self::Placeholder => "placeholder",
       Self::Builtin => "builtin",
+      Self::AsmRegister => "register",
     }
   }
 }
@@ -450,6 +454,14 @@ impl ScopeTree {
     scopes[scope.0 as usize]
       .pending
       .retain(|existing| *existing != provider);
+  }
+
+  /// Whether `scope` itself declares `name`, without looking outward. An
+  /// `#asm` block asks before declaring a register, since a name an earlier
+  /// block introduced is the same register rather than a second one
+  /// (**L§15**).
+  pub fn declares(&self, scope: ScopeId, name: Symbol) -> bool {
+    self.with_scope(scope, |scope| scope.names.contains_key(&name))
   }
 
   /// Looks `name` up from `scope` outward (**L§4.3**): the lexical chain, and

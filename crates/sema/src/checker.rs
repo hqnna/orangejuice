@@ -988,6 +988,12 @@ impl<'a> Checker<'a> {
       // A module name is not a value; member access through it goes to the
       // module's scope instead (**L§11.2**).
       DeclKind::Module(_) | DeclKind::Placeholder => DeclType::UNKNOWN,
+      // A register an `#asm` block declared is a `__reg`, which is what lets a
+      // macro take one as a parameter (**L§15**).
+      DeclKind::AsmRegister => {
+        let name = self.interned().intern(b"__reg");
+        DeclType::value(self.preload_type(name))
+      }
       _ => {
         let (Some(node), Some(source)) = (decl.node, decl.source) else {
           return DeclType::UNKNOWN;
