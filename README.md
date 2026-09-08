@@ -4,7 +4,8 @@ orangejuice (`oj`) is a cleanroom implementation of the [Jai](https://jai.commun
 programming language (reference beta 0.2.009) written in Rust, targeting Linux
 x86_64 with an LLVM 19 backend and LLVM ORC JIT for compile-time execution.
 
-Status: scaffolding. `oj version` and `oj help` work; the compiler itself is
+Status: front end. `oj dump tokens`, `oj dump ast` and `oj dump scopes` run over
+the whole reference distribution; code generation is still ahead. The compiler is
 being built milestone by milestone (`docs/spec.md` §9).
 
 ## Building

@@ -6,11 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 orangejuice (`oj`) is a cleanroom reimplementation of the **Jai** programming language (reference beta 0.2.009) in Rust nightly, targeting **Linux x86_64 only**, with a single LLVM 19 backend via `inkwell` and LLVM ORC JIT for compile-time execution.
 
-**Current state: M2 (parser + AST + printer) has landed.** The nix flake, the cargo workspace and the sixteen crates of `docs/spec.md` §4 exist. `oj version`, `oj help`, `oj dump tokens` and `oj dump ast` work; every other subcommand exits 1 with a "not implemented yet" message naming the milestone that will implement it. Filled in so far: `crates/cli` (the clap CLI), `crates/testsupport` (vendor discovery), `crates/diag` (spans, source map, diagnostics and their reference-format rendering), `crates/source` (memory-mapped loading), `crates/lexer` (tokens, the lexer, the name interner, the token dump) and `crates/syntax` (the AST arena, the parser, the source and tree printers). The rest are still empty — M3 (scopes, imports, `#load`, `#scope_*`, `#if` on constants) is next.
+**Current state: M3 (scopes, imports, `#load`, `#scope_*`, `#if` on constants) has landed.** The nix flake, the cargo workspace and the sixteen crates of `docs/spec.md` §4 exist. `oj version`, `oj help`, `oj dump tokens`, `oj dump ast` and `oj dump scopes` work; every other subcommand exits 1 with a "not implemented yet" message naming the milestone that will implement it. Filled in so far: `crates/cli` (the clap CLI), `crates/testsupport` (vendor discovery), `crates/diag` (spans, source map, diagnostics and their reference-format rendering), `crates/source` (memory-mapped loading, module and `#load` path resolution), `crates/lexer` (tokens, the lexer, the name interner, the token dump), `crates/syntax` (the AST arena, the parser, the source and tree printers) and `crates/scope` (the scope tree, the program loader, the `#if` constant folder, name resolution and the scope dump). The rest are still empty — M4 (types, layout, constants, Match, overloads) is next.
 
 The lexer follows the reference *compiler*; where the shipped `Jai_Lexer` module disagrees with it, **C§5.1** says which of the two is right. `crates/lexer/tests/corpus.rs` lexes all 702 vendor files, and setting `OJ_TOKEN_STREAM_DIR` makes it write a per-file cross-check dump to compare against a `Jai_Lexer`-based dumper.
 
 The AST mirrors `Code_Node.Kind` (**C§5.3**); `crates/syntax/tests/corpus.rs` parses the same 702 files and checks that each one *round-trips* — printing the tree and re-parsing it must give an identical tree, compared through the span-free tree form. That test is the parser's and the printer's contract with each other: whenever one of them learns a construct, the other has to. `crates/syntax/src/rules.rs` holds the one rule they share, which statements need a `;`.
+
+`oj-scope` turns a root file into the scope tree of **L§4.2**: Preload at the root, a module scope per instantiation under it, a file scope per `#load`ed file, then struct/enum/procedure/block scopes. Declarations land in the file or the module scope according to the `#scope_*` directive in effect; `#import` and `using` are recorded as *edges* rather than copied names, so overload sets and `using,except(…)` filters come out right. `crates/scope/tests/corpus.rs` resolves all 702 files on their own and then every top-level `how_to` program whole. Two rules make that possible before the scheduler exists (both in `docs/spec.md` §10): a `#if` nobody can decide yet contributes *every* branch as conditional declarations with its diagnostics held back, and a lookup that misses in a scope holding an unfinished name-inserting construct is a wait rather than an error.
 
 
 ## The specs are the source of truth
@@ -65,14 +67,15 @@ Nix files are exactly four and no more: `flake.nix`, `nix/shell.nix`, `nix/packa
 
 ```
 oj build <file.jai> [jai options]      oj dump tokens <file.jai>
-oj run   <file.jai> [jai options] [-- args]   oj dump ast <file.jai> [--tree]
-oj version                             oj dump ir  <file.jai> [--proc NAME]
-                                       oj dump asm <file.jai> [--llvm]
+oj run   <file.jai> [jai options] [-- args]   oj dump ast    <file.jai> [--tree]
+oj version                             oj dump scopes <file.jai> [--file-only]
+                                       oj dump ir     <file.jai> [--proc NAME]
+                                       oj dump asm    <file.jai> [--llvm]
 ```
 
 Exit codes: 0 success, 1 compile/link failure, 2 usage error. Env: `OJ_JAI_DIR`, `OJ_LOG` (tracing filter), `OJ_THREADS`.
 
-**Single-dash options are the reference compiler's, not ours.** Before adding or changing any option on `build`/`run`, read `docs/spec.md` §5.1 (the full table: name, arity, `Build_Options` effect), **C§2.1** (invocation, compiler-level `---`/`--` options, the exact command-line error wording) and the evidence behind both, `vendor/jai/modules/Default_Metaprogram.jai` — its `case "-…"` labels in pass 1 (lines ~65–99, plugins and the `Check` switches) and pass 2 (lines ~112–308) are the definition, and `HELP_STRING` at the end of that file is the help text `-help` must print. Names, arity, argument order, effects and error strings are copied from there; never invent a single-dash name, an alias or a `--long` form of one. `oj`'s own options are double-dash and clap-owned (`--help`, `--version`, `--tree`, `--proc`, `--llvm`) and may be added freely. A lone `-` ends option processing and sends the rest to `compile_time_command_line`; `oj run`'s `--` (program arguments) is split off before clap sees the line, since the jai-style option list accepts hyphenated values.
+**Single-dash options are the reference compiler's, not ours.** Before adding or changing any option on `build`/`run`, read `docs/spec.md` §5.1 (the full table: name, arity, `Build_Options` effect), **C§2.1** (invocation, compiler-level `---`/`--` options, the exact command-line error wording) and the evidence behind both, `vendor/jai/modules/Default_Metaprogram.jai` — its `case "-…"` labels in pass 1 (lines ~65–99, plugins and the `Check` switches) and pass 2 (lines ~112–308) are the definition, and `HELP_STRING` at the end of that file is the help text `-help` must print. Names, arity, argument order, effects and error strings are copied from there; never invent a single-dash name, an alias or a `--long` form of one. `oj`'s own options are double-dash and clap-owned (`--help`, `--version`, `--tree`, `--file-only`, `--proc`, `--llvm`) and may be added freely. A lone `-` ends option processing and sends the rest to `compile_time_command_line`; `oj run`'s `--` (program arguments) is split off before clap sees the line, since the jai-style option list accepts hyphenated values.
 
 
 ## Architecture
