@@ -386,6 +386,14 @@ impl Checker<'_> {
       };
     };
 
+    // A `$x` parameter is a constant of the instantiation, whatever the
+    // declaration it was written as says (**L§7.8**).
+    if let Some(value) = self.bound_constant(only) {
+      return Expr {
+        overloads: vec![only],
+        ..Expr::constant(value)
+      };
+    }
     let resolved = self.decl_type(only);
     if let Some(denoted) = resolved.denoted {
       return Expr::type_expression(denoted);
@@ -595,6 +603,19 @@ impl Checker<'_> {
       }
       if self.types().is_integer(self.harden(right_type.type_id)) {
         return Expr::value(left_type.type_id);
+      }
+    }
+
+    // Bitwise operators take pointer operands without a cast, and give back a
+    // pointer (**L§3.2**).
+    if matches!(
+      operator,
+      OperatorType::BITWISE_AND | OperatorType::BITWISE_OR | OperatorType::BITWISE_XOR
+    ) {
+      for side in [&left_type, &right_type] {
+        if self.types().is_pointer(side.type_id) {
+          return Expr::value(side.type_id);
+        }
       }
     }
 

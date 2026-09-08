@@ -1185,3 +1185,36 @@ fn a_using_of_a_value_reaches_the_constants_of_its_struct() {
     "48\n",
   );
 }
+
+#[test]
+fn a_baked_value_reaches_the_next_bake_through_the_instantiation() {
+  assert_output(
+    "fill :: (destination: *u8, count: int, $character: u8) {\n\
+       i := 0;\n\
+       while i < count { destination[i] = character; i += 1; }\n\
+     }\n\
+     banner :: (destination: *u8, count: int, $character: u8) {\n\
+       fill(destination, count, character);\n\
+     }\n\
+     main :: () {\n\
+       out: [4] u8;\n\
+       banner(out.data, 3, #char \"x\");\n\
+       out[3] = #char \"\\n\";\n\
+       write(1, out.data, 4);\n\
+     }\n",
+    "xxx\n",
+  );
+}
+
+#[test]
+fn a_bitwise_operator_takes_a_pointer_without_a_cast() {
+  assert_output(
+    "main :: () {\n\
+       values: [8] int;\n\
+       p := values.data;\n\
+       masked := p & ~7;\n\
+       put_number(cast(int)(masked == p));\n\
+     }\n",
+    "1\n",
+  );
+}

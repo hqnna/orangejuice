@@ -1019,6 +1019,22 @@ impl Lowering<'_, '_> {
     {
       return self.string_equality(source, node, operator, left, right);
     }
+    // A bitwise operator on a pointer works on the address (**L§3.2**).
+    if matches!(
+      operator,
+      BinaryOp::BitwiseAnd | BinaryOp::BitwiseOr | BinaryOp::BitwiseXor
+    ) && (self.checker.types().is_pointer(left.type_id)
+      || self.checker.types().is_pointer(right.type_id))
+    {
+      let pointer = match self.checker.types().is_pointer(left.type_id) {
+        true => left.type_id,
+        false => right.type_id,
+      };
+      let left = self.convert(source, node, left, TypeId::U64)?;
+      let right = self.convert(source, node, right, TypeId::U64)?;
+      let bits = self.binary_values(source, node, operator, left, right, TypeId::U64)?;
+      return self.convert(source, node, bits, pointer);
+    }
     // One pointer minus another is how many elements apart they are
     // (**L§3.2**).
     if operator == BinaryOp::Subtract
