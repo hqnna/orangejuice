@@ -546,3 +546,23 @@ fn no_output_produces_nothing() {
   assert!(!report.failed, "{}", report.diagnostics.join(""));
   assert!(!fixture.path("nothing").exists());
 }
+
+#[test]
+fn a_workspace_can_be_a_library_with_no_main() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#run {\n\
+       w := compiler_create_workspace(\"library\");\n\
+       options := get_build_options(w);\n\
+       options.output_executable_name = \"shared\";\n\
+       options.output_type = .DYNAMIC_LIBRARY;\n\
+       set_build_options(options, w);\n\
+       add_build_string(\"#program_export answer :: () -> int { return 42; }\", w);\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("shared.so"));
+}

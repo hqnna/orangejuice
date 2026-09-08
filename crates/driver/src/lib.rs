@@ -186,7 +186,12 @@ pub fn run_input(
   // Whatever compile time wrote into an ordinary global is thrown away before
   // the executable is written; `#no_reset` is what survives (**L§12.3**).
   engine.reset_globals();
-  let mut lowered = oj_ir::lower(&mut checker);
+  // A library has no `main`; what it holds is whatever its exports reach
+  // (**L§11.6**).
+  let mut lowered = match options.output_type {
+    oj_link::OutputType::DynamicLibrary => oj_ir::lower_library(&mut checker),
+    _ => oj_ir::lower(&mut checker),
+  };
   keep_compile_time_data(&mut lowered.program, &engine);
   let lowered = lowered;
   render(&lowered.diagnostics, &mut report);
@@ -523,7 +528,8 @@ fn output_type_of(value: u8) -> oj_link::OutputType {
   match value {
     0 => oj_link::OutputType::NoOutput,
     2 => oj_link::OutputType::DynamicLibrary,
-    3 | 4 => oj_link::OutputType::ObjectFile,
+    3 => oj_link::OutputType::ObjectFile,
+    4 => oj_link::OutputType::ObjectFile,
     _ => oj_link::OutputType::Executable,
   }
 }

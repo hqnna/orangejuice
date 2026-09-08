@@ -99,6 +99,14 @@ pub fn lower(checker: &mut Checker) -> Lowered {
   lowering.finish()
 }
 
+/// Lowers a library: there is no entry point, so what is reachable is what
+/// every `#program_export` reaches (**L§11.6**, **C§4**).
+pub fn lower_library(checker: &mut Checker) -> Lowered {
+  let mut lowering = Lowering::new(checker, Mode::Executable);
+  lowering.run_exports();
+  lowering.finish()
+}
+
 struct Lowering<'c, 'p> {
   checker: &'c mut Checker<'p>,
   mode: Mode,
@@ -220,6 +228,31 @@ impl<'c, 'p> Lowering<'c, 'p> {
     self.drain_queue();
     // A global initializer may be the first thing to reach a procedure, so
     // whatever it named still has to be lowered.
+    self.emit_global_initializers();
+    self.drain_queue();
+  }
+
+  /// The roots of a library are its exports rather than its `main`. Only the
+  /// program's own are taken: what Runtime_Support exports depends on
+  /// `runtime_support_definitions`, which nothing sets yet, and its entry point
+  /// has no place in a library (**C§4**).
+  fn run_exports(&mut self) {
+    let program = self.checker.program();
+    let tree = program.tree();
+    let main = program.main_scope();
+    let exports: Vec<DeclId> = (0..tree.declaration_count() as u32)
+      .map(DeclId)
+      .filter(|id| {
+        let decl = tree.decl(*id);
+        decl.kind == oj_scope::DeclKind::Procedure
+          && decl.flags.contains(ast::DeclarationFlags::PROGRAM_EXPORT)
+          && tree.enclosing_module(decl.scope) == Some(main)
+      })
+      .collect();
+    for export in exports {
+      self.procedure_id(export);
+    }
+    self.drain_queue();
     self.emit_global_initializers();
     self.drain_queue();
   }
@@ -462,6 +495,20 @@ impl<'c, 'p> Lowering<'c, 'p> {
         .contains(ast::ProcedureFlags::SYNTACTICALLY_MARKED_AS_NO_CONTEXT)
       {
         flags |= ProcedureFlags::NO_CONTEXT;
+      }
+      // `#program_export` makes the symbol the linker sees the procedure's own
+      // name, or the one the directive gave it (**L§7.4**).
+      if decl.is_some_and(|decl| {
+        self
+          .checker
+          .program()
+          .tree()
+          .decl(decl)
+          .flags
+          .contains(ast::DeclarationFlags::PROGRAM_EXPORT)
+      }) {
+        flags |= ProcedureFlags::EXPORT;
+        symbol = Some(name.clone());
       }
       if let Some(export) = &body.export_name {
         flags |= ProcedureFlags::EXPORT;
