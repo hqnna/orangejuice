@@ -7,6 +7,7 @@
 //! what makes data scopes order-independent (**L§11.7**).
 
 mod aggregate;
+mod bake;
 mod body;
 mod call;
 mod cast;

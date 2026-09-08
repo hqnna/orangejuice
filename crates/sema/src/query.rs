@@ -497,10 +497,13 @@ impl Checker<'_> {
         None => {
           let parameter = signature.parameters.get(index)?;
           let default = parameter.default?;
-          let (header_source, _) = signature.header?;
+          let default_source = match parameter.default_source {
+            Some(source) => source,
+            None => signature.header?.0,
+          };
           planned.push(PlannedArgument {
-            source: header_source,
-            scope: self.scope_at(header_source, default, scope),
+            source: default_source,
+            scope: self.scope_at(default_source, default, scope),
             node: default,
             target: parameter.type_id,
           });

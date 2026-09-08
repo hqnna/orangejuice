@@ -1400,3 +1400,16 @@ fn caller_code_reaches_a_macros_body_as_a_default() {
     "42\n",
   );
 }
+
+#[test]
+fn bake_arguments_gives_a_procedure_some_of_its_arguments() {
+  assert_output(
+    "scaled :: (value: int, factor: int, offset: int) -> int { return value * factor + offset; }\n\
+     doubled :: #bake_arguments scaled(factor = 2);\n\
+     main :: () {\n\
+       put_number(doubled(20, 2));\n\
+       put_number(scaled(20, 2, 2));\n\
+     }\n",
+    "42\n42\n",
+  );
+}

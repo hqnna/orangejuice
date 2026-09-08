@@ -368,6 +368,7 @@ impl Checker<'_> {
       parameters,
       returns: procedure.returns.clone(),
       vararg_slot: signature.vararg_slot,
+      hidden: signature.hidden.clone(),
       polymorphic: false,
       is_macro: signature.is_macro,
       decl: signature.decl,

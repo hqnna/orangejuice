@@ -41,6 +41,9 @@ pub(crate) struct Parameter {
   /// The default value written in the header, which a call site that leaves
   /// the parameter out evaluates in the header's own scope (**L§7.4**).
   pub default: Option<NodeId>,
+  /// Where that default was written, when it is not the header's own — a
+  /// `#bake_arguments` supplies one from its own site (**L§7.10**).
+  pub default_source: Option<SourceId>,
 }
 
 /// A callable candidate: a procedure declaration, or a value of procedure type.
@@ -50,6 +53,9 @@ pub(crate) struct Signature {
   pub returns: Vec<TypeId>,
   /// Which parameter is the `..T` one, when there is one (**L§7.3**).
   pub vararg_slot: Option<usize>,
+  /// The parameters a `#bake_arguments` already gave values to: a call site
+  /// neither fills them nor counts them (**L§7.10**).
+  pub hidden: Vec<usize>,
   pub polymorphic: bool,
   /// The header was written `#expand`, so a call site expands it rather than
   /// calling it (**L§7.13**).
@@ -215,6 +221,20 @@ impl Checker<'_> {
           .position(|parameter| parameter.name == Some(name))?,
         // `..xs` fills the whole slot in one go, so what follows it is the
         // next declared parameter rather than another element (**L§7.3**).
+        None if signature.hidden.contains(&next) => {
+          // A baked parameter is not there as far as the call site is
+          // concerned (**L§7.10**).
+          while signature.hidden.contains(&next) {
+            next += 1;
+          }
+          match next < signature.parameters.len() {
+            true => {
+              next += 1;
+              next - 1
+            }
+            false => signature.vararg_slot?,
+          }
+        }
         None if Some(next) == signature.vararg_slot && argument.spread => {
           next += 1;
           next - 1
@@ -265,6 +285,10 @@ impl Checker<'_> {
   /// read from its header, so that names and defaults are known; anything else
   /// callable contributes its procedure type alone.
   pub(crate) fn signature_of(&mut self, candidate: DeclId) -> Option<Signature> {
+    // `#bake_arguments f(y = 42)` is `f` with `y` already given (**L§7.10**).
+    if let Some(baked) = self.baked_signature(candidate) {
+      return Some(baked);
+    }
     let decl = self.program().tree().decl(candidate).clone();
     let resolved = self.decl_type(candidate);
     if self.types().is_unknown(resolved.value) {
@@ -303,6 +327,7 @@ impl Checker<'_> {
           type_id: *type_id,
           has_default: false,
           default: None,
+          default_source: None,
         })
         .collect(),
     };
@@ -311,6 +336,7 @@ impl Checker<'_> {
       parameters,
       returns: signature.returns.clone(),
       vararg_slot: signature.vararg_index.map(|index| index as usize),
+      hidden: Vec::new(),
       polymorphic,
       is_macro,
       decl: Some(candidate),
@@ -352,6 +378,7 @@ impl Checker<'_> {
       parameters,
       returns: procedure.returns.clone(),
       vararg_slot: procedure.vararg_index.map(|index| index as usize),
+      hidden: Vec::new(),
       polymorphic,
       is_macro: self.is_macro_header(source, header),
       decl: None,
@@ -374,10 +401,12 @@ impl Checker<'_> {
           type_id: *argument,
           has_default: false,
           default: None,
+          default_source: None,
         })
         .collect(),
       returns: signature.returns.clone(),
       vararg_slot: signature.vararg_index.map(|index| index as usize),
+      hidden: Vec::new(),
       polymorphic: signature
         .flags
         .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC),
@@ -431,6 +460,7 @@ impl Checker<'_> {
           type_id,
           has_default,
           default: declaration.and_then(|declaration| declaration.expression),
+          default_source: None,
         }
       })
       .collect()

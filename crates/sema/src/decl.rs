@@ -111,6 +111,9 @@ impl Checker<'_> {
           let type_id = self.procedure_type(source, expression, decl_scope);
           return DeclType::value(type_id);
         }
+        // `#bake_arguments f(y = 42)` is `f` without the parameters it gave
+        // values to (**L§7.10**).
+        NodeData::DirectiveBake { .. } => return DeclType::value(self.baked_type(id)),
         NodeData::DirectiveImport(_) | NodeData::Placeholder => return DeclType::UNKNOWN,
         _ => {}
       }
