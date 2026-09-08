@@ -434,6 +434,25 @@ impl<'a> Checker<'a> {
     Some(body)
   }
 
+  /// Whether a struct's members are being worked out right now, so that a
+  /// lookup reaching for them would be the cycle rather than an answer.
+  pub(crate) fn is_completing(&self, definition: StructId) -> bool {
+    self
+      .completing
+      .iter()
+      .any(|(entry, _, _)| *entry == definition)
+  }
+
+  /// Whether a scope holds the members of a struct that is being laid out
+  /// right now. Asking one of them for its type is what that layout is doing,
+  /// so a lookup that lands there has to give up instead.
+  pub(crate) fn scope_is_completing(&self, scope: ScopeId) -> bool {
+    self
+      .completing
+      .iter()
+      .any(|(definition, _, _)| self.struct_scope(*definition) == Some(scope))
+  }
+
   pub(crate) fn finish_pending_body(&mut self, definition: StructId) {
     if let Some(index) = self
       .completing

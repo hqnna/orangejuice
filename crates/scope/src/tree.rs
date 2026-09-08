@@ -173,6 +173,31 @@ impl ImportEdge {
   }
 }
 
+/// A value a `using` brought into a scope (**L§6.8**). Its members are names
+/// here, but only once its type is known, so the scope records where it was
+/// written and leaves the rest to the typechecker.
+#[derive(Clone, Debug)]
+pub struct UsedValue {
+  pub source: SourceId,
+  /// The declaration the `using` names, when it names one: `using p: *Player`
+  /// declares `p`, and `using p;` refers to a `p` declared elsewhere.
+  pub decl: Option<DeclId>,
+  /// The expression it was written as, for a `using` of something already
+  /// declared.
+  pub expression: NodeId,
+  pub only: Vec<Symbol>,
+  pub except: Vec<Symbol>,
+}
+
+impl UsedValue {
+  pub fn admits(&self, name: Symbol) -> bool {
+    if !self.only.is_empty() && !self.only.contains(&name) {
+      return false;
+    }
+    !self.except.contains(&name)
+  }
+}
+
 /// A construct that may still introduce names into a scope: an unresolved
 /// `using` of a typed value, an `#insert`, or a `#if` whose condition M3 could
 /// not fold. A lookup that misses in a scope holding one of these is not an
@@ -196,6 +221,7 @@ pub struct Scope {
   pub names: HashMap<Symbol, Vec<DeclId>>,
   pub declarations: Vec<DeclId>,
   pub imports: Vec<ImportEdge>,
+  pub used_values: Vec<UsedValue>,
   pub pending: Vec<PendingProvider>,
 }
 
@@ -210,6 +236,7 @@ impl Scope {
       names: HashMap::new(),
       declarations: Vec::new(),
       imports: Vec::new(),
+      used_values: Vec::new(),
       pending: Vec::new(),
     }
   }
@@ -335,6 +362,10 @@ impl ScopeTree {
 
   pub fn add_import(&mut self, scope: ScopeId, edge: ImportEdge) {
     self.scope_mut(scope).imports.push(edge);
+  }
+
+  pub fn add_used_value(&mut self, scope: ScopeId, value: UsedValue) {
+    self.scope_mut(scope).used_values.push(value);
   }
 
   pub fn add_pending(&mut self, scope: ScopeId, provider: PendingProvider) {

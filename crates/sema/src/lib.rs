@@ -25,6 +25,7 @@ mod poly;
 mod query;
 mod run;
 mod typeexpr;
+mod used;
 
 pub use checker::{Checker, DeclType, Expr};
 pub use constants::{Const, Value};
@@ -32,3 +33,4 @@ pub use dump::{print_types, summary};
 pub use poly::InstanceId;
 pub use query::{CallPlan, InstanceInfo, PlannedArgument, ProcedureBody};
 pub use run::{CompileTime, RUN_SYMBOL_PREFIX, RunOutcome, RunRequest};
+pub use used::UsedMember;

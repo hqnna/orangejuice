@@ -197,3 +197,43 @@ fn an_instantiated_body_is_typechecked_against_its_own_types() {
     },
   );
 }
+
+#[test]
+fn a_using_of_a_value_makes_its_members_names() {
+  build(
+    "
+    Player :: struct { health: s32; name: string; }
+    heal :: (using p: *Player, amount: s32) -> s32 {
+      health += amount;
+      return health;
+    }
+    local :: () -> string {
+      p: Player;
+      using p;
+      return name;
+    }
+    ",
+    |checker| {
+      assert!(errors(checker).is_empty(), "{:?}", errors(checker));
+      assert_eq!(type_of(checker, "heal"), "(*Player, s32) -> s32");
+      assert_eq!(type_of(checker, "local"), "() -> string");
+    },
+  );
+}
+
+#[test]
+fn a_using_of_an_enum_type_makes_its_members_names() {
+  build(
+    "
+    Tag :: enum u32 { NONE; STRING; INTEGER; }
+    which :: (t: Tag) -> bool {
+      using Tag;
+      return t == STRING;
+    }
+    ",
+    |checker| {
+      assert!(errors(checker).is_empty(), "{:?}", errors(checker));
+      assert_eq!(type_of(checker, "which"), "(Tag) -> bool");
+    },
+  );
+}

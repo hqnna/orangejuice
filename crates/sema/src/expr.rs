@@ -271,10 +271,18 @@ impl Checker<'_> {
     if let Some(found) = self.lookup_from(start, name) {
       return found;
     }
+    // A name no declaration holds may still be a member of something a
+    // `using` brought into scope (**L§6.8**).
+    if let Some(found) = self.used_name_type(start, name) {
+      return found;
+    }
     // A macro's body sees the caller's locals by name, for names its own
     // scopes do not hold (**L§7.13**).
     match self.caller_scope() {
-      Some(caller) => self.lookup_from(caller, name).unwrap_or(Expr::UNKNOWN),
+      Some(caller) => self
+        .lookup_from(caller, name)
+        .or_else(|| self.used_name_type(caller, name))
+        .unwrap_or(Expr::UNKNOWN),
       None => Expr::UNKNOWN,
     }
   }

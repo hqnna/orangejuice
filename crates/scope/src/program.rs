@@ -13,7 +13,7 @@ use oj_syntax::ast::{
 use crate::constants::{AstSource, ConstValue, Evaluator};
 use crate::tree::{
   Branch, Decl, DeclId, DeclKind, ImportEdge, PendingProvider, ScopeId, ScopeKind, ScopeTree,
-  Visibility,
+  UsedValue, Visibility,
 };
 
 /// The three scopes a procedure header opens (**L§7.8**): the constants block
@@ -920,9 +920,10 @@ impl<'a> Program<'a> {
       _ => None,
     };
 
-    if let NodeData::Declaration(_) = parsed.ast.data(expression) {
-      self.declare(parsed, expression, target, source);
-    }
+    let declared = match parsed.ast.data(expression) {
+      NodeData::Declaration(_) => self.declare(parsed, expression, target, source),
+      _ => None,
+    };
 
     match import {
       Some(import) => {
@@ -965,7 +966,23 @@ impl<'a> Program<'a> {
               },
             );
           }
-          None => self.tree.add_pending(destination, PendingProvider::Using),
+          // A `using` of a value: its members are names in this scope, but
+          // only the typechecker can say which (**L§6.8**), so the scope
+          // records the value and that names may still arrive (**L§4.3**).
+          None => {
+            let (only, except) = self.name_filter(parsed, filter_type, filter);
+            self.tree.add_used_value(
+              destination,
+              UsedValue {
+                source,
+                decl: declared,
+                expression,
+                only,
+                except,
+              },
+            );
+            self.tree.add_pending(destination, PendingProvider::Using);
+          }
         }
       }
     }

@@ -281,6 +281,16 @@ impl Checker<'_> {
     self.procedure_body_from(source, header, scope, None)
   }
 
+  /// The declaration one parameter introduced. `using p: *Player` wraps the
+  /// declaration in the `using`, which is what names it (**L§6.8**).
+  fn parameter_decl(&mut self, source: SourceId, parameter: NodeId) -> Option<DeclId> {
+    let node = match self.ast(source)?.data(parameter) {
+      NodeData::Using(using) => using.expression,
+      _ => parameter,
+    };
+    self.decl_at(source, node)
+  }
+
   fn procedure_body_from(
     &mut self,
     source: SourceId,
@@ -306,12 +316,12 @@ impl Checker<'_> {
     let parameters = payload
       .arguments
       .iter()
-      .map(|parameter| self.decl_at(source, *parameter))
+      .map(|parameter| self.parameter_decl(source, *parameter))
       .collect();
     let returns = payload
       .returns
       .iter()
-      .map(|parameter| self.decl_at(source, *parameter))
+      .map(|parameter| self.parameter_decl(source, *parameter))
       .collect();
 
     Some(ProcedureBody {

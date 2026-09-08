@@ -10,5 +10,5 @@ pub use program::{Options, ProcedureScopes, Program, Reference, Unit};
 pub use resolve::{Undeclared, undeclared_diagnostics, undeclared_identifiers};
 pub use tree::{
   Branch, Decl, DeclId, DeclKind, ImportEdge, PendingProvider, Resolution, Scope, ScopeId,
-  ScopeKind, ScopeTree, Visibility,
+  ScopeKind, ScopeTree, UsedValue, Visibility,
 };

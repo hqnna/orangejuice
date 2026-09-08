@@ -971,3 +971,23 @@ fn caller_location_names_the_site_the_macro_was_written_at() {
     lines[1].parse::<i64>().unwrap()
   );
 }
+
+#[test]
+fn a_using_of_a_value_reads_and_writes_its_members() {
+  assert_output(
+    "Player :: struct { health: int; armour: int; }\n\
+     heal :: (using p: *Player, amount: int) {\n\
+       health += amount;\n\
+     }\n\
+     main :: () {\n\
+       p: Player;\n\
+       p.health = 10;\n\
+       heal(*p, 32);\n\
+       put_number(p.health);\n\
+       using p;\n\
+       armour = 7;\n\
+       put_number(p.armour);\n\
+     }\n",
+    "42\n7\n",
+  );
+}

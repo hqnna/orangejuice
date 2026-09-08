@@ -309,7 +309,7 @@ impl Lowering<'_, '_> {
   ) -> Option<Val> {
     let data = self.checker.tree_of(source)?.data(node).clone();
     match data {
-      NodeData::Ident(_) => self.name_value(source, node, info),
+      NodeData::Ident(_) => self.name_value(scope, source, node, info),
       NodeData::Literal(literal) => {
         self.literal_value(scope, source, node, &literal.value, info, want)
       }
@@ -453,7 +453,20 @@ impl Lowering<'_, '_> {
 
   // ------------------------------------------------------------- names ------
 
-  fn name_value(&mut self, source: SourceId, node: NodeId, info: &Expr) -> Option<Val> {
+  fn name_value(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    info: &Expr,
+  ) -> Option<Val> {
+    // A bare name that a `using` of a value declared is that value's member
+    // (**L§6.8**).
+    if info.overloads.is_empty()
+      && let Some(used) = self.checker.used_member(scope, source, node)
+    {
+      return self.used_member_value(source, node, &used);
+    }
     let [only] = info.overloads[..] else {
       if info.overloads.len() > 1 {
         self.error(
@@ -467,6 +480,28 @@ impl Lowering<'_, '_> {
       return None;
     };
     self.declaration_value(source, node, only, info.type_id)
+  }
+
+  /// The storage a `using`ed value's member names (**L§6.8**): the base is
+  /// found the way any other name is, followed if it is a pointer, and the
+  /// member read at its offset.
+  fn used_member_value(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    used: &oj_sema::UsedMember,
+  ) -> Option<Val> {
+    let base = self.declaration_value(source, node, used.base, used.base_type)?;
+    let address = match used.through_pointer {
+      true => self.scalar(base),
+      false => self.address_of(base),
+    };
+    let slot = self.offset(address, used.member.offset, used.member.type_id);
+    Some(Val {
+      id: slot,
+      type_id: used.member.type_id,
+      indirect: true,
+    })
   }
 
   fn declaration_value(
