@@ -541,6 +541,7 @@ Rules:
 int.[1, 3, 5]                    // typed; the literal's type is [3] int (fixed), converting to [] int
 string.["a", "b"]
 (*u8).[a.data, b.data]           // parenthesized type before .[
+*u8.[a.data, b.data]             // the same: a `*` before a literal's type designation belongs to the type, not to the literal
 (*Model).[*models[0], *models[1]]
 ([3] float).[.[0,0,0], .[1,1,1]] // nested
 Level_Config.[ .{n = 2}, .{n = 3}, ]   // trailing comma allowed; comments between elements
@@ -1335,7 +1336,7 @@ A module's first file (`Name.jai` or `module.jai`) may begin with:
 #module_parameters (DEFINE_SYSTEM_ENTRY_POINT: bool, DEFINE_INITIALIZATION: bool, ENABLE_BACKTRACE_ON_CRASH: bool);   // no defaults: must be supplied
 ```
 
-- The first list is the **module parameters**: constants inside the module scope (not exported), set per import (`#import "X"(VERBOSE=true)`). Each distinct textual argument list is a separate instantiation.
+- The first list is the **module parameters**: constants inside the module scope (not exported), set per import (`#import "X"(VERBOSE=true)`). Each distinct textual argument list is a separate instantiation; an *empty* list supplies nothing, so `#import "Basic"()(MEMORY_DEBUGGER=true)` is the same instantiation as a bare `#import "Basic"` and only the program parameters differ.
 - The second list is the **program parameters**: set once by the main program (`#import "Basic"()(ENABLE_ASSERT=false);`, must precede any other import of that module); all imports (including from other modules) share them; modules cannot set them. Passing parameters to a module without `#module_parameters` is an error. Parameter types may be `$I/interface X` with defaults, procedures, enums, integers, bools.
 - The module's files use `#load` for the rest of the module; `#scope_module`/`#scope_file`/`#scope_export` control visibility. `#assert(is_constant(VERBOSE));` is common.
 - Exported as `Code_Directive_Module_Parameters { module_parameters: *Code_Procedure_Header; program_parameters; common_code }`.

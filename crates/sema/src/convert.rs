@@ -87,13 +87,16 @@ impl Checker<'_> {
       return Some(LITERAL);
     }
 
-    // `-> void` returns one void value, and a header with no returns returns
-    // none; the reference treats the two as the same procedure (**L§3.1**).
+    // Two procedure types that a call site cannot tell apart are the same
+    // here: `-> void` returns one void value where a header with no returns
+    // returns none (**L§3.1**), and where the procedure *came from* —
+    // `#foreign`, `#intrinsic`, `#symmetric` — changes nothing about calling
+    // it, so only the calling convention is compared (**L§3.7**).
     if let (Some(left), Some(right)) = (
       self.types().procedure_of(from).cloned(),
       self.types().procedure_of(target).cloned(),
     ) && left.arguments == right.arguments
-      && left.flags == right.flags
+      && left.flags & CALLING_CONVENTION == right.flags & CALLING_CONVENTION
       && left.varargs == right.varargs
       && without_void(&left.returns) == without_void(&right.returns)
     {
@@ -341,3 +344,10 @@ fn without_void(returns: &[TypeId]) -> &[TypeId] {
     other => other,
   }
 }
+
+/// The procedure flags a caller has to agree with; the rest describe where the
+/// procedure came from (**L§3.7**).
+const CALLING_CONVENTION: oj_types::ProcedureFlags = oj_types::ProcedureFlags::IS_C_CALL
+  .union(oj_types::ProcedureFlags::HAS_NO_CONTEXT)
+  .union(oj_types::ProcedureFlags::IS_CPP_METHOD)
+  .union(oj_types::ProcedureFlags::HAS_CPP_NON_POD_RETURN_TYPE);

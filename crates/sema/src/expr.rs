@@ -1,4 +1,4 @@
-use oj_diag::SourceId;
+use oj_diag::{SourceId, Span};
 use oj_lexer::Symbol;
 use oj_scope::{DeclId, DeclKind, Resolution, ScopeId, ScopeKind};
 use oj_syntax::ast::{
@@ -30,17 +30,19 @@ impl Checker<'_> {
     };
 
     match ast.data(node) {
-      NodeData::Literal(literal) => self.literal_type(scope, source, &literal.value, literal.flags),
+      NodeData::Literal(literal) => {
+        self.literal_type(scope, source, node, &literal.value, literal.flags)
+      }
       NodeData::Ident(ident) => self.ident_type(scope, source, node, ident.name, ident.flags),
       NodeData::UnaryOperator { operator, operand } => {
-        self.unary_type(scope, source, *operator, *operand)
+        self.unary_type(scope, source, node, *operator, *operand)
       }
       NodeData::BinaryOperator {
         operator,
         left,
         right,
         ..
-      } => self.binary_type(scope, source, *operator, *left, *right),
+      } => self.binary_type(scope, source, node, *operator, *left, *right),
       NodeData::ProcedureHeader(header) => {
         let type_id = self.procedure_type(source, node, scope);
         if header.procedure_flags.contains(ProcedureFlags::TYPE_ONLY) {
@@ -110,6 +112,7 @@ impl Checker<'_> {
     &mut self,
     scope: ScopeId,
     source: SourceId,
+    node: NodeId,
     value: &LiteralValue,
     flags: LiteralFlags,
   ) -> Expr {
@@ -140,29 +143,33 @@ impl Checker<'_> {
       LiteralValue::Null => Expr::constant(Const::new(TypeId::VOID_POINTER, Value::Null)),
       LiteralValue::Array(array) => {
         let count = array.members.len() as u64;
-        for member in &array.members {
-          self.expression_type(scope, source, *member);
-        }
-        match array.element_type {
-          Some(element) => {
-            let element = self.type_from_node(scope, source, element);
-            if element == TypeId::UNKNOWN {
-              return Expr::UNKNOWN;
-            }
-            Expr::value(self.types_mut().array(element, ArrayKind::Fixed(count)))
+        let Some(element) = array.element_type else {
+          for member in &array.members {
+            self.expression_type(scope, source, *member);
           }
           // `.[…]` takes its element type from the context (**L§5.8**).
-          None => Expr::value(TypeId::UNTYPED_LITERAL),
+          return Expr::value(TypeId::UNTYPED_LITERAL);
+        };
+        let element = self.type_from_node(scope, source, element);
+        self.check_array_literal(scope, source, element, &array.members);
+        if element == TypeId::UNKNOWN {
+          return Expr::UNKNOWN;
         }
+        Expr::value(self.types_mut().array(element, ArrayKind::Fixed(count)))
       }
       LiteralValue::Struct(literal) => {
-        for argument in &literal.arguments {
-          self.expression_type(scope, source, argument.expression);
-        }
-        match literal.type_expression {
-          Some(type_expression) => Expr::value(self.type_from_node(scope, source, type_expression)),
-          None => Expr::value(TypeId::UNTYPED_LITERAL),
-        }
+        let Some(type_expression) = literal.type_expression else {
+          for argument in &literal.arguments {
+            self.expression_type(scope, source, argument.expression);
+          }
+          return Expr::value(TypeId::UNTYPED_LITERAL);
+        };
+        let type_id = self.type_from_node(scope, source, type_expression);
+        let span = self
+          .ast(source)
+          .map_or(Span::at(0), |ast| ast.node(node).span);
+        self.check_struct_literal(scope, source, node, span, type_id, &literal.arguments);
+        Expr::value(type_id)
       }
     }
   }
@@ -258,6 +265,7 @@ impl Checker<'_> {
     &mut self,
     scope: ScopeId,
     source: SourceId,
+    node: NodeId,
     operator: OperatorType,
     operand: NodeId,
   ) -> Expr {
@@ -293,14 +301,26 @@ impl Checker<'_> {
         }
       }
       OperatorType::NOT => Expr::value(TypeId::BOOL),
-      OperatorType::MINUS => {
-        let folded = inner.constant.as_ref().and_then(negate);
-        match folded {
-          Some(value) => Expr::constant(value),
+      OperatorType::MINUS | OperatorType::PLUS | OperatorType::BITWISE_NOT => {
+        // A struct's unary operators are overloads like its binary ones
+        // (**L§7.7**).
+        if let Some(result) =
+          self.operator_overload(scope, source, node, operator, std::slice::from_ref(&inner))
+        {
+          return result;
+        }
+        match inner
+          .constant
+          .as_ref()
+          .filter(|_| operator == OperatorType::MINUS)
+        {
+          Some(value) => match negate(value) {
+            Some(negated) => Expr::constant(negated),
+            None => Expr::value(inner.type_id),
+          },
           None => Expr::value(inner.type_id),
         }
       }
-      OperatorType::PLUS | OperatorType::BITWISE_NOT => Expr::value(inner.type_id),
       _ => Expr::value(inner.type_id),
     }
   }
@@ -309,6 +329,7 @@ impl Checker<'_> {
     &mut self,
     scope: ScopeId,
     source: SourceId,
+    node: NodeId,
     operator: OperatorType,
     left: NodeId,
     right: NodeId,
@@ -318,17 +339,37 @@ impl Checker<'_> {
     }
     if operator == OperatorType::ARRAY_SUBSCRIPT {
       let base = self.expression_type(scope, source, left);
-      self.expression_type(scope, source, right);
-      return match self.types().array_of(base.type_id) {
-        Some((element, _)) => Expr::place(element),
-        None => Expr::UNKNOWN,
-      };
+      let index = self.expression_type(scope, source, right);
+      if let Some((element, _)) = self.types().array_of(base.type_id) {
+        return Expr::place(element);
+      }
+      // `operator []` reads, `operator *[]` gives the address of, an element
+      // of a struct that behaves like an array (**L§7.7**).
+      let operands = [base, index];
+      for subscript in [OperatorType::ARRAY_SUBSCRIPT, ADDRESS_SUBSCRIPT] {
+        if let Some(result) = self.operator_overload(scope, source, node, subscript, &operands) {
+          return match self.types().pointee(result.type_id) {
+            Some(pointee) if subscript == ADDRESS_SUBSCRIPT => Expr::place(pointee),
+            _ => result,
+          };
+        }
+      }
+      return Expr::UNKNOWN;
     }
 
     let left_type = self.expression_type(scope, source, left);
     let right_type = self.expression_type(scope, source, right);
     if operator.is_assignment() {
       return Expr::value(TypeId::VOID);
+    }
+    if let Some(result) = self.operator_overload(
+      scope,
+      source,
+      node,
+      operator,
+      &[left_type.clone(), right_type.clone()],
+    ) {
+      return result;
     }
     if matches!(
       operator,
@@ -577,3 +618,8 @@ fn negate(value: &Const) -> Option<Const> {
     _ => None,
   }
 }
+
+/// `operator *[]` — the address-of-element subscript, which enables reads,
+/// writes and compound assignment at once (**L§7.7**). It is not a
+/// `Operator_Type` the reference exports, so the number is orangejuice's.
+const ADDRESS_SUBSCRIPT: OperatorType = OperatorType(501);

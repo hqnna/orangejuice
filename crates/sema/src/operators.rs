@@ -1,0 +1,135 @@
+use oj_diag::SourceId;
+use oj_scope::{Resolution, ScopeId};
+use oj_syntax::ast::{NodeData, NodeId, OperatorType};
+use oj_types::{TypeId, TypeKind};
+
+use crate::checker::{Checker, Expr};
+use crate::overload::Resolved;
+
+impl Checker<'_> {
+  /// The result of an operator the operands overload (**L§7.7**). Operators are
+  /// constants named by their own text, so `a + b` on a struct resolves the
+  /// overload set of `"+"` the way a call resolves a procedure's.
+  pub(crate) fn operator_overload(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: OperatorType,
+    operands: &[Expr],
+  ) -> Option<Expr> {
+    // At least one operand must be a struct: the built-in types' operators
+    // cannot be overloaded (**L§7.7**).
+    if !operands
+      .iter()
+      .any(|operand| self.is_overloadable_operand(operand.type_id))
+    {
+      return None;
+    }
+
+    let name = self.interned().intern(operator.text().as_bytes());
+    let scope = self.nearest_scope(source, node, scope);
+    let Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
+      return None;
+    };
+
+    let arguments: Vec<(Option<oj_lexer::Symbol>, Expr)> = operands
+      .iter()
+      .map(|operand| (None, operand.clone()))
+      .collect();
+    let mut resolved = self.resolve_overload(&candidates, &arguments);
+    // `#symmetric` lets a two-parameter operator take its arguments the other
+    // way round (**L§7.7**).
+    if matches!(resolved, Resolved::None) && arguments.len() == 2 {
+      let swapped = vec![arguments[1].clone(), arguments[0].clone()];
+      resolved = self.resolve_overload(&candidates, &swapped);
+    }
+
+    let Resolved::One(signature) = resolved else {
+      // A comparison whose `operator ==` we could not pick is still a `bool`.
+      return is_comparison(operator).then(|| Expr::value(TypeId::BOOL));
+    };
+    let result = signature.returns.first().copied().unwrap_or(TypeId::VOID);
+    Some(Expr::value(self.upcast_back(operands, result)))
+  }
+
+  /// A call that downcast an `isa` operand to its base and returned the base
+  /// gives the variant back (**L§3.11**).
+  fn upcast_back(&self, operands: &[Expr], result: TypeId) -> TypeId {
+    for operand in operands {
+      if let TypeKind::Variant(definition) = *self.types().kind(operand.type_id) {
+        let info = self.types().variant_info(definition);
+        if info.is_isa() && info.base == result {
+          return operand.type_id;
+        }
+      }
+    }
+    result
+  }
+
+  /// Whether an operand can carry an operator overload: a struct, a variant of
+  /// one, or a pointer to one (**L§7.7**).
+  fn is_overloadable_operand(&self, type_id: TypeId) -> bool {
+    let value = self.types().pointee(type_id).unwrap_or(type_id);
+    matches!(
+      self.types().kind(self.types().underlying(value)),
+      TypeKind::Struct(_)
+    )
+  }
+
+  /// The scope an expression was written in, found through the recorded scope
+  /// of the leftmost identifier under it. Only identifiers have one of their
+  /// own, and an operator's overload set is looked up like any other name.
+  pub(crate) fn nearest_scope(&self, source: SourceId, node: NodeId, fallback: ScopeId) -> ScopeId {
+    let mut current = node;
+    for _ in 0..MAX_SPINE {
+      if let Some(scope) = self.scope_of(source, current) {
+        return scope;
+      }
+      let Some(ast) = self.ast(source) else {
+        break;
+      };
+      current = match ast.data(current) {
+        NodeData::BinaryOperator { left, .. } => *left,
+        NodeData::UnaryOperator { operand, .. } => *operand,
+        NodeData::Cast(cast) => cast.expression,
+        NodeData::ProcedureCall(call) => call.procedure_expression,
+        NodeData::TypeInstantiation(inst) => {
+          match inst.type_valued_expression.or(inst.pointer_to) {
+            Some(inner) => inner,
+            None => break,
+          }
+        }
+        // A designated literal's type is written where the literal is.
+        NodeData::Literal(literal) => match &literal.value {
+          oj_syntax::ast::LiteralValue::Struct(structure) => match structure.type_expression {
+            Some(inner) => inner,
+            None => break,
+          },
+          oj_syntax::ast::LiteralValue::Array(array) => match array.element_type {
+            Some(inner) => inner,
+            None => break,
+          },
+          _ => break,
+        },
+        _ => break,
+      };
+    }
+    fallback
+  }
+}
+
+/// How far down an expression's leftmost spine to look for a recorded scope.
+const MAX_SPINE: u32 = 16;
+
+fn is_comparison(operator: OperatorType) -> bool {
+  matches!(
+    operator,
+    OperatorType::IS_EQUAL
+      | OperatorType::IS_NOT_EQUAL
+      | OperatorType::LESS
+      | OperatorType::LESS_OR_EQUAL
+      | OperatorType::GREATER
+      | OperatorType::GREATER_OR_EQUAL
+  )
+}

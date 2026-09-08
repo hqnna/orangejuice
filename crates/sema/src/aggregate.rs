@@ -21,6 +21,8 @@ const CONTEXT_SIZE_MAX: u64 = 4096;
 struct Members {
   builder: LayoutBuilder,
   members: Vec<StructMember>,
+  /// Where the first `#place` started overlaying earlier members (**L§8.6**).
+  overlay_from: Option<usize>,
   /// The declarations the scope tree actually admitted, so that the branch a
   /// `#if` discarded contributes nothing.
   live: HashSet<NodeId>,
@@ -111,6 +113,7 @@ impl Checker<'_> {
         payload.textual_flags.contains(StructFlags::NO_PADDING),
       ),
       members: Vec::new(),
+      overlay_from: None,
       live: self.live_declarations(scope),
       scope,
       source,
@@ -120,8 +123,10 @@ impl Checker<'_> {
     }
 
     let layout = state.builder.finish();
+    let overlay_from = state.overlay_from;
     let info = self.types_mut().struct_info_mut(definition);
     info.members = state.members;
+    info.overlay_from = overlay_from;
     self
       .types_mut()
       .finish_struct(definition, layout.size, layout.alignment);
@@ -232,6 +237,7 @@ impl Checker<'_> {
         let name = self.ident_name(state.source, *ident);
         if let Some(offset) = name.and_then(|name| state.offset_of(name)) {
           state.builder.rewind_to(offset);
+          state.overlay_from.get_or_insert(state.members.len());
         }
       }
       NodeData::If(payload) => {

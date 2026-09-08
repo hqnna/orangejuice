@@ -1488,6 +1488,36 @@ impl Parser<'_> {
     Some(left)
   }
 
+  /// Moves a `*` written before a designated array or struct literal into the
+  /// literal's type, so that `*u8.[a, b]` is a `[2] *u8` (**L§5.8**). Returns
+  /// the literal when it applies.
+  fn point_literal_type_at(&mut self, operand: NodeId, start: u32) -> Option<NodeId> {
+    let designation = match &self.ast.node(operand).data {
+      NodeData::Literal(literal) => match &literal.value {
+        LiteralValue::Array(array) => array.element_type,
+        LiteralValue::Struct(structure) => structure.type_expression,
+        _ => None,
+      },
+      _ => None,
+    }?;
+
+    let mut inst = TypeInstantiation::empty();
+    inst.pointer_to = Some(designation);
+    let pointer = self.push(
+      self.span_from(start),
+      NodeData::TypeInstantiation(Box::new(inst)),
+    );
+    if let NodeData::Literal(literal) = &mut self.ast.node_mut(operand).data {
+      match &mut literal.value {
+        LiteralValue::Array(array) => array.element_type = Some(pointer),
+        LiteralValue::Struct(structure) => structure.type_expression = Some(pointer),
+        _ => {}
+      }
+    }
+    self.ast.node_mut(operand).span = self.span_from(start);
+    Some(operand)
+  }
+
   fn parse_unary(&mut self) -> Option<NodeId> {
     let start = self.span().start;
 
@@ -1503,6 +1533,14 @@ impl Parser<'_> {
     if let Some(operator) = operator {
       self.bump();
       let operand = self.parse_unary()?;
+      // `*u8.[a, b]` is an array of `*u8`, not the address of an array of
+      // `u8`: a `*` before a literal's type designation belongs to the type
+      // (**L§5.8**).
+      if operator == OperatorType::TIMES
+        && let Some(literal) = self.point_literal_type_at(operand, start)
+      {
+        return Some(literal);
+      }
       let node = self.push(
         self.span_from(start),
         NodeData::UnaryOperator { operator, operand },

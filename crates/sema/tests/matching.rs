@@ -462,3 +462,121 @@ fn force_and_a_conversion_the_compiler_would_make_anyway_are_allowed() {
     ",
   );
 }
+
+#[test]
+fn an_operator_overload_gives_a_struct_expression_its_type() {
+  accepts(
+    "
+    Vector3 :: struct { x, y, z: float; }
+    operator + :: (a: Vector3, b: Vector3) -> Vector3 { return a; }
+    operator * :: (a: Vector3, s: float) -> Vector3 #symmetric { return a; }
+    operator - :: (a: Vector3) -> Vector3 { return a; }
+    f :: (u: Vector3, v: Vector3, k: float) {
+      a: Vector3 = u + v;
+      b: Vector3 = u * k;
+      c: Vector3 = k * u;
+      d: Vector3 = -u;
+    }
+    ",
+  );
+  assert_eq!(
+    errors(
+      "
+      Vector3 :: struct { x, y, z: float; }
+      operator + :: (a: Vector3, b: Vector3) -> Vector3 { return a; }
+      f :: (u: Vector3, v: Vector3) { n: float = u + v; }
+      "
+    ),
+    vec!["Type mismatch. Type wanted: float32; type given: Vector3.".to_string()]
+  );
+}
+
+#[test]
+fn an_isa_variant_gets_its_own_type_back_from_the_base_s_operator() {
+  // The upcast-back rule: `pa + pb` on two `Position3` is a `Position3`, not a
+  // `Vector3` (**L§3.11**).
+  accepts(
+    "
+    Vector3 :: struct { x, y, z: float; }
+    Position3 :: #type,isa Vector3;
+    operator + :: (a: Vector3, b: Vector3) -> Vector3 { return a; }
+    f :: (a: Position3, b: Position3) { p: Position3 = a + b; }
+    ",
+  );
+}
+
+#[test]
+fn a_subscript_operator_types_an_element_of_a_struct() {
+  accepts(
+    "
+    Wrapping :: struct { values: [4] s64; }
+    operator [] :: (w: Wrapping, i: int) -> int { return 0; }
+    Bucket :: struct { count: s64; }
+    operator *[] :: (b: *Bucket, i: int) -> *s64 { return null; }
+    f :: (w: Wrapping, b: *Bucket) {
+      x: s64 = w[0];
+      y: s64 = b[1];
+    }
+    ",
+  );
+}
+
+#[test]
+fn a_designated_struct_literal_fills_the_members_it_names() {
+  accepts(
+    "
+    V :: struct { x, y: float; }
+    Body :: struct { name: string; values: [3] s64; }
+    f :: () {
+      a := V.{1, 2};
+      b := V.{y = 3};
+      c := V.{};
+      d := Body.{name = \"Ginger\", values[1] = 7};
+    }
+    ",
+  );
+  assert_eq!(
+    errors("V :: struct { x, y: float; }\nf :: () { a := V.{1, 2, 3}; }"),
+    vec!["Too many values provided in this struct literal.".to_string()]
+  );
+  assert_eq!(
+    errors("V :: struct { x, y: float; }\nf :: () { a := V.{1}; }"),
+    vec!["Not enough values provided in this struct literal.".to_string()]
+  );
+  assert_eq!(
+    errors("V :: struct { x, y: float; }\nf :: () { a := V.{z = 1}; }"),
+    vec!["'z' is not a member of V.".to_string()]
+  );
+  assert_eq!(
+    errors("V :: struct { x, y: float; }\nf :: () { a := V.{x = \"hi\"}; }"),
+    vec!["Type mismatch. Type wanted: float32; type given: string.".to_string()]
+  );
+}
+
+#[test]
+fn a_place_overlay_is_another_view_rather_than_more_slots() {
+  // `Vector4.{1,2,3,4}` fills x, y, z and w; `component` and `floats` are the
+  // same bytes seen again (**L§8.6**).
+  accepts(
+    "
+    Vector4 :: struct {
+      x, y, z, w: float;
+      #place x;
+      component: [4] float;
+    }
+    f :: () { v := Vector4.{1, 2, 3, 4}; }
+    ",
+  );
+}
+
+#[test]
+fn a_designated_array_literal_checks_its_elements() {
+  accepts("f :: () { a := s64.[1, 2, 3]; b := string.[\"a\", \"b\"]; }");
+  assert_eq!(
+    errors("f :: () { a := s64.[1, 2, \"x\"]; }"),
+    vec!["Type mismatch. Type wanted: s64; type given: string.".to_string()]
+  );
+  // `*u8.[…]` is an array of `*u8`, not the address of an array of `u8`
+  // (**L§5.8**).
+  accepts("f :: (p: *u8) { a: [2] *u8 = *u8.[p, p]; }");
+}

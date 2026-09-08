@@ -1058,10 +1058,16 @@ impl<'a> Program<'a> {
       }
       text.push(')');
     };
-    if let Some(parameters) = &import.module_parameters {
-      write(parameters);
-    }
-    if let Some(parameters) = &import.program_parameters {
+    // Only the *module* parameters distinguish instantiations, and an empty
+    // list supplies nothing, so `#import "Basic"()(…)` is the same
+    // instantiation as a bare `#import "Basic"`. The program parameters are
+    // set once by the main program and shared by every import of the module,
+    // wherever it comes from (**L§11.3**).
+    if let Some(parameters) = import
+      .module_parameters
+      .as_ref()
+      .filter(|parameters| !parameters.is_empty())
+    {
       write(parameters);
     }
     text

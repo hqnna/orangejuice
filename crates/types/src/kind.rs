@@ -330,6 +330,10 @@ pub struct StructInfo {
   /// False while the members are still being computed, which is what makes a
   /// struct that contains itself by value an error rather than a hang.
   pub complete: bool,
+  /// The index of the first member a `#place` overlaid on an earlier one
+  /// (**L§8.6**). Those members are another view of the same bytes, so a
+  /// positional struct literal stops before them.
+  pub overlay_from: Option<usize>,
   pub polymorph_source: Option<StructId>,
 }
 
@@ -343,6 +347,7 @@ impl StructInfo {
       size: 0,
       alignment: 1,
       complete: false,
+      overlay_from: None,
       polymorph_source: None,
     }
   }
@@ -356,13 +361,18 @@ impl StructInfo {
   }
 
   /// The members that take part in a positional struct literal: the ones with
-  /// storage that no `using` imported (**L§5.7**).
+  /// storage that no `using` imported and no `#place` overlaid (**L§5.7**,
+  /// **L§8.6**).
   pub fn settable_members(&self) -> impl Iterator<Item = &StructMember> {
-    self.members.iter().filter(|member| {
-      !member
-        .flags
-        .intersects(MemberFlags::CONSTANT | MemberFlags::IMPORTED)
-    })
+    self
+      .members
+      .iter()
+      .take(self.overlay_from.unwrap_or(self.members.len()))
+      .filter(|member| {
+        !member
+          .flags
+          .intersects(MemberFlags::CONSTANT | MemberFlags::IMPORTED)
+      })
   }
 
   /// The members marked `#as`, which the struct implicitly converts to

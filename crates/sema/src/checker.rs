@@ -443,11 +443,11 @@ impl<'a> Checker<'a> {
   /// every identifier it had to resolve, which is exactly the set of nodes
   /// whose meaning depends on where they were written.
   pub(crate) fn scope_at(&self, source: SourceId, node: NodeId, fallback: ScopeId) -> ScopeId {
-    self
-      .scope_of_node
-      .get(&(source, node))
-      .copied()
-      .unwrap_or(fallback)
+    self.scope_of(source, node).unwrap_or(fallback)
+  }
+
+  pub(crate) fn scope_of(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
+    self.scope_of_node.get(&(source, node)).copied()
   }
 
   pub(crate) fn record_struct_scope(&mut self, id: StructId, scope: ScopeId) {
@@ -472,6 +472,22 @@ impl<'a> Checker<'a> {
 
   /// The `declaration_properties` a name in a compound declaration shares with
   /// its siblings (**L§4.5**).
+  /// Whether a scope on the chain out of `scope` still holds an unfinished
+  /// name-inserting construct — a `using` of a value, an `#insert`, an
+  /// undecidable `#if` — so that a name resolved there could still turn out to
+  /// mean something else (**L§4.3**).
+  pub(crate) fn scope_may_gain_names(&self, scope: ScopeId) -> bool {
+    let tree = self.program.tree();
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if tree.scope(id).has_pending_providers() {
+        return true;
+      }
+      current = tree.scope(id).parent;
+    }
+    false
+  }
+
   /// Whether a declaration's own type is being worked out right now, which is
   /// how a local that shadows an outer name is kept out of its own initializer
   /// (**L§6.13**).
