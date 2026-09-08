@@ -41,7 +41,7 @@ impl Lowering<'_, '_> {
       return None;
     }
 
-    let value = self.expression_inner(scope, source, node, &info)?;
+    let value = self.expression_inner(scope, source, node, &info, want)?;
     match want {
       Some(target) => self.convert(source, node, value, target),
       None => Some(value),
@@ -66,6 +66,12 @@ impl Lowering<'_, '_> {
     if let Value::Bytes(bytes) = &constant.value {
       return Some(self.bytes_constant(bytes.clone(), target));
     }
+    // A `Type` is its `Type_Info`'s address at runtime, which is also what
+    // makes two of them compare equal exactly when the types are the same
+    // (**L§3.10**, **L§3.13**).
+    if let Value::Type(queried) = constant.value {
+      return self.type_info_value(queried, target);
+    }
     None
   }
 
@@ -88,6 +94,113 @@ impl Lowering<'_, '_> {
       type_id: TypeId::STRING,
       indirect: true,
     }
+  }
+
+  /// A conversion into a `[] T` (**L§3.3**). A fixed array has to be given a
+  /// count and a pointer; a `string`, a resizable array and another view
+  /// already start with exactly those two words, so only the recorded type
+  /// changes.
+  fn view_conversion(
+    &mut self,
+    value: Val,
+    from: TypeId,
+    to: TypeId,
+    target: TypeId,
+  ) -> Option<Val> {
+    let types = self.checker.types();
+    let (element, ArrayKind::View) = types.array_of(to)? else {
+      return None;
+    };
+    let source_kind = match types.kind(from) {
+      // `string` is `[] u8` with a name (**L§3.4**).
+      TypeKind::String if element == TypeId::U8 => None,
+      _ => match types.array_of(from) {
+        Some((from_element, kind))
+          if types.underlying(from_element) == types.underlying(element) =>
+        {
+          Some(kind)
+        }
+        _ => return None,
+      },
+    };
+
+    match source_kind {
+      Some(ArrayKind::Fixed(count)) => {
+        let storage = self.address_of(value);
+        let local = self.new_local(String::from("view"), target);
+        let address = self.local_address(local);
+        let count = self.constant(Constant::Int(i128::from(count)), TypeId::S64);
+        self.store(address, count);
+        let pointer = self.pointer_to(element);
+        let slot = self.offset(address, VIEW_DATA, pointer);
+        self.emit(Inst::Store {
+          address: slot,
+          value: storage,
+        });
+        Some(Val {
+          id: address,
+          type_id: target,
+          indirect: true,
+        })
+      }
+      _ => {
+        let address = self.address_of(value);
+        Some(Val {
+          id: address,
+          type_id: target,
+          indirect: true,
+        })
+      }
+    }
+  }
+
+  /// `#location(x)`: the `Source_Code_Location` of where `x` was written, with
+  /// the 1-based line and character the reference reports (**L§5.14**).
+  fn source_location(&mut self, source: SourceId, at: NodeId, type_id: TypeId) -> Option<Val> {
+    let span = self.checker.tree_of(source)?.node(at).span;
+    let file = self.checker.program().sources().file(source);
+    let position = file.location(span.start);
+    let path = file.path().to_string_lossy().into_owned();
+
+    let definition = {
+      let underlying = self.checker.types().underlying(type_id);
+      self.checker.types().struct_of(underlying)?
+    };
+    let local = self.new_local(String::from("location"), type_id);
+    let address = self.local_address(local);
+    self.clear(address, type_id);
+
+    let fields: [(&str, Val); 3] = [
+      (
+        "fully_pathed_filename",
+        self.string_constant(path.into_bytes().into()),
+      ),
+      (
+        "line_number",
+        self.constant(Constant::Int(i128::from(position.line)), TypeId::S64),
+      ),
+      (
+        "character_number",
+        self.constant(Constant::Int(i128::from(position.column)), TypeId::S64),
+      ),
+    ];
+    for (name, value) in fields {
+      let symbol = self.checker.interner().intern(name.as_bytes());
+      let member = self
+        .checker
+        .types()
+        .struct_info(definition)
+        .member(symbol)
+        .cloned();
+      let Some(member) = member else { continue };
+      let slot = self.offset(address, member.offset, member.type_id);
+      self.store(slot, value);
+    }
+    Some(Val {
+      id: address,
+      type_id,
+      indirect: true,
+    })
   }
 
   /// Boxes a value into an `Any`: `{type: *Type_Info, value_pointer: *void}`
@@ -192,11 +305,14 @@ impl Lowering<'_, '_> {
     source: SourceId,
     node: NodeId,
     info: &Expr,
+    want: Option<TypeId>,
   ) -> Option<Val> {
     let data = self.checker.tree_of(source)?.data(node).clone();
     match data {
       NodeData::Ident(_) => self.name_value(source, node, info),
-      NodeData::Literal(literal) => self.literal_value(scope, source, node, &literal.value, info),
+      NodeData::Literal(literal) => {
+        self.literal_value(scope, source, node, &literal.value, info, want)
+      }
       NodeData::UnaryOperator { operator, operand } => {
         self.unary_value(scope, source, node, operator, operand, info)
       }
@@ -251,8 +367,14 @@ impl Lowering<'_, '_> {
         self.unsupported(source, node, "'initializer_of'", "M6");
         None
       }
+      // `#caller_location` is the call site's, which a macro or a baked
+      // default supplies (**L§7.13**); `#location` is this one's.
+      NodeData::DirectiveLocation(location) if !location.is_caller_location => {
+        let at = location.expression.unwrap_or(node);
+        self.source_location(source, at, info.type_id)
+      }
       NodeData::DirectiveLocation(_) => {
-        self.unsupported(source, node, "'#location' and '#caller_location'", "M6");
+        self.unsupported(source, node, "'#caller_location'", "M7");
         None
       }
       _ => {
@@ -394,10 +516,10 @@ impl Lowering<'_, '_> {
         })
       }
       DeclKind::Constant => {
-        // A constant that did not fold is one whose value needs a milestone
-        // the front end has not reached.
+        // A constant that did not fold is one whose value is a procedure or a
+        // `Code`, neither of which the front end represents yet.
         let _ = type_id;
-        self.unsupported(source, node, "this constant", "M6");
+        self.unsupported(source, node, "this constant", "M7");
         None
       }
       _ => {
@@ -416,10 +538,16 @@ impl Lowering<'_, '_> {
     node: NodeId,
     literal: &LiteralValue,
     info: &Expr,
+    want: Option<TypeId>,
   ) -> Option<Val> {
+    // An undesignated `.[…]` or `.{…}` is built at the type the context asked
+    // for, since it has none of its own (**L§5.7**, **L§5.8**).
+    let type_id = match self.checker.types().kind(info.type_id) {
+      TypeKind::UntypedLiteral => want.unwrap_or(info.type_id),
+      _ => info.type_id,
+    };
     match literal {
       LiteralValue::Array(array) => {
-        let type_id = info.type_id;
         let (element, _) = self.checker.types().array_of(type_id)?;
         let local = self.new_local(String::from("literal"), type_id);
         let address = self.local_address(local);
@@ -438,7 +566,6 @@ impl Lowering<'_, '_> {
         })
       }
       LiteralValue::Struct(literal) => {
-        let type_id = info.type_id;
         if self.checker.types().is_unknown(type_id) {
           self.unsupported(source, node, "an undesignated struct literal", "M7");
           return None;
@@ -1279,13 +1406,15 @@ impl Lowering<'_, '_> {
       return self.box_any(value, target);
     }
 
+    // A fixed array becomes a view over its own storage; everything else that
+    // is already `{count, data}` only changes what the pointer is said to
+    // point at (**L§3.3**, **L§3.4**).
+    if let Some(view) = self.view_conversion(value, from, to, target) {
+      return Some(view);
+    }
+
     if !self.is_scalar(from) || !self.is_scalar(to) {
-      self.unsupported(
-        source,
-        node,
-        "this conversion, which needs the type table",
-        "M6",
-      );
+      self.unsupported(source, node, "this conversion", "M6/M7");
       return None;
     }
 
@@ -1305,6 +1434,10 @@ impl Lowering<'_, '_> {
       {
         ConvertKind::Bitcast
       }
+      // A `Type` is the address of its `Type_Info`, so it casts to and from a
+      // pointer without changing anything (**L§3.10**).
+      _ if matches!(from_kind, TypeKind::Type) && types.is_pointer(to) => ConvertKind::Bitcast,
+      _ if types.is_pointer(from) && matches!(to_kind, TypeKind::Type) => ConvertKind::Bitcast,
       _ => {
         let from_int = types.integer_kind(from).or_else(|| {
           matches!(from_kind, TypeKind::Bool | TypeKind::UntypedInt).then_some(IntKind::U8)
@@ -1441,3 +1574,7 @@ fn binary_operator(operator: OperatorType) -> Option<BinaryOp> {
 
 /// Where `Any_Struct.value_pointer` sits: after the `*Type_Info` (**L§17**).
 const ANY_VALUE_POINTER: u64 = 8;
+
+/// Where the `data` of a `string` or a `[] T` sits: after the count
+/// (**L§3.3**, **L§3.4**).
+const VIEW_DATA: u64 = 8;

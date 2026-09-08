@@ -628,7 +628,10 @@ impl<'a> Checker<'a> {
     };
     let expression = declaration.expression?;
     let declared = self.resolved(id).map(|resolved| resolved.value);
-    let value = self.const_value(decl.scope, source, expression)?;
+    let value = match declared.filter(|target| !self.types.is_unknown(*target)) {
+      Some(target) => self.const_value_at(decl.scope, source, expression, target)?,
+      None => self.const_value(decl.scope, source, expression)?,
+    };
     // A constant with a type slot carries that type rather than the literal's
     // (**L§5.10** rule 2).
     let value = match declared {

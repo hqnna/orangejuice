@@ -156,7 +156,14 @@ impl Checker<'_> {
         if element == TypeId::UNKNOWN {
           return Expr::UNKNOWN;
         }
-        Expr::value(self.types_mut().array(element, ArrayKind::Fixed(count)))
+        let type_id = self.types_mut().array(element, ArrayKind::Fixed(count));
+        // An array literal whose members all fold is itself a constant, which
+        // is what makes a lookup table data rather than code (**L§5.11**).
+        let members = array.members.clone();
+        match self.fold_array_literal(scope, source, element, &members) {
+          Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(bytes))),
+          None => Expr::value(type_id),
+        }
       }
       LiteralValue::Struct(literal) => {
         let Some(type_expression) = literal.type_expression else {
@@ -173,6 +180,63 @@ impl Checker<'_> {
         Expr::value(type_id)
       }
     }
+  }
+
+  /// The constant value of an expression when a type is already known for it.
+  /// An undesignated `.[…]` has no type of its own, so it can only become data
+  /// once something says what it is (**L§5.8**).
+  pub(crate) fn const_value_at(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    target: TypeId,
+  ) -> Option<Const> {
+    if let Some(value) = self.const_value(scope, source, node) {
+      return Some(value);
+    }
+    let ast = self.ast(source)?;
+    let NodeData::Literal(literal) = ast.data(node) else {
+      return None;
+    };
+    let LiteralValue::Array(array) = &literal.value else {
+      return None;
+    };
+    if array.element_type.is_some() {
+      return None;
+    }
+    let members = array.members.clone();
+    let (element, kind) = self.types().array_of(target)?;
+    if kind != ArrayKind::Fixed(members.len() as u64) {
+      return None;
+    }
+    let bytes = self.fold_array_literal(scope, source, element, &members)?;
+    Some(Const::new(target, Value::Bytes(bytes)))
+  }
+
+  /// The storage of an array literal all of whose members fold. `None` as soon
+  /// as one of them does not, or is of a kind that needs an address rather
+  /// than bytes.
+  fn fold_array_literal(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    element: TypeId,
+    members: &[NodeId],
+  ) -> Option<Box<[u8]>> {
+    let stride = self.layout_of(element)?.size as usize;
+    if stride == 0 {
+      return None;
+    }
+    let mut bytes = vec![0u8; stride * members.len()];
+    for (index, member) in members.iter().enumerate() {
+      let value = self.const_value(scope, source, *member)?;
+      let start = index * stride;
+      if !value.write_bytes(self.types(), element, &mut bytes[start..start + stride]) {
+        return None;
+      }
+    }
+    Some(bytes.into_boxed_slice())
   }
 
   fn ident_type(

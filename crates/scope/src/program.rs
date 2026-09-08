@@ -271,6 +271,12 @@ impl<'a> Program<'a> {
     self.interner
   }
 
+  /// The files the program was read from, which is what a `#location` needs to
+  /// turn a span into a name, a line and a character (**L§5.14**).
+  pub fn sources(&self) -> &'a SourceMap {
+    self.sources
+  }
+
   pub fn preload_scope(&self) -> ScopeId {
     self.preload
   }

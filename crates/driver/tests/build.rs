@@ -732,3 +732,76 @@ fn a_run_in_a_polymorphic_body_waits_for_the_instantiation() {
     "ok\n",
   );
 }
+
+#[test]
+fn a_constant_array_is_data_the_program_reads_out_of() {
+  assert_output(
+    "TABLE : [4] u64 : .[10, 20, 30, 40];\n\
+     main :: () {\n\
+       total := 0;\n\
+       for i: 0..3  total += cast(int) TABLE[i];\n\
+       put_number(total);\n\
+     }\n",
+    "100\n",
+  );
+}
+
+#[test]
+fn a_fixed_array_converts_to_a_view_with_its_count() {
+  assert_output(
+    "sum :: (values: [] int) -> int {\n\
+       total := 0;\n\
+       for values  total += it;\n\
+       return total;\n\
+     }\n\
+     main :: () {\n\
+       fixed: [3] int;\n\
+       fixed[0] = 1; fixed[1] = 2; fixed[2] = 3;\n\
+       view: [] int = fixed;\n\
+       put_number(view.count);\n\
+       put_number(sum(view));\n\
+     }\n",
+    "3\n6\n",
+  );
+}
+
+#[test]
+fn a_type_value_is_the_address_of_its_record() {
+  assert_output(
+    "Point :: struct { x: int; }\n\
+     main :: () {\n\
+       t := type_of(Point.{1});\n\
+       u: Type = Point;\n\
+       if t == u  put(\"same\\n\");\n\
+       if t != type_of(3)  put(\"different\\n\");\n\
+       put((cast(*Type_Info_Struct) t).name);\n\
+       put(\"\\n\");\n\
+     }\n",
+    "same\ndifferent\nPoint\n",
+  );
+}
+
+#[test]
+fn a_location_knows_where_it_was_written() {
+  // The character is 1-based and counts from the start of the line, so it is
+  // where the `#` of `#location` sits.
+  let Some(built) = build_and_run(
+    "main :: () {\n\
+       here := #location();\n\
+       put_number(here.character_number);\n\
+       put(here.fully_pathed_filename);\n\
+       put(\"\\n\");\n\
+     }\n",
+  ) else {
+    return;
+  };
+  let mut lines = built.output.lines();
+  assert_eq!(lines.next(), Some("9"));
+  assert!(
+    lines
+      .next()
+      .is_some_and(|name| name.ends_with("program.jai")),
+    "{}",
+    built.output
+  );
+}

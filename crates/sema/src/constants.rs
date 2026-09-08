@@ -134,6 +134,50 @@ impl Const {
   }
 }
 
+impl Const {
+  /// Writes the constant into storage laid out the way `type_id` says, which
+  /// is what turns an aggregate of constants into data (**L§5.11**).
+  ///
+  /// `false` when the value has no byte form of its own: a string, a pointer
+  /// and a `Type` are all addresses, and only a back end can supply one.
+  pub fn write_bytes(&self, types: &Types, type_id: TypeId, bytes: &mut [u8]) -> bool {
+    if let Value::Bytes(source) = &self.value {
+      let count = source.len().min(bytes.len());
+      bytes[..count].copy_from_slice(&source[..count]);
+      return true;
+    }
+    let converted = self.convert(types, type_id);
+    let value = converted.as_ref().unwrap_or(self);
+    if let Some(kind) = types.integer_kind(types.underlying(type_id)) {
+      let Some(number) = value.value.as_int() else {
+        return false;
+      };
+      return write(&wrap(number, kind).to_le_bytes(), bytes);
+    }
+    match types.kind(types.underlying(type_id)) {
+      oj_types::TypeKind::Bool => match value.value.truth() {
+        Some(truth) => write(&[u8::from(truth)], bytes),
+        None => false,
+      },
+      oj_types::TypeKind::Float(oj_types::FloatKind::F32) => match value.value.as_float() {
+        Some(number) => write(&(number as f32).to_le_bytes(), bytes),
+        None => false,
+      },
+      oj_types::TypeKind::Float(oj_types::FloatKind::F64) => match value.value.as_float() {
+        Some(number) => write(&number.to_le_bytes(), bytes),
+        None => false,
+      },
+      _ => false,
+    }
+  }
+}
+
+fn write(source: &[u8], destination: &mut [u8]) -> bool {
+  let count = source.len().min(destination.len());
+  destination[..count].copy_from_slice(&source[..count]);
+  true
+}
+
 /// Two's-complement truncation into `kind`, which is what `cast,trunc` and an
 /// out-of-range enum value do (**L§5.6**).
 pub fn wrap(value: i128, kind: IntKind) -> i128 {
