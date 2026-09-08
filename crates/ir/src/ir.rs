@@ -361,12 +361,17 @@ pub enum ParameterKind {
 /// One machine-level parameter. The list is the contract between a call site
 /// and a body, and both build it from [`Procedure::parameters`] with the same
 /// rules, so neither has to know how the other lowered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AbiParameter {
   /// The type of the thing being passed — for `Pointer`, `ReturnPointer` and
   /// `Context` that is what is pointed at, not the pointer.
   pub type_id: TypeId,
   pub kind: ParameterKind,
+  /// How the C convention carries it, for a `#c_call` passing an aggregate by
+  /// value (**L§7.11**). The IR still hands the back end one pointer to the
+  /// value; this says whether the back end loads its eightbytes into registers
+  /// or lets the callee read it where it lies.
+  pub class: Option<oj_types::Classification>,
 }
 
 /// The machine-level shape of a call: what goes in, and what comes back in
@@ -376,6 +381,11 @@ pub struct Abi {
   pub parameters: Vec<AbiParameter>,
   /// The return value passed in registers, when there is one.
   pub direct_return: Option<TypeId>,
+  /// How a `#c_call`'s first return comes back when it is an aggregate
+  /// (**L§7.11**): in registers, or through the storage the caller supplied,
+  /// which is the `ReturnPointer` parameter either way as far as the IR is
+  /// concerned.
+  pub return_class: Option<oj_types::Classification>,
 }
 
 /// One procedure of the program, in the IR the back end consumes.
@@ -491,16 +501,29 @@ pub fn abi_of(
     return Abi {
       parameters: Vec::new(),
       direct_return: None,
+      return_class: None,
     };
   };
 
+  // Between two Jai procedures an aggregate goes by pointer; a `#c_call` has
+  // to follow the platform, which puts one of at most two eightbytes in
+  // registers (**L§7.11**).
+  let c_call = flags.contains(ProcedureFlags::C_CALL);
+  let classify = |types: &Types, type_id: TypeId| match c_call {
+    true => Some(oj_types::classify(types, type_id)),
+    false => None,
+  };
+
   let mut parameters = Vec::new();
+  let mut return_class = None;
   let direct_return = match signature.returns.first().copied() {
     Some(type_id) if is_scalar(types, type_id) => Some(type_id),
     Some(type_id) => {
+      return_class = classify(types, type_id);
       parameters.push(AbiParameter {
         type_id,
         kind: ParameterKind::ReturnPointer,
+        class: None,
       });
       None
     }
@@ -508,13 +531,15 @@ pub fn abi_of(
   };
 
   for argument in &signature.arguments {
+    let scalar = is_scalar(types, *argument);
     parameters.push(AbiParameter {
       type_id: *argument,
-      kind: if is_scalar(types, *argument) {
+      kind: if scalar {
         ParameterKind::Value
       } else {
         ParameterKind::Pointer
       },
+      class: (!scalar).then(|| classify(types, *argument)).flatten(),
     });
   }
 
@@ -524,6 +549,7 @@ pub fn abi_of(
     parameters.push(AbiParameter {
       type_id: *extra,
       kind: ParameterKind::ReturnPointer,
+      class: None,
     });
   }
 
@@ -531,12 +557,14 @@ pub fn abi_of(
     parameters.push(AbiParameter {
       type_id: context_type,
       kind: ParameterKind::Context,
+      class: None,
     });
   }
 
   Abi {
     parameters,
     direct_return,
+    return_class,
   }
 }
 

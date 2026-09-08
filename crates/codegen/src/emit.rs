@@ -7,10 +7,11 @@
 
 use std::collections::HashMap;
 
+use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
 use inkwell::context::ContextRef;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicType, BasicTypeEnum, FunctionType};
+use inkwell::types::{AnyType, BasicType, BasicTypeEnum, FunctionType};
 use inkwell::values::{
   BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
   PointerValue,
@@ -21,7 +22,7 @@ use oj_ir::{
   BinaryOp, Callee, Constant, ConvertKind, GlobalInit, Inst, ParameterKind, ProcId, Procedure,
   ProcedureFlags, Program, Terminator, UnaryOp,
 };
-use oj_types::{FloatKind, TypeId, TypeKind, Types};
+use oj_types::{Classification, Eightbyte, FloatKind, TypeId, TypeKind, Types};
 
 /// The name the C runtime calls. orangejuice emits its own, which sets up a
 /// zeroed `#Context` and calls the program's `main`; the `Runtime_Support`
@@ -125,19 +126,71 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     }
   }
 
+  /// The LLVM types one eightbyte of a classified value travels in
+  /// (**L§7.11**): a general-purpose register takes an integer as wide as what
+  /// is left, a vector register takes a float or two.
+  fn eightbyte_types(&self, type_id: TypeId, classes: &[Eightbyte]) -> Vec<BasicTypeEnum<'ctx>> {
+    let size = self.types().size_of(type_id).unwrap_or(0);
+    classes
+      .iter()
+      .enumerate()
+      .map(|(index, class)| {
+        let width = oj_types::eightbyte_size(size, index);
+        match class {
+          Eightbyte::Sse if width > 4 => self.context.f64_type().into(),
+          Eightbyte::Sse => self.context.f32_type().into(),
+          Eightbyte::Integer => self.integer_type(width * 8),
+        }
+      })
+      .collect()
+  }
+
+  /// What a classified value is when it travels as one LLVM value: an
+  /// eightbyte on its own, or a struct of them.
+  fn coerced_type(&self, type_id: TypeId, classes: &[Eightbyte]) -> BasicTypeEnum<'ctx> {
+    let parts = self.eightbyte_types(type_id, classes);
+    match parts.len() {
+      1 => parts[0],
+      _ => self.context.struct_type(&parts, false).into(),
+    }
+  }
+
   fn function_type(&self, abi: &oj_ir::Abi) -> FunctionType<'ctx> {
     let pointer = self.context.ptr_type(AddressSpace::default());
-    let parameters: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = abi
-      .parameters
-      .iter()
-      .map(|parameter| match parameter.kind {
-        ParameterKind::Value => self.llvm_type(parameter.type_id).into(),
-        _ => pointer.into(),
-      })
-      .collect();
-    match abi.direct_return {
-      Some(type_id) => self.llvm_type(type_id).fn_type(&parameters, false),
-      None => self.context.void_type().fn_type(&parameters, false),
+    let mut parameters: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = Vec::new();
+    for parameter in &abi.parameters {
+      // A `#c_call`'s aggregate return comes back in registers when it is
+      // small enough, and then the storage the IR set aside is the caller's
+      // own business rather than a parameter (**L§7.11**).
+      if parameter.kind == ParameterKind::ReturnPointer
+        && matches!(abi.return_class, Some(Classification::Registers(_)))
+        && parameters.is_empty()
+      {
+        continue;
+      }
+      match (parameter.kind, &parameter.class) {
+        (ParameterKind::Value, _) => parameters.push(self.llvm_type(parameter.type_id).into()),
+        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
+          for part in self.eightbyte_types(parameter.type_id, classes) {
+            parameters.push(part.into());
+          }
+        }
+        _ => parameters.push(pointer.into()),
+      }
+    }
+    match (&abi.return_class, abi.direct_return) {
+      (Some(Classification::Registers(classes)), _) => {
+        let type_id = abi
+          .parameters
+          .first()
+          .map(|parameter| parameter.type_id)
+          .unwrap_or(TypeId::VOID);
+        self
+          .coerced_type(type_id, classes)
+          .fn_type(&parameters, false)
+      }
+      (_, Some(type_id)) => self.llvm_type(type_id).fn_type(&parameters, false),
+      _ => self.context.void_type().fn_type(&parameters, false),
     }
   }
 
@@ -215,8 +268,8 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   fn declare_functions(&mut self) {
     for (index, procedure) in self.program.procedures.iter().enumerate() {
       let function_type = self.function_type(&procedure.abi);
-      // Two modules may declare the same `#foreign` procedure â Runtime_Support
-      // and the program both reach `write(2)` â and they name one symbol, so
+      // Two modules may declare the same `#foreign` procedure — Runtime_Support
+      // and the program both reach `write(2)` — and they name one symbol, so
       // the module declares it once (**L§12.2**).
       let existing = (!procedure.has_body())
         .then(|| self.module.get_function(&procedure.symbol))
@@ -239,8 +292,51 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       if procedure.has_body() && private {
         function.set_linkage(Linkage::Internal);
       }
+      for (position, attribute) in self.memory_attributes(&procedure.abi) {
+        function.add_attribute(AttributeLoc::Param(position), attribute);
+      }
       self.functions.push(function);
     }
+  }
+  /// The attributes a `#c_call` needs on the parameters the C convention
+  /// passes through memory: `byval` copies an argument into the caller's
+  /// argument area, `sret` says the first parameter is where the return goes
+  /// (**L§7.11**).
+  fn memory_attributes(&self, abi: &oj_ir::Abi) -> Vec<(u32, inkwell::attributes::Attribute)> {
+    let mut attributes = Vec::new();
+    let mut position = 0u32;
+    for parameter in &abi.parameters {
+      match (parameter.kind, &parameter.class) {
+        (ParameterKind::ReturnPointer, _)
+          if position == 0 && abi.return_class == Some(Classification::Memory) =>
+        {
+          attributes.push((position, self.type_attribute("sret", parameter.type_id)));
+        }
+        (ParameterKind::ReturnPointer, _)
+          if position == 0 && matches!(abi.return_class, Some(Classification::Registers(_))) =>
+        {
+          // The return travels in registers, so this is not a parameter at all.
+          continue;
+        }
+        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
+          position += classes.len() as u32;
+          continue;
+        }
+        (ParameterKind::Pointer, Some(Classification::Memory)) => {
+          attributes.push((position, self.type_attribute("byval", parameter.type_id)));
+        }
+        _ => {}
+      }
+      position += 1;
+    }
+    attributes
+  }
+
+  fn type_attribute(&self, name: &str, type_id: TypeId) -> inkwell::attributes::Attribute {
+    let kind = inkwell::attributes::Attribute::get_named_enum_kind_id(name);
+    self
+      .context
+      .create_type_attribute(kind, self.llvm_type(type_id).as_any_type_enum())
   }
 
   /// The data a constant global starts out as. A `string` is the two words a
@@ -412,15 +508,52 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         .and_then(|instruction| instruction.set_alignment(local.alignment as u32).ok());
       locals.push(slot);
     }
+
+    let mut values: Vec<Option<BasicValueEnum<'ctx>>> = vec![None; procedure.value_types.len()];
+    // The IR's first values are the ABI parameters, one each. A `#c_call`
+    // carrying an aggregate in registers arrives as several LLVM parameters,
+    // which are written back into storage so the body has the pointer it
+    // expects; a return that comes back in registers has no parameter at all,
+    // and its storage is the body's own (**L§7.11**).
+    let mut position = 0u32;
+    for (index, parameter) in procedure.abi.parameters.iter().enumerate() {
+      if parameter.kind == ParameterKind::ReturnPointer
+        && index == 0
+        && matches!(
+          procedure.abi.return_class,
+          Some(Classification::Registers(_))
+        )
+      {
+        values[index] = Some(self.aggregate_slot(parameter.type_id)?.into());
+        continue;
+      }
+      match (parameter.kind, &parameter.class) {
+        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
+          let slot = self.aggregate_slot(parameter.type_id)?;
+          for part in 0..classes.len() {
+            let Some(incoming) = function.get_nth_param(position) else {
+              return Err(String::from("a coerced parameter is missing its registers"));
+            };
+            let target = self.byte_offset(slot, part as u64 * 8)?;
+            self
+              .builder
+              .build_store(target, incoming)
+              .map_err(|error| error.to_string())?;
+            position += 1;
+          }
+          values[index] = Some(slot.into());
+        }
+        _ => {
+          values[index] = function.get_nth_param(position);
+          position += 1;
+        }
+      }
+    }
+
     self
       .builder
       .build_unconditional_branch(blocks[procedure.entry.0 as usize])
       .map_err(|error| error.to_string())?;
-
-    let mut values: Vec<Option<BasicValueEnum<'ctx>>> = vec![None; procedure.value_types.len()];
-    for (index, _) in procedure.abi.parameters.iter().enumerate() {
-      values[index] = function.get_nth_param(index as u32);
-    }
 
     for (index, block) in procedure.blocks.iter().enumerate() {
       self.builder.position_at_end(blocks[index]);
@@ -430,6 +563,22 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       self.emit_terminator(procedure, &block.terminator, &values, &blocks)?;
     }
     Ok(())
+  }
+
+  /// Stack storage for an aggregate a `#c_call` hands over in registers, so
+  /// that the body still has one pointer to it (**L§7.11**).
+  fn aggregate_slot(&self, type_id: TypeId) -> Result<PointerValue<'ctx>, String> {
+    let size = self.types().size_of(type_id).unwrap_or(0).max(1);
+    let alignment = self.types().align_of(type_id).unwrap_or(1).max(1);
+    let storage = self.context.i8_type().array_type(size as u32);
+    let slot = self
+      .builder
+      .build_alloca(storage, "coerced")
+      .map_err(|error| error.to_string())?;
+    slot
+      .as_instruction_value()
+      .and_then(|instruction| instruction.set_alignment(alignment as u32).ok());
+    Ok(slot)
   }
 
   fn value(
@@ -741,17 +890,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         signature,
         arguments,
       } => {
-        let arguments: Vec<BasicMetadataValueEnum<'ctx>> = arguments
-          .iter()
-          .map(|value| self.value(values, *value).map(Into::into))
-          .collect::<Result<_, _>>()?;
-        let site = match callee {
-          Callee::Direct(id) => self
-            .builder
-            .build_direct_call(self.functions[id.0 as usize], &arguments, "")
-            .map_err(|error| error.to_string())?,
-          Callee::Indirect(value) => {
-            let pointer = self.pointer(values, *value)?;
+        let abi = match callee {
+          Callee::Direct(id) => self.program.procedure(*id).abi.clone(),
+          Callee::Indirect(_) => {
             let flags = if self
               .types()
               .procedure_of(*signature)
@@ -764,20 +905,114 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
             } else {
               ProcedureFlags::empty()
             };
-            let abi = oj_ir::abi_of(self.types(), *signature, flags, self.program.context_type);
+            oj_ir::abi_of(self.types(), *signature, flags, self.program.context_type)
+          }
+        };
+        let (call_arguments, returned_into) = self.call_arguments(&abi, arguments, values)?;
+        let site = match callee {
+          Callee::Direct(id) => self
+            .builder
+            .build_direct_call(self.functions[id.0 as usize], &call_arguments, "")
+            .map_err(|error| error.to_string())?,
+          Callee::Indirect(value) => {
+            let pointer = self.pointer(values, *value)?;
             let function_type = self.function_type(&abi);
             self
               .builder
-              .build_indirect_call(function_type, pointer, &arguments, "")
+              .build_indirect_call(function_type, pointer, &call_arguments, "")
               .map_err(|error| error.to_string())?
           }
         };
+        for (position, attribute) in self.memory_attributes(&abi) {
+          site.add_attribute(AttributeLoc::Param(position), attribute);
+        }
+        // A `#c_call` whose aggregate return came back in registers leaves it
+        // where the IR expected to find it (**L§7.11**).
+        if let Some(storage) = returned_into
+          && let Some(result) = site.try_as_basic_value().basic()
+        {
+          self
+            .builder
+            .build_store(storage, result)
+            .map_err(|error| error.to_string())?;
+        }
         if let Some(dest) = dest {
           values[dest.0 as usize] = site.try_as_basic_value().basic();
         }
       }
     }
     Ok(())
+  }
+
+  /// The arguments a call actually passes. The IR hands one value per
+  /// `AbiParameter`; a `#c_call` carrying an aggregate in registers loads its
+  /// eightbytes out of the pointer here, and one whose return comes back in
+  /// registers drops the storage from the list and hands it back instead
+  /// (**L§7.11**).
+  #[allow(clippy::type_complexity)]
+  fn call_arguments(
+    &mut self,
+    abi: &oj_ir::Abi,
+    arguments: &[oj_ir::ValueId],
+    values: &[Option<BasicValueEnum<'ctx>>],
+  ) -> Result<
+    (
+      Vec<BasicMetadataValueEnum<'ctx>>,
+      Option<PointerValue<'ctx>>,
+    ),
+    String,
+  > {
+    let mut passed = Vec::with_capacity(arguments.len());
+    let mut returned_into = None;
+    for (index, argument) in arguments.iter().enumerate() {
+      let Some(parameter) = abi.parameters.get(index) else {
+        passed.push(self.value(values, *argument)?.into());
+        continue;
+      };
+      if parameter.kind == ParameterKind::ReturnPointer
+        && index == 0
+        && matches!(abi.return_class, Some(Classification::Registers(_)))
+      {
+        returned_into = Some(self.pointer(values, *argument)?);
+        continue;
+      }
+      match (parameter.kind, &parameter.class) {
+        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
+          let address = self.pointer(values, *argument)?;
+          for (part, part_type) in self
+            .eightbyte_types(parameter.type_id, classes)
+            .into_iter()
+            .enumerate()
+          {
+            let slot = self.byte_offset(address, part as u64 * 8)?;
+            let loaded = self
+              .builder
+              .build_load(part_type, slot, "")
+              .map_err(|error| error.to_string())?;
+            passed.push(loaded.into());
+          }
+        }
+        _ => passed.push(self.value(values, *argument)?.into()),
+      }
+    }
+    Ok((passed, returned_into))
+  }
+
+  fn byte_offset(
+    &self,
+    address: PointerValue<'ctx>,
+    offset: u64,
+  ) -> Result<PointerValue<'ctx>, String> {
+    if offset == 0 {
+      return Ok(address);
+    }
+    let index = self.context.i64_type().const_int(offset, false);
+    unsafe {
+      self
+        .builder
+        .build_in_bounds_gep(self.context.i8_type(), address, &[index], "")
+        .map_err(|error| error.to_string())
+    }
   }
 
   fn string_view(&mut self, text: &[u8]) -> GlobalValue<'ctx> {
@@ -1094,6 +1329,23 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     let _ = procedure;
     match terminator {
       Terminator::Return(returned) => {
+        // A `#c_call` whose aggregate return travels in registers reads it back
+        // out of the storage the body wrote it into (**L§7.11**).
+        if let Some(Classification::Registers(classes)) = &procedure.abi.return_class
+          && let Some(parameter) = procedure.abi.parameters.first()
+        {
+          let storage = self.pointer(values, oj_ir::ValueId(0))?;
+          let coerced = self.coerced_type(parameter.type_id, classes);
+          let value = self
+            .builder
+            .build_load(coerced, storage, "")
+            .map_err(|error| error.to_string())?;
+          self
+            .builder
+            .build_return(Some(&value))
+            .map_err(|error| error.to_string())?;
+          return Ok(());
+        }
         match returned.first() {
           Some(value) => {
             let value = self.value(values, *value)?;

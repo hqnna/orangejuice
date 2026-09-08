@@ -479,8 +479,10 @@ impl<'c, 'p> Lowering<'c, 'p> {
         parameters: vec![crate::ir::AbiParameter {
           type_id: pointer,
           kind: crate::ir::ParameterKind::Value,
+          class: None,
         }],
         direct_return: None,
+        return_class: None,
       },
       locals: Vec::new(),
       blocks: Vec::new(),
@@ -516,11 +518,6 @@ impl<'c, 'p> Lowering<'c, 'p> {
       Some(instance) => self.checker.instance_body(instance),
       None => decl.and_then(|decl| self.checker.procedure_body(decl)),
     };
-    let span = decl
-      .map(|decl| self.checker.program().tree().decl(decl).span)
-      .unwrap_or_else(|| Span::at(0));
-    let decl_source = decl.and_then(|decl| self.checker.program().tree().decl(decl).source);
-
     let mut flags = ProcedureFlags::empty();
     let mut library = None;
     let mut symbol = None;
@@ -597,26 +594,6 @@ impl<'c, 'p> Lowering<'c, 'p> {
       None => (Vec::new(), Vec::new()),
     };
     let abi = self.abi_of(type_id, flags);
-    // Between two Jai procedures the convention is ours, so an aggregate goes
-    // by pointer. A `#c_call` has to follow the platform's, where an aggregate
-    // that fits in registers is passed in them (**L§7.11**) — orangejuice does
-    // not classify those yet, so it says so rather than mis-calling.
-    if flags.contains(ProcedureFlags::C_CALL)
-      && abi
-        .parameters
-        .iter()
-        .any(|parameter| parameter.kind != crate::ir::ParameterKind::Value)
-      && let Some(source) = decl_source
-    {
-      self.report(
-        source,
-        span,
-        format!(
-          "'{name}' passes a value by the C convention that orangejuice cannot classify yet: \
-           only registers-sized arguments and returns are supported (milestone M9)."
-        ),
-      );
-    }
 
     self.procedures.push(Procedure {
       symbol,

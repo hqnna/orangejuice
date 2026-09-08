@@ -53,8 +53,11 @@ impl Lowering<'_, '_> {
       parameters: vec![AbiParameter {
         type_id: result_pointer,
         kind: ParameterKind::Value,
+
+        class: None,
       }],
       direct_return: None,
+      return_class: None,
     };
     self.procedures.push(Procedure {
       symbol: run.symbol.clone(),

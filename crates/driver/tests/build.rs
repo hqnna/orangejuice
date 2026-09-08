@@ -1600,3 +1600,119 @@ fn a_compound_declaration_spreads_its_values_across_its_names() {
     "4321\n23\n14\n",
   );
 }
+
+/// A C library the test compiles with the platform's own C driver, so that
+/// what the classification produces is checked against what a C compiler
+/// expects rather than against itself (**L§7.11**).
+fn with_c_library(source: &str, body: &str) -> Option<Built> {
+  let jai_dir = match oj_testsupport::jai_dir() {
+    Some(dir) => dir,
+    None => {
+      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+      return None;
+    }
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return None;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let c_path = directory.path().join("cabi.c");
+  std::fs::write(&c_path, source).expect("the C source should be writable");
+  let library = directory.path().join("libcabi.so");
+  let compiled = Command::new(oj_link::driver())
+    .arg("-shared")
+    .arg("-fPIC")
+    .arg("-o")
+    .arg(&library)
+    .arg(&c_path)
+    .status();
+  match compiled {
+    Ok(status) if status.success() => {}
+    _ => {
+      eprintln!("skipping: the C driver could not build the test library");
+      return None;
+    }
+  }
+
+  let path = directory.path().join("program.jai");
+  std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
+  // SAFETY: as in `build_and_run`.
+  unsafe {
+    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+  }
+  let report = oj_driver::run(
+    &path,
+    &oj_driver::BuildOptions::new(),
+    oj_driver::Stage::Executable,
+    None,
+  );
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  Some(Built {
+    output: String::from_utf8_lossy(&output.stdout).into_owned(),
+    status: output.status.code().unwrap_or(-1),
+  })
+}
+
+const C_ABI_LIBRARY: &str = r#"
+#include <stdint.h>
+struct Pair  { int64_t a; int64_t b; };
+struct Mixed { double x; int64_t n; };
+struct Two   { float u; float v; };
+struct Big   { int64_t a, b, c; };
+
+int64_t take_pair(struct Pair p)   { return p.a * 10 + p.b; }
+int64_t take_mixed(struct Mixed m) { return (int64_t)(m.x * 2.0) + m.n; }
+int64_t take_two(struct Two t)     { return (int64_t)(t.u * 100.0f + t.v); }
+int64_t take_big(struct Big b)     { return b.a + b.b + b.c; }
+struct Pair  make_pair(int64_t a, int64_t b) { struct Pair p = {a, b}; return p; }
+struct Mixed make_mixed(double x, int64_t n) { struct Mixed m = {x, n}; return m; }
+struct Big   make_big(int64_t a)             { struct Big b = {a, a + 1, a + 2}; return b; }
+"#;
+
+#[test]
+fn a_foreign_procedure_takes_and_returns_a_struct_by_value() {
+  let Some(built) = with_c_library(
+    C_ABI_LIBRARY,
+    "cabi :: #library \"cabi\";\n\
+     Pair  :: struct { a: s64; b: s64; }\n\
+     Mixed :: struct { x: float64; n: s64; }\n\
+     Two   :: struct { u: float32; v: float32; }\n\
+     Big   :: struct { a: s64; b: s64; c: s64; }\n\
+     take_pair  :: (p: Pair) -> s64 #foreign cabi;\n\
+     take_mixed :: (m: Mixed) -> s64 #foreign cabi;\n\
+     take_two   :: (t: Two) -> s64 #foreign cabi;\n\
+     take_big   :: (b: Big) -> s64 #foreign cabi;\n\
+     make_pair  :: (a: s64, b: s64) -> Pair #foreign cabi;\n\
+     make_mixed :: (x: float64, n: s64) -> Mixed #foreign cabi;\n\
+     make_big   :: (a: s64) -> Big #foreign cabi;\n\
+     main :: () {\n\
+       p: Pair;  p.a = 4; p.b = 2;\n\
+       put_number(take_pair(p));\n\
+       m: Mixed; m.x = 1.5; m.n = 39;\n\
+       put_number(take_mixed(m));\n\
+       t: Two;   t.u = 4.0; t.v = 2.0;\n\
+       put_number(take_two(t));\n\
+       b: Big;   b.a = 20; b.b = 21; b.c = 1;\n\
+       put_number(take_big(b));\n\
+       q := make_pair(7, 5);\n\
+       put_number(q.a * 10 + q.b);\n\
+       n := make_mixed(0.5, 41);\n\
+       put_number(cast(s64)(n.x * 2.0) + n.n);\n\
+       g := make_big(10);\n\
+       put_number(g.a + g.b + g.c);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.status, 0, "the program should exit cleanly");
+  assert_eq!(built.output, "42\n42\n402\n42\n75\n42\n33\n");
+}

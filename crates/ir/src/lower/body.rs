@@ -1503,8 +1503,11 @@ impl Lowering<'_, '_> {
       parameters: vec![AbiParameter {
         type_id: self.context_type,
         kind: ParameterKind::Context,
+
+        class: None,
       }],
       direct_return: None,
+      return_class: None,
     };
     self.procedures.push(Procedure {
       symbol: String::from(GLOBAL_INIT_SYMBOL),

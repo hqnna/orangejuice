@@ -4,11 +4,13 @@
 //! types are interned structurally; structs, enums, variants and polymorph
 //! variables are nominal, so each declaration is its own type (**L§3.13**).
 
+mod abi;
 mod kind;
 mod layout;
 mod print;
 mod table;
 
+pub use abi::{Classification, Eightbyte, classify, eightbyte_size};
 pub use kind::{
   ArrayKind, EnumId, EnumInfo, EnumMember, EnumTypeFlags, FloatKind, IntKind, MemberFlags,
   PolymorphId, PolymorphInfo, ProcedureFlags, ProcedureType, StructId, StructInfo, StructMember,

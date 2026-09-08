@@ -100,8 +100,16 @@ pub fn link_line(request: &Request) -> LinkLine {
   for directory in directories {
     arguments.push(format!("-L{directory}"));
   }
+  // One library named by many `#foreign` procedures is one `-l`.
+  let mut named: Vec<&str> = Vec::new();
   for library in &request.libraries {
-    arguments.push(format!("-l{}", link_name(library)));
+    let name = link_name(library);
+    if !named.contains(&name) {
+      named.push(name);
+    }
+  }
+  for name in named {
+    arguments.push(format!("-l{name}"));
   }
 
   // The reference links every executable so that it finds its own libraries
