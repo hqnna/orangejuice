@@ -620,8 +620,19 @@ impl Checker<'_> {
     if size == 0 || at + size > bytes.len() {
       return;
     }
+    // `= .EXECUTABLE` is a name until something says which enum it belongs to,
+    // and the member is what says (**L§5.12**).
+    let resolved = match &constant.value {
+      Value::EnumName(name) => self
+        .types()
+        .enum_of(self.types().underlying(target))
+        .and_then(|definition| self.types().enum_info(definition).value_of(*name))
+        .map(|value| Value::Int(i128::from(value))),
+      _ => None,
+    };
+    let value = resolved.as_ref().unwrap_or(&constant.value);
     let slot = &mut bytes[at..at + size];
-    match &constant.value {
+    match value {
       Value::Bool(value) => slot[0] = u8::from(*value),
       Value::Int(value) => {
         let value = *value as u128;

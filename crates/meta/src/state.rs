@@ -57,6 +57,8 @@ pub enum WorkspaceStatus {
 pub struct BuildOptionsLayout {
   pub output_executable_name: Option<u64>,
   pub output_path: Option<u64>,
+  pub output_type: Option<u64>,
+  pub append_executable_filename_extension: Option<u64>,
 }
 
 /// A compilation a metaprogram asked for (**C§3.1**). Its build options are
@@ -90,6 +92,16 @@ impl Workspace {
   /// of the bytes it wrote (**C§4**). A pointer into compile-time memory is
   /// what a Jai string carries, so this is the one place the compiler follows
   /// one back.
+  /// One byte-sized member of the build options — an `enum u8` or a `bool`.
+  pub fn option_u8(
+    &self,
+    layout: &BuildOptionsLayout,
+    member: impl FnOnce(&BuildOptionsLayout) -> Option<u64>,
+  ) -> Option<u8> {
+    let offset = member(layout)? as usize;
+    self.options.get(offset).copied()
+  }
+
   pub fn option_string(
     &self,
     layout: &BuildOptionsLayout,

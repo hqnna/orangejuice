@@ -41,6 +41,10 @@ pub struct BuildOptions {
   pub dead_code_elimination: bool,
   pub output_executable_name: Option<String>,
   pub output_path: Option<PathBuf>,
+  /// `Build_Options.output_type` (**C§4**): what the program is linked into.
+  pub output_type: oj_link::OutputType,
+  /// `Build_Options.append_executable_filename_extension`.
+  pub append_extension: bool,
   pub import_dirs: Vec<PathBuf>,
   pub set_working_directory: bool,
   pub debug_for_expansions: bool,
@@ -66,6 +70,7 @@ impl BuildOptions {
       dead_code_elimination: true,
       set_working_directory: true,
       backtrace_on_crash: true,
+      append_extension: true,
       ..Self::default()
     }
   }

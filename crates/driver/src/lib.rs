@@ -249,10 +249,14 @@ pub fn run_input(
         return Report::failure(error);
       }
 
+      let file = match options.append_extension {
+        true => format!("{name}{}", output_extension(options.output_type)),
+        false => name.clone(),
+      };
       let request = oj_link::Request {
         objects: vec![object],
-        output: directory.join(&name),
-        output_type: oj_link::OutputType::Executable,
+        output: directory.join(&file),
+        output_type: options.output_type,
         libraries: lowered.program.libraries.clone(),
         additional_arguments: Vec::new(),
       };
@@ -274,9 +278,13 @@ pub fn run_input(
       match oj_link::link(&request) {
         Ok(line) => {
           report.link_line = line.map(|line| line.display());
-          report.compiled.executable = Some(request.output.clone());
           report.compiled.failed = false;
-          report.executable = Some(request.output);
+          // `output_type = .NO_OUTPUT` produces nothing to point at
+          // (**C§4**).
+          if options.output_type != oj_link::OutputType::NoOutput {
+            report.compiled.executable = Some(request.output.clone());
+            report.executable = Some(request.output);
+          }
           report
         }
         Err(error) => Report::failure(error),
@@ -336,6 +344,10 @@ fn build_options_layout(
     match name.as_str() {
       "output_executable_name" => layout.output_executable_name = Some(offset),
       "output_path" => layout.output_path = Some(offset),
+      "output_type" => layout.output_type = Some(offset),
+      "append_executable_filename_extension" => {
+        layout.append_executable_filename_extension = Some(offset);
+      }
       _ => {}
     }
   }
@@ -426,6 +438,14 @@ fn workspace_input(
   {
     nested.output_path = Some(PathBuf::from(path));
   }
+  if let Some(output_type) = workspace.option_u8(layout, |layout| layout.output_type) {
+    nested.output_type = output_type_of(output_type);
+  }
+  if let Some(append) =
+    workspace.option_u8(layout, |layout| layout.append_executable_filename_extension)
+  {
+    nested.append_extension = append != 0;
+  }
   nested.import_remaps = workspace
     .remaps
     .iter()
@@ -493,6 +513,28 @@ fn build_workspaces(
       report.executable = inner.executable;
       report.link_line = inner.link_line;
     }
+  }
+}
+
+/// `Build_Options.output_type` as the distribution numbers it (**C§4**). A
+/// static library is the one orangejuice cannot produce yet, so it is linked
+/// as an object file instead.
+fn output_type_of(value: u8) -> oj_link::OutputType {
+  match value {
+    0 => oj_link::OutputType::NoOutput,
+    2 => oj_link::OutputType::DynamicLibrary,
+    3 | 4 => oj_link::OutputType::ObjectFile,
+    _ => oj_link::OutputType::Executable,
+  }
+}
+
+/// The extension the output takes, which is the platform's rather than the
+/// name's (**C§4**).
+fn output_extension(output_type: oj_link::OutputType) -> &'static str {
+  match output_type {
+    oj_link::OutputType::DynamicLibrary => ".so",
+    oj_link::OutputType::ObjectFile => ".o",
+    _ => "",
   }
 }
 

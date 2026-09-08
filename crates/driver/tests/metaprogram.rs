@@ -14,8 +14,16 @@ const COMPILER: &str = "\
 Workspace :: s64;
 
 Build_Options :: struct {
+  output_type: enum u8 {
+    NO_OUTPUT       :: 0;
+    EXECUTABLE      :: 1;
+    DYNAMIC_LIBRARY :: 2;
+    STATIC_LIBRARY  :: 3;
+    OBJECT_FILE     :: 4;
+  } = .EXECUTABLE;
   output_executable_name: string;
   output_path:            string;
+  append_executable_filename_extension := true;
 }
 
 Report :: enum u8 { ERROR; ERROR_CONTINUABLE; WARNING; INFO; }
@@ -495,4 +503,46 @@ fn get_current_workspace_names_the_program_being_compiled() {
     return;
   };
   assert!(!report.failed, "{}", report.diagnostics.join(""));
+}
+
+#[test]
+fn a_workspace_produces_the_output_type_its_options_ask_for() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#run {\n\
+       w := compiler_create_workspace(\"object\");\n\
+       options := get_build_options(w);\n\
+       options.output_executable_name = \"just_an_object\";\n\
+       options.output_type = .OBJECT_FILE;\n\
+       set_build_options(options, w);\n\
+       add_build_string(\"main :: () { }\", w);\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("just_an_object.o"));
+  assert!(!fixture.path("just_an_object").exists());
+}
+
+#[test]
+fn no_output_produces_nothing() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#run {\n\
+       w := compiler_create_workspace(\"quiet\");\n\
+       options := get_build_options(w);\n\
+       options.output_executable_name = \"nothing\";\n\
+       options.output_type = .NO_OUTPUT;\n\
+       set_build_options(options, w);\n\
+       add_build_string(\"main :: () { }\", w);\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(!report.failed, "{}", report.diagnostics.join(""));
+  assert!(!fixture.path("nothing").exists());
 }
