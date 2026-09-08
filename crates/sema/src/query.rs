@@ -246,6 +246,20 @@ impl Checker<'_> {
     self.procedure_body_from(info.source, info.header, info.scope, None)
   }
 
+  /// A procedure Preload declares, by name. `memcmp` is the one the back end
+  /// needs of its own accord, to compare two strings (**L§17**).
+  pub fn preload_procedure(&mut self, name: &str) -> Option<DeclId> {
+    let symbol = self.interner().intern(name.as_bytes());
+    let preload = self.program().preload_scope();
+    let oj_scope::Resolution::Found(candidates) = self.program().tree().lookup(preload, symbol)
+    else {
+      return None;
+    };
+    candidates
+      .into_iter()
+      .find(|id| self.program().tree().decl(*id).kind == oj_scope::DeclKind::Procedure)
+  }
+
   /// A type Preload declares, by name — the `Type_Info*` structs the type
   /// table is laid out against (**L§17**). `unknown` when Preload is not
   /// loaded, which is the case when one file is checked on its own.

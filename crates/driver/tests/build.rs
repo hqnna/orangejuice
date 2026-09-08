@@ -991,3 +991,61 @@ fn a_using_of_a_value_reads_and_writes_its_members() {
     "42\n7\n",
   );
 }
+
+#[test]
+fn strings_compare_by_their_bytes() {
+  assert_output(
+    "main :: () {\n\
+       a := \"hello\";\n\
+       b := \"hello\";\n\
+       if a == b  put(\"same\\n\");\n\
+       if a != \"help\"  put(\"different\\n\");\n\
+       if a  put(\"nonempty\\n\");\n\
+       empty: string;\n\
+       if !empty  put(\"empty\\n\");\n\
+     }\n",
+    "same\ndifferent\nnonempty\nempty\n",
+  );
+}
+
+#[test]
+fn a_pointer_advances_by_elements() {
+  assert_output(
+    "main :: () {\n\
+       values: [8] int;\n\
+       values[3] = 30;\n\
+       p := values.data;\n\
+       q := p + 3;\n\
+       put_number(q.*);\n\
+       put_number(q - p);\n\
+       q -= 3;\n\
+       put_number(cast(int)(q == values.data));\n\
+     }\n",
+    "30\n3\n1\n",
+  );
+}
+
+#[test]
+fn an_ifx_of_two_literals_settles_on_what_they_default_to() {
+  assert_output(
+    "main :: () {\n\
+       n := 3;\n\
+       put_number(ifx n >= 100 then 5 else 4);\n\
+     }\n",
+    "4\n",
+  );
+}
+
+#[test]
+fn a_view_is_true_when_it_holds_something() {
+  assert_output(
+    "main :: () {\n\
+       storage: [3] int;\n\
+       full: [] int = storage;\n\
+       empty: [] int;\n\
+       if full  put(\"full\\n\");\n\
+       if !empty  put(\"empty\\n\");\n\
+     }\n",
+    "full\nempty\n",
+  );
+}

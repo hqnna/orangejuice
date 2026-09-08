@@ -420,6 +420,11 @@ impl Lowering<'_, '_> {
     if self.checker.types().underlying(value.type_id) == TypeId::BOOL {
       return Some(value);
     }
+    // A `string`, a view and a resizable array are true when they hold
+    // something, which is their `count` (**L§5.9**).
+    if let Some(count) = self.count_of(value) {
+      return self.truth(source, node, count);
+    }
     if !self.is_scalar(value.type_id) {
       self.unsupported(source, node, "a truth value for this type", "M7");
       return None;
@@ -448,6 +453,27 @@ impl Lowering<'_, '_> {
       id: dest,
       type_id: TypeId::BOOL,
       indirect: false,
+    })
+  }
+
+  /// The `count` word of anything that starts with one: a `string`, a `[] T`
+  /// or a `[..] T` (**L§3.3**, **L§3.4**).
+  fn count_of(&mut self, value: Val) -> Option<Val> {
+    let underlying = self.checker.types().underlying(value.type_id);
+    let counted = underlying == TypeId::STRING
+      || matches!(
+        self.checker.types().array_of(underlying),
+        Some((_, ArrayKind::View | ArrayKind::Resizable))
+      );
+    if !counted {
+      return None;
+    }
+    let address = self.address_of(value);
+    let slot = self.offset(address, 0, TypeId::S64);
+    Some(Val {
+      id: slot,
+      type_id: TypeId::S64,
+      indirect: true,
     })
   }
 
@@ -792,16 +818,132 @@ impl Lowering<'_, '_> {
     } else {
       info.type_id
     };
+    // Pointer arithmetic is not a unification: `p - q` is an `s64` but its
+    // operands are pointers, and `p + n` keeps the pointer (**L§3.2**).
+    let pointer_arithmetic = matches!(binary, BinaryOp::Add | BinaryOp::Subtract)
+      && self.checker.types().is_pointer(left_type);
     let wanted = (!self.checker.types().is_unknown(operand)
-      && !self.checker.types().is_untyped(operand))
-    .then_some(operand);
+      && !self.checker.types().is_untyped(operand)
+      && !pointer_arithmetic)
+      .then_some(operand);
     let left_value = self.expression(scope, source, left, wanted)?;
-    let shifts = matches!(
+    // A shift's right operand is a count, and a pointer offset's is an index
+    // of elements: neither takes the left operand's type (**L§3.2**,
+    // **L§5.2**).
+    let keeps_left = matches!(
       binary,
       BinaryOp::ShiftLeft | BinaryOp::ShiftRight | BinaryOp::RotateLeft | BinaryOp::RotateRight
-    );
-    let right_value = self.expression(scope, source, right, wanted.filter(|_| !shifts))?;
+    ) || self.checker.types().is_pointer(left_value.type_id);
+    let right_value = self.expression(scope, source, right, wanted.filter(|_| !keeps_left))?;
     self.binary_values(source, node, binary, left_value, right_value, info.type_id)
+  }
+
+  /// `a == b` on strings: the same count and the same bytes (**L§3.4**). The
+  /// bytes are compared with Preload's `memcmp`, and only when the counts
+  /// agree, so neither side is read past its end.
+  fn string_equality(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    operator: BinaryOp,
+    left: Val,
+    right: Val,
+  ) -> Option<Val> {
+    let Some(memcmp) = self.checker.preload_procedure("memcmp") else {
+      self.unsupported(source, node, "comparing two strings", "M7");
+      return None;
+    };
+    let memcmp = self.procedure_id(memcmp);
+
+    let result = self.new_local(String::from("equal"), TypeId::BOOL);
+    let slot = self.local_address(result);
+    let no = self.constant(Constant::Int(0), TypeId::BOOL);
+    self.store(slot, no);
+
+    let (left_count, left_data) = self.string_words(left);
+    let (right_count, right_data) = self.string_words(right);
+    let same_count = self.value(TypeId::BOOL);
+    self.emit(Inst::Binary {
+      dest: same_count,
+      operator: BinaryOp::Equal,
+      left: left_count,
+      right: right_count,
+    });
+    let compare = self.new_block();
+    let join = self.new_block();
+    self.terminate(Terminator::Branch {
+      condition: same_count,
+      then_block: compare,
+      else_block: join,
+    });
+
+    self.current = compare;
+    let difference = self.value(TypeId::S16);
+    self.emit(Inst::Call {
+      dest: Some(difference),
+      callee: Callee::Direct(memcmp),
+      signature: self.procedures[memcmp.0 as usize].type_id,
+      arguments: vec![left_data, right_data, left_count],
+    });
+    let zero = self.constant(Constant::Int(0), TypeId::S16);
+    let zero = self.scalar(zero);
+    let same_bytes = self.value(TypeId::BOOL);
+    self.emit(Inst::Binary {
+      dest: same_bytes,
+      operator: BinaryOp::Equal,
+      left: difference,
+      right: zero,
+    });
+    let slot = self.local_address(result);
+    self.emit(Inst::Store {
+      address: slot,
+      value: same_bytes,
+    });
+    self.terminate(Terminator::Jump(join));
+
+    self.current = join;
+    let slot = self.local_address(result);
+    let equal = self.value(TypeId::BOOL);
+    self.emit(Inst::Load {
+      dest: equal,
+      address: slot,
+    });
+    let id = match operator {
+      BinaryOp::NotEqual => {
+        let inverted = self.value(TypeId::BOOL);
+        self.emit(Inst::Unary {
+          dest: inverted,
+          operator: UnaryOp::LogicalNot,
+          operand: equal,
+        });
+        inverted
+      }
+      _ => equal,
+    };
+    Some(Val {
+      id,
+      type_id: TypeId::BOOL,
+      indirect: false,
+    })
+  }
+
+  /// The `{count, data}` a `string` is (**L§3.4**), as two loaded values.
+  fn string_words(&mut self, value: Val) -> (ValueId, ValueId) {
+    let address = self.address_of(value);
+    let count_slot = self.offset(address, 0, TypeId::S64);
+    let count = self.value(TypeId::S64);
+    self.emit(Inst::Load {
+      dest: count,
+      address: count_slot,
+    });
+    let pointer = self.pointer_to(TypeId::U8);
+    let data_slot = self.offset(address, 8, pointer);
+    let data = self.value(pointer);
+    self.emit(Inst::Load {
+      dest: data,
+      address: data_slot,
+    });
+    (count, data)
   }
 
   pub(super) fn binary_values(
@@ -813,13 +955,62 @@ impl Lowering<'_, '_> {
     right: Val,
     result: TypeId,
   ) -> Option<Val> {
+    // Two strings are equal when they hold the same bytes (**L§3.4**).
+    if matches!(operator, BinaryOp::Equal | BinaryOp::NotEqual)
+      && self.checker.types().underlying(left.type_id) == TypeId::STRING
+      && self.checker.types().underlying(right.type_id) == TypeId::STRING
+    {
+      return self.string_equality(source, node, operator, left, right);
+    }
+    // One pointer minus another is how many elements apart they are
+    // (**L§3.2**).
+    if operator == BinaryOp::Subtract
+      && self.checker.types().is_pointer(left.type_id)
+      && self.checker.types().is_pointer(right.type_id)
+    {
+      let pointee = self.checker.types().pointee(left.type_id)?;
+      let (stride, _) = self.size_align(pointee);
+      let stride = stride.max(1);
+      let left = self.scalar(left);
+      let right = self.scalar(right);
+      let bytes = self.value(TypeId::S64);
+      self.emit(Inst::Binary {
+        dest: bytes,
+        operator: BinaryOp::Subtract,
+        left,
+        right,
+      });
+      if stride == 1 {
+        return Some(Val {
+          id: bytes,
+          type_id: TypeId::S64,
+          indirect: false,
+        });
+      }
+      let size = self.constant(Constant::Int(i128::from(stride)), TypeId::S64);
+      let size = self.scalar(size);
+      let dest = self.value(TypeId::S64);
+      self.emit(Inst::Binary {
+        dest,
+        operator: BinaryOp::Divide,
+        left: bytes,
+        right: size,
+      });
+      return Some(Val {
+        id: dest,
+        type_id: TypeId::S64,
+        indirect: false,
+      });
+    }
     // Pointer arithmetic counts in elements, not bytes (**L§3.2**).
     if matches!(operator, BinaryOp::Add | BinaryOp::Subtract)
       && self.checker.types().is_pointer(left.type_id)
       && self.checker.types().is_integer(right.type_id)
     {
       let pointee = self.checker.types().pointee(left.type_id)?;
+      // `*void` advances a byte at a time (**L§3.2**).
       let (stride, _) = self.size_align(pointee);
+      let stride = stride.max(1);
       let base = self.scalar(left);
       let mut index = self.scalar(right);
       if operator == BinaryOp::Subtract {
@@ -1142,7 +1333,10 @@ impl Lowering<'_, '_> {
     payload: &ast::IfNode,
     info: &Expr,
   ) -> Option<Val> {
-    let type_id = info.type_id;
+    // Both branches may be literals, in which case the `ifx` settles on what
+    // they default to (**L§5.10**); whatever asked for the value converts it
+    // afterwards.
+    let type_id = self.checker.hardened(info.type_id);
     if self.checker.types().is_unknown(type_id) {
       self.unsupported(source, node, "this 'ifx'", "M7");
       return None;

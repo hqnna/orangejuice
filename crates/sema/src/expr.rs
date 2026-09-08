@@ -541,13 +541,17 @@ impl Checker<'_> {
       };
     }
 
-    // Subtracting two pointers gives the element difference as `s64`
-    // (**L§3.2**).
-    if operator == OperatorType::MINUS
+    // Subtracting two pointers gives the element difference as `s64`;
+    // `p + n` and `p - n` advance by elements and stay pointers (**L§3.2**).
+    if matches!(operator, OperatorType::PLUS | OperatorType::MINUS)
       && self.types().is_pointer(left_type.type_id)
-      && self.types().is_pointer(right_type.type_id)
     {
-      return Expr::value(TypeId::S64);
+      if operator == OperatorType::MINUS && self.types().is_pointer(right_type.type_id) {
+        return Expr::value(TypeId::S64);
+      }
+      if self.types().is_integer(self.harden(right_type.type_id)) {
+        return Expr::value(left_type.type_id);
+      }
     }
 
     // A shift's result is the left operand's type; so is a bitwise operator's
