@@ -13,6 +13,9 @@ pub(crate) struct Parameter {
   pub name: Option<Symbol>,
   pub type_id: TypeId,
   pub has_default: bool,
+  /// The default value written in the header, which a call site that leaves
+  /// the parameter out evaluates in the header's own scope (**L§7.4**).
+  pub default: Option<NodeId>,
 }
 
 /// A callable candidate: a procedure declaration, or a value of procedure type.
@@ -22,6 +25,13 @@ pub(crate) struct Signature {
   pub returns: Vec<TypeId>,
   pub varargs: bool,
   pub polymorphic: bool,
+  /// The declaration this candidate came from, so that a resolved call site
+  /// can name the procedure it calls. A value of procedure type has none.
+  pub decl: Option<DeclId>,
+  /// Where the header was written, which is the scope its default values are
+  /// evaluated in.
+  pub header: Option<(SourceId, NodeId)>,
+  pub type_id: TypeId,
 }
 
 impl Signature {
@@ -196,6 +206,7 @@ impl Checker<'_> {
           name: None,
           type_id: *type_id,
           has_default: false,
+          default: None,
         })
         .collect(),
     };
@@ -205,6 +216,9 @@ impl Checker<'_> {
       returns: signature.returns.clone(),
       varargs: signature.varargs,
       polymorphic,
+      decl: Some(candidate),
+      header,
+      type_id: resolved.value,
     })
   }
 
@@ -220,6 +234,7 @@ impl Checker<'_> {
           name: None,
           type_id: *argument,
           has_default: false,
+          default: None,
         })
         .collect(),
       returns: signature.returns.clone(),
@@ -227,6 +242,9 @@ impl Checker<'_> {
       polymorphic: signature
         .flags
         .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC),
+      decl: None,
+      header: None,
+      type_id,
     })
   }
 
@@ -271,6 +289,7 @@ impl Checker<'_> {
           name,
           type_id,
           has_default,
+          default: declaration.and_then(|declaration| declaration.expression),
         }
       })
       .collect()

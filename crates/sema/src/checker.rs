@@ -222,13 +222,22 @@ pub struct Checker<'a> {
   /// The shared `declaration_properties` of each name in a compound
   /// declaration (**L§4.5**): `a, b: float;` declares two names off one type.
   compound_properties: HashMap<(SourceId, NodeId), (NodeId, usize)>,
+  /// The `for` a loop variable belongs to, and whether it is the index
+  /// (**L§6.5**).
+  iterators: HashMap<DeclId, (SourceId, NodeId, bool)>,
   /// `#Context`, built once from `Context_Base` and the program's
   /// `#add_context` declarations (**L§10.2**).
   context: Option<TypeId>,
   /// The definition a struct or enum node produced, so that a type written
   /// twice in the same place is built once.
   aggregate_types: HashMap<(SourceId, NodeId), TypeId>,
+  /// The default value of each struct member that was declared with one, by
+  /// member index (**L§8.1**).
+  member_defaults: HashMap<StructId, Vec<(usize, SourceId, NodeId)>>,
   stack: Vec<DeclId>,
+  /// Every declaration by the node it was written at, built on first use: a
+  /// back end walking a body finds the local a statement introduced this way.
+  pub(crate) decl_nodes: Option<HashMap<(SourceId, NodeId), DeclId>>,
   diagnostics: Vec<Diagnostic>,
   reported: HashSet<(SourceId, Span, String)>,
   depth: u32,
@@ -254,10 +263,31 @@ impl<'a> Checker<'a> {
       .collect();
 
     let mut compound_properties = HashMap::new();
+    let mut iterators = HashMap::new();
     for unit in program.units() {
       let ast = &unit.parsed.ast;
       for index in 0..ast.len() {
-        let NodeData::CompoundDeclaration(compound) = ast.data(NodeId(index as u32)) else {
+        let node = NodeId(index as u32);
+        // `it` and `it_index` take their types from the loop they belong to
+        // (**L§6.5**), which is only reachable from the loop's side.
+        if matches!(ast.data(node), NodeData::For(_))
+          && let Some(scope) = program.loop_scope(unit.source, node)
+        {
+          // A loop that did not name its variables declares them with no
+          // identifier to be found through, so the loop's own scope — which
+          // holds `it` then `it_index` and nothing else — is the key.
+          for (index, id) in program
+            .tree()
+            .scope(scope)
+            .declarations
+            .iter()
+            .take(2)
+            .enumerate()
+          {
+            iterators.insert(*id, (unit.source, node, index == 1));
+          }
+        }
+        let NodeData::CompoundDeclaration(compound) = ast.data(node) else {
           continue;
         };
         let NodeData::CommaSeparatedArguments { arguments } =
@@ -289,9 +319,12 @@ impl<'a> Checker<'a> {
       pending_bodies: HashMap::new(),
       completing: Vec::new(),
       compound_properties,
+      iterators,
       context: None,
       aggregate_types: HashMap::new(),
+      member_defaults: HashMap::new(),
       stack: Vec::new(),
+      decl_nodes: None,
       diagnostics: Vec::new(),
       reported: HashSet::new(),
       depth: 0,
@@ -508,6 +541,22 @@ impl<'a> Checker<'a> {
     self.aggregate_owners.get(&scope).copied()
   }
 
+  pub(crate) fn record_member_defaults(
+    &mut self,
+    definition: StructId,
+    defaults: Vec<(usize, SourceId, NodeId)>,
+  ) {
+    self.member_defaults.insert(definition, defaults);
+  }
+
+  pub(crate) fn member_defaults_of(&self, definition: StructId) -> &[(usize, SourceId, NodeId)] {
+    self
+      .member_defaults
+      .get(&definition)
+      .map(Vec::as_slice)
+      .unwrap_or(&[])
+  }
+
   pub(crate) fn record_constant(&mut self, id: DeclId, value: Const) {
     self.decl_constants.insert(id, value);
   }
@@ -676,6 +725,12 @@ impl<'a> Checker<'a> {
 
   fn compute_decl_type(&mut self, id: DeclId) -> DeclType {
     let decl = self.program.tree().decl(id).clone();
+    // A loop variable takes its type from the loop rather than from a
+    // declaration; one the program did not name has no node at all
+    // (**L§6.5**).
+    if let Some((source, loop_node, is_index)) = self.iterators.get(&id).copied() {
+      return DeclType::value(self.iterator_type(decl.scope, source, loop_node, is_index));
+    }
     match decl.kind {
       DeclKind::Builtin => self.builtin_type(id, decl.name),
       // A module name is not a value; member access through it goes to the
@@ -765,7 +820,7 @@ impl<'a> Checker<'a> {
   }
 
   /// The type of `context` (**L§10.1**), built on first use.
-  pub(crate) fn context_type(&mut self) -> TypeId {
+  pub fn context_type(&mut self) -> TypeId {
     if let Some(context) = self.context {
       return context;
     }

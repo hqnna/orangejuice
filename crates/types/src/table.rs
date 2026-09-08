@@ -45,7 +45,7 @@ impl TypeId {
 /// are structural, so building the same one twice gives the same [`TypeId`];
 /// structs, enums, variants and polymorph variables are nominal and get a fresh
 /// id per declaration (**L§3.13**).
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Types {
   kinds: Vec<TypeKind>,
   interned: HashMap<TypeKind, TypeId>,

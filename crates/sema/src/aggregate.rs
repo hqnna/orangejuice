@@ -26,6 +26,10 @@ struct Members {
   /// The declarations the scope tree actually admitted, so that the branch a
   /// `#if` discarded contributes nothing.
   live: HashSet<NodeId>,
+  /// The default value each member was declared with, by member index
+  /// (**L§8.1**): a variable of the struct starts out zeroed and then takes
+  /// these (**L§4.6**).
+  defaults: Vec<(usize, SourceId, NodeId)>,
   scope: ScopeId,
   source: SourceId,
 }
@@ -115,6 +119,7 @@ impl Checker<'_> {
       members: Vec::new(),
       overlay_from: None,
       live: self.live_declarations(scope),
+      defaults: Vec::new(),
       scope,
       source,
     };
@@ -124,6 +129,8 @@ impl Checker<'_> {
 
     let layout = state.builder.finish();
     let overlay_from = state.overlay_from;
+    let defaults = std::mem::take(&mut state.defaults);
+    self.record_member_defaults(definition, defaults);
     let info = self.types_mut().struct_info_mut(definition);
     info.members = state.members;
     info.overlay_from = overlay_from;
@@ -325,6 +332,13 @@ impl Checker<'_> {
       flags,
       imported_through: None,
     });
+    if !declaration
+      .flags
+      .contains(DeclarationFlags::IS_UNINITIALIZED)
+      && let Some(expression) = declaration.expression
+    {
+      state.defaults.push((index, source, expression));
+    }
 
     if flags.contains(MemberFlags::USING) {
       self.import_members(state, type_id, offset, index);

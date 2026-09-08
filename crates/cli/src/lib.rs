@@ -194,15 +194,22 @@ fn execute(cli: &Cli) -> u8 {
       println!("{VERSION_LINE}");
       EXIT_SUCCESS
     }
-    Some(Command::Build(_)) => not_implemented("oj build", "M5"),
-    Some(Command::Run(_)) => not_implemented("oj run", "M5"),
+    Some(Command::Build(args)) => build(&args.file, &args.options, None),
+    Some(Command::Run(args)) => build(&args.file, &args.options, Some(&args.program_args)),
     Some(Command::Dump { stage }) => match stage {
       DumpStage::Tokens { file } => dump_tokens(file),
       DumpStage::Ast { file, tree } => dump_ast(file, *tree),
       DumpStage::Scopes { file, file_only } => dump_scopes(file, *file_only),
       DumpStage::Types { file, file_only } => dump_types(file, *file_only),
-      DumpStage::Ir { .. } => not_implemented("oj dump ir", "M5"),
-      DumpStage::Asm { .. } => not_implemented("oj dump asm", "M5"),
+      DumpStage::Ir { file, proc } => dump(file, oj_driver::Stage::Ir, proc.as_deref()),
+      DumpStage::Asm { file, llvm, proc } => {
+        let stage = if *llvm {
+          oj_driver::Stage::LlvmIr
+        } else {
+          oj_driver::Stage::Assembly
+        };
+        dump(file, stage, proc.as_deref())
+      }
     },
     None => EXIT_USAGE,
   }
@@ -354,24 +361,81 @@ fn dump_types(path: &Path, file_only: bool) -> u8 {
   }
 }
 
-/// The jai distribution the standard modules come from: `OJ_JAI_DIR`, else a
-/// `vendor/jai` in the current directory or one of its ancestors
-/// (`docs/spec.md` §5).
 fn jai_dir() -> Option<PathBuf> {
-  if let Some(value) = std::env::var_os("OJ_JAI_DIR").filter(|value| !value.is_empty()) {
-    let candidate = PathBuf::from(value);
-    return candidate.join("modules").is_dir().then_some(candidate);
-  }
-  let current = std::env::current_dir().ok()?;
-  current.ancestors().find_map(|directory| {
-    let candidate = directory.join("vendor").join("jai");
-    candidate.join("modules").is_dir().then_some(candidate)
-  })
+  oj_driver::jai_dir()
 }
 
-fn not_implemented(command: &str, milestone: &str) -> u8 {
-  eprintln!("error: `{command}` is not implemented yet (planned for milestone {milestone})");
-  EXIT_FAILURE
+/// `oj dump ir` and `oj dump asm`: the whole pipeline, stopped one stage early
+/// and printed.
+fn dump(path: &Path, stage: oj_driver::Stage, only: Option<&str>) -> u8 {
+  let options = oj_driver::BuildOptions::new();
+  let report = oj_driver::run(path, &options, stage, only);
+  print!("{}", report.output);
+  for diagnostic in &report.diagnostics {
+    eprint!("{diagnostic}");
+  }
+  if report.failed {
+    EXIT_FAILURE
+  } else {
+    EXIT_SUCCESS
+  }
+}
+
+/// `oj build`, and `oj run` when `program_args` is given: compile, link, and
+/// then execute what came out.
+fn build(path: &Path, arguments: &[String], program_args: Option<&[OsString]>) -> u8 {
+  let parsed = match oj_driver::parse(arguments) {
+    Ok(parsed) => parsed,
+    Err(error) => {
+      eprintln!("{}", error.message);
+      return EXIT_FAILURE;
+    }
+  };
+  if parsed.options.print_version {
+    println!("{VERSION_LINE}");
+    return EXIT_SUCCESS;
+  }
+  for deferred in &parsed.deferred {
+    eprintln!(
+      "error: '{}' is not implemented yet (planned for milestone {})",
+      deferred.option, deferred.milestone
+    );
+  }
+  if !parsed.deferred.is_empty() {
+    return EXIT_FAILURE;
+  }
+
+  let report = oj_driver::run(path, &parsed.options, oj_driver::Stage::Executable, None);
+  for diagnostic in &report.diagnostics {
+    eprint!("{diagnostic}");
+  }
+  if report.failed {
+    return EXIT_FAILURE;
+  }
+  let Some(executable) = report.executable else {
+    return EXIT_SUCCESS;
+  };
+  if parsed.options.verbose
+    && let Some(line) = &report.link_line
+  {
+    eprintln!("{line}");
+  }
+  let Some(program_args) = program_args else {
+    if !parsed.options.quiet {
+      println!("{}", executable.display());
+    }
+    return EXIT_SUCCESS;
+  };
+  match std::process::Command::new(&executable)
+    .args(program_args)
+    .status()
+  {
+    Ok(status) => status.code().unwrap_or(EXIT_FAILURE as i32) as u8,
+    Err(error) => {
+      eprintln!("error: could not run {}: {error}", executable.display());
+      EXIT_FAILURE
+    }
+  }
 }
 
 #[cfg(test)]
@@ -420,9 +484,54 @@ mod tests {
   }
 
   #[test]
-  fn unimplemented_stages_fail_rather_than_pretending_to_work() {
+  fn a_missing_file_fails_rather_than_pretending_to_work() {
     assert_eq!(exit_code(["oj", "build", "first.jai"]), EXIT_FAILURE);
     assert_eq!(exit_code(["oj", "dump", "ast", "first.jai"]), EXIT_FAILURE);
+  }
+
+  #[test]
+  fn an_unknown_build_option_is_reported_in_the_reference_wording() {
+    // The option list is rejected before the file is even looked at.
+    assert_eq!(
+      exit_code(["oj", "build", "first.jai", "-frobnicate"]),
+      EXIT_FAILURE
+    );
+  }
+
+  fn compile_stage(stage: &str, extra: &[&str], source: &str) -> (u8, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("input.jai");
+    std::fs::write(&path, source).expect("the input should be writable");
+    let mut argv = vec!["oj", "dump", stage, path.to_str().unwrap()];
+    argv.extend_from_slice(extra);
+    (exit_code(argv), dir)
+  }
+
+  #[test]
+  fn the_back_end_stages_run_when_the_distribution_is_present() {
+    if oj_driver::jai_dir().is_none() {
+      return;
+    }
+    let program = "main :: () { n := 1 + 2; }\n";
+    assert_eq!(compile_stage("ir", &[], program).0, EXIT_SUCCESS);
+    assert_eq!(compile_stage("asm", &["--llvm"], program).0, EXIT_SUCCESS);
+    assert_eq!(compile_stage("asm", &[], program).0, EXIT_SUCCESS);
+  }
+
+  #[test]
+  fn a_program_needing_a_later_milestone_fails_the_back_end_stages() {
+    if oj_driver::jai_dir().is_none() {
+      return;
+    }
+    assert_eq!(
+      compile_stage(
+        "ir",
+        &[],
+        "#import \"Basic\";\nmain :: () { print(\"x\"); }\n"
+      )
+      .0,
+      EXIT_FAILURE
+    );
   }
 
   fn dump_tokens_of(source: &str) -> (u8, tempfile::TempDir) {

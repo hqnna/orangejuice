@@ -1,0 +1,254 @@
+//! The jai-style command line of `oj build` and `oj run`.
+//!
+//! The single-dash options are the reference compiler's, not ours: their
+//! names, arity, order and error wording come from **C§2.1** and from
+//! `vendor/jai/modules/Default_Metaprogram.jai`, which `docs/spec.md` §5.1
+//! tables. Nothing here may be invented.
+
+use std::path::PathBuf;
+
+/// How much the back end optimizes (`Build_Options.optimization_level`,
+/// **C§4**).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Optimization {
+  #[default]
+  Debug,
+  VeryDebug,
+  Optimized,
+}
+
+impl Optimization {
+  pub fn level(self) -> u8 {
+    match self {
+      Self::VeryDebug | Self::Debug => 0,
+      Self::Optimized => 2,
+    }
+  }
+}
+
+/// The subset of `Build_Options` the command line sets, plus the switches the
+/// driver itself reads.
+#[derive(Clone, Debug, Default)]
+pub struct BuildOptions {
+  pub optimization: Optimization,
+  pub stack_trace: bool,
+  pub quiet: bool,
+  pub verbose: bool,
+  pub use_color: bool,
+  pub visual_studio_format: bool,
+  pub output_llvm_ir: bool,
+  pub enable_split_modules: bool,
+  pub dead_code_elimination: bool,
+  pub output_executable_name: Option<String>,
+  pub output_path: Option<PathBuf>,
+  pub import_dirs: Vec<PathBuf>,
+  pub set_working_directory: bool,
+  pub debug_for_expansions: bool,
+  pub backtrace_on_crash: bool,
+  /// Everything after a lone `-`, which the program and its `#run`s see
+  /// (**L§14.4**).
+  pub compile_time_command_line: Vec<String>,
+  /// `-version`, which prints the version and stops when no file follows.
+  pub print_version: bool,
+  /// `-help` / `-?`, which prints the vendored metaprogram's help text.
+  pub print_help: bool,
+}
+
+impl BuildOptions {
+  pub fn new() -> Self {
+    Self {
+      optimization: Optimization::Debug,
+      stack_trace: true,
+      use_color: true,
+      enable_split_modules: true,
+      dead_code_elimination: true,
+      set_working_directory: true,
+      backtrace_on_crash: true,
+      ..Self::default()
+    }
+  }
+}
+
+/// A command line the metaprogram would reject. The wording is the
+/// reference's (**C§2.1**).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OptionError {
+  pub message: String,
+}
+
+/// An option whose effect belongs to a milestone the compiler has not reached.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Deferred {
+  pub option: String,
+  pub milestone: &'static str,
+}
+
+/// What one command line came to.
+#[derive(Clone, Debug)]
+pub struct ParsedOptions {
+  pub options: BuildOptions,
+  /// Options that parsed but whose behaviour needs a later milestone.
+  pub deferred: Vec<Deferred>,
+}
+
+/// Parses the jai-style option list that follows the source file.
+pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
+  let mut options = BuildOptions::new();
+  let mut deferred = Vec::new();
+  let mut index = 0;
+
+  while index < arguments.len() {
+    let argument = arguments[index].clone();
+    index += 1;
+
+    // A lone `-` ends option processing; the rest is the program's
+    // (`docs/spec.md` §5.1).
+    if argument == "-" {
+      options.compile_time_command_line = arguments[index..].to_vec();
+      break;
+    }
+    if !argument.starts_with('-') {
+      return Err(unknown(&argument));
+    }
+
+    let mut take = |option: &str| -> Result<String, OptionError> {
+      let value = arguments.get(index).cloned();
+      index += 1;
+      value.ok_or_else(|| OptionError {
+        message: format!("Command line: Missing argument to {option}."),
+      })
+    };
+
+    match argument.as_str() {
+      "-release" => {
+        options.optimization = Optimization::Optimized;
+        options.stack_trace = false;
+      }
+      "-very_debug" => options.optimization = Optimization::VeryDebug,
+      "-quiet" => options.quiet = true,
+      "-verbose" => options.verbose = true,
+      "-no_color" => options.use_color = false,
+      "-msvc_format" => options.visual_studio_format = true,
+      "-output_ir" => options.output_llvm_ir = true,
+      "-no_split" => options.enable_split_modules = false,
+      "-no_dce" => options.dead_code_elimination = false,
+      "-no_cwd" => options.set_working_directory = false,
+      "-debug_for" => options.debug_for_expansions = true,
+      "-no_backtrace_on_crash" => options.backtrace_on_crash = false,
+      "-version" => options.print_version = true,
+      "-help" | "-?" => options.print_help = true,
+      "-exe" => options.output_executable_name = Some(take("-exe")?),
+      "-output_path" => options.output_path = Some(PathBuf::from(take("-output_path")?)),
+      "-import_dir" => options
+        .import_dirs
+        .push(PathBuf::from(take("-import_dir")?)),
+      // Accepted and recorded, but the backend they select is not a choice
+      // orangejuice offers (`docs/spec.md` §2).
+      "-llvm" => {}
+      "-x64" => deferred.push(Deferred {
+        option: argument,
+        milestone: "M5",
+      }),
+      "-natvis" | "-no_inline" => {}
+      // These need the metaprogram, the interpreter, or both.
+      "-plug" | "-plugin" => {
+        let value = take(&argument)?;
+        deferred.push(Deferred {
+          option: format!("{argument} {value}"),
+          milestone: "M8",
+        });
+      }
+      "-add" | "-run" => {
+        let value = take(&argument)?;
+        deferred.push(Deferred {
+          option: format!("{argument} {value}"),
+          milestone: "M6",
+        });
+      }
+      "-context_size" => {
+        let value = take("-context_size")?;
+        deferred.push(Deferred {
+          option: format!("-context_size {value}"),
+          milestone: "M6",
+        });
+      }
+      "-ps5" | "-no_check" | "-no_check_bindings" | "-check_bindings" => {
+        deferred.push(Deferred {
+          option: argument,
+          milestone: "M8",
+        });
+      }
+      "-debugger" => deferred.push(Deferred {
+        option: argument,
+        milestone: "M6",
+      }),
+      _ => return Err(unknown(&argument)),
+    }
+  }
+
+  Ok(ParsedOptions { options, deferred })
+}
+
+fn unknown(argument: &str) -> OptionError {
+  OptionError {
+    message: format!("Unknown argument '{argument}'."),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn parse_of(arguments: &[&str]) -> Result<ParsedOptions, OptionError> {
+    parse(
+      &arguments
+        .iter()
+        .map(|text| text.to_string())
+        .collect::<Vec<_>>(),
+    )
+  }
+
+  #[test]
+  fn release_optimizes_and_drops_the_stack_trace() {
+    let parsed = parse_of(&["-release"]).expect("the option list should parse");
+    assert_eq!(parsed.options.optimization, Optimization::Optimized);
+    assert!(!parsed.options.stack_trace);
+    assert_eq!(parsed.options.optimization.level(), 2);
+  }
+
+  #[test]
+  fn a_lone_dash_hands_the_rest_to_the_program() {
+    let parsed = parse_of(&["-quiet", "-", "-android", "x"]).expect("it should parse");
+    assert!(parsed.options.quiet);
+    assert_eq!(parsed.options.compile_time_command_line, ["-android", "x"]);
+  }
+
+  #[test]
+  fn options_with_arguments_take_the_next_word() {
+    let parsed = parse_of(&["-exe", "game", "-output_path", "/tmp/out"]).expect("it should parse");
+    assert_eq!(
+      parsed.options.output_executable_name.as_deref(),
+      Some("game")
+    );
+    assert_eq!(parsed.options.output_path, Some(PathBuf::from("/tmp/out")));
+  }
+
+  #[test]
+  fn a_missing_argument_is_the_reference_wording() {
+    let error = parse_of(&["-exe"]).expect_err("the option list should be rejected");
+    assert_eq!(error.message, "Command line: Missing argument to -exe.");
+  }
+
+  #[test]
+  fn an_unknown_option_is_the_reference_wording() {
+    let error = parse_of(&["-frobnicate"]).expect_err("the option list should be rejected");
+    assert_eq!(error.message, "Unknown argument '-frobnicate'.");
+  }
+
+  #[test]
+  fn options_that_need_a_later_milestone_are_recorded_rather_than_ignored() {
+    let parsed = parse_of(&["-plug", "Check"]).expect("it should parse");
+    assert_eq!(parsed.deferred.len(), 1);
+    assert_eq!(parsed.deferred[0].milestone, "M8");
+  }
+}

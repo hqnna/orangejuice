@@ -7,6 +7,55 @@ use oj_types::{ProcedureType, TypeId};
 use crate::checker::{Checker, DeclType};
 
 impl Checker<'_> {
+  /// The type of a `for` loop's `it` or `it_index` (**L§6.5**): the index is
+  /// always `s64`, and the value is the range's type or the array's element —
+  /// a pointer to it under `for *`. A `for` over anything else needs a
+  /// `for_expansion`, which is M7.
+  pub(crate) fn iterator_type(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    loop_node: NodeId,
+    is_index: bool,
+  ) -> TypeId {
+    let Some(NodeData::For(payload)) = self.ast(source).map(|ast| ast.data(loop_node)) else {
+      return TypeId::UNKNOWN;
+    };
+    let payload = payload.clone();
+    let scope = self.scope_at(source, payload.iteration_expression, scope);
+    let subject = self.expression_type(scope, source, payload.iteration_expression);
+
+    // `for a..b` counts over the range, whose type both ends agree on.
+    if let Some(right) = payload.iteration_expression_right {
+      if is_index {
+        return TypeId::S64;
+      }
+      let end = self.expression_type(scope, source, right);
+      let unified = self.unify(subject.type_id, end.type_id);
+      return match self.types().is_unknown(unified) {
+        true => TypeId::S64,
+        false => self.harden(unified),
+      };
+    }
+
+    // Anything that is not an array iterates through a `for_expansion`, which
+    // decides both names' types and is M7 — including the second one, which is
+    // an index only for the built-in kinds (**L§6.8**).
+    let Some((element, _)) = self.types().array_of(subject.type_id) else {
+      return TypeId::UNKNOWN;
+    };
+    if is_index {
+      return TypeId::S64;
+    }
+    if payload
+      .for_flags
+      .contains(oj_syntax::ast::ForFlags::POINTER)
+    {
+      return self.types_mut().pointer_to(element);
+    }
+    element
+  }
+
   /// The type of one `Code_Declaration`: its type slot when it has one, else
   /// the type of the value it was given (**L§4.1**).
   pub(crate) fn declaration_type(

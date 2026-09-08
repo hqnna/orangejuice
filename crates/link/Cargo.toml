@@ -5,3 +5,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
+[dependencies]
+oj-ir.workspace = true
+
+cc.workspace = true

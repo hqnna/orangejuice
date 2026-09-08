@@ -9,8 +9,12 @@ authors = ["hanna"]
 license = "MIT"
 
 [workspace.dependencies]
+oj-codegen = { path = "crates/codegen" }
 oj-diag = { path = "crates/diag" }
+oj-driver = { path = "crates/driver" }
+oj-ir = { path = "crates/ir" }
 oj-lexer = { path = "crates/lexer" }
+oj-link = { path = "crates/link" }
 oj-scope = { path = "crates/scope" }
 oj-sema = { path = "crates/sema" }
 oj-source = { path = "crates/source" }
@@ -19,6 +23,7 @@ oj-testsupport = { path = "crates/testsupport" }
 oj-types = { path = "crates/types" }
 
 bitflags = "2"
+cc = "1"
 clap = { version = "4", features = ["derive"] }
 indexmap = "2"
 insta = "1"

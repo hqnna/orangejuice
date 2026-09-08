@@ -21,8 +21,10 @@ mod literal;
 mod member;
 mod operators;
 mod overload;
+mod query;
 mod typeexpr;
 
 pub use checker::{Checker, DeclType, Expr};
 pub use constants::{Const, Value};
 pub use dump::{print_types, summary};
+pub use query::{CallPlan, PlannedArgument, ProcedureBody};

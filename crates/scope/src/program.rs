@@ -149,6 +149,9 @@ pub struct Program<'a> {
   /// a type declaration can widen the scope around it without waiting for
   /// types (**L§6.8**).
   aggregate_scopes: HashMap<(SourceId, NodeId), ScopeId>,
+  /// The scope a `for` loop declares its `it` and `it_index` in, by the loop
+  /// node: an implicit one has no identifier to be found through (**L§6.5**).
+  loop_scopes: HashMap<(SourceId, NodeId), ScopeId>,
   builtins: HashMap<DeclId, ConstValue>,
   references: Vec<Reference>,
   /// Names some macro declares with a backtick, which land in whatever block
@@ -216,6 +219,7 @@ impl<'a> Program<'a> {
       modules: HashMap::new(),
       loaded: HashSet::new(),
       aggregate_scopes: HashMap::new(),
+      loop_scopes: HashMap::new(),
       builtins: HashMap::new(),
       references: Vec::new(),
       macro_injected: HashSet::new(),
@@ -279,6 +283,13 @@ impl<'a> Program<'a> {
 
   /// Every recorded aggregate body, as `(source, node, members scope)`. The
   /// typechecker inverts this to find the definition a member scope belongs to.
+  /// The scope a `for` loop declared its `it` and `it_index` in (**L§6.5**). A
+  /// loop that did not name them has no identifier to find them through, so
+  /// this is the only way in.
+  pub fn loop_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
+    self.loop_scopes.get(&(source, node)).copied()
+  }
+
   pub fn aggregate_scopes(&self) -> impl Iterator<Item = (SourceId, NodeId, ScopeId)> + '_ {
     self
       .aggregate_scopes
@@ -1609,7 +1620,7 @@ impl Program<'_> {
       }
       NodeData::For(payload) => {
         let payload = payload.clone();
-        self.for_loop(parsed, &payload, scope, source);
+        self.for_loop(parsed, node, &payload, scope, source);
       }
       NodeData::TypeInstantiation(inst) => {
         let inst = inst.clone();
@@ -2061,6 +2072,7 @@ impl Program<'_> {
   fn for_loop(
     &mut self,
     parsed: &Parsed,
+    node: NodeId,
     payload: &oj_syntax::ast::ForNode,
     parent: ScopeId,
     source: SourceId,
@@ -2083,6 +2095,7 @@ impl Program<'_> {
     // `it` and `it_index` live in the loop's own scope and shadow outer ones
     // (**L§4.3**, **L§6.6**).
     let scope = self.tree.push_scope(ScopeKind::Imperative, Some(parent));
+    self.loop_scopes.insert((source, node), scope);
     let span = parsed.ast.node(payload.block).span;
     let implicit = [b"it".as_slice(), b"it_index".as_slice()];
     for (written, fallback) in [payload.ident_it, payload.ident_it_index]

@@ -5,3 +5,18 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
+[dependencies]
+oj-diag.workspace = true
+oj-lexer.workspace = true
+oj-scope.workspace = true
+oj-sema.workspace = true
+oj-syntax.workspace = true
+oj-types.workspace = true
+
+bitflags.workspace = true
+
+[dev-dependencies]
+oj-source.workspace = true
+oj-testsupport.workspace = true
+tempfile.workspace = true

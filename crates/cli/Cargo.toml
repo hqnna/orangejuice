@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 oj-diag.workspace = true
+oj-driver.workspace = true
 oj-lexer.workspace = true
 oj-scope.workspace = true
 oj-sema.workspace = true
