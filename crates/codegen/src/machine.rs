@@ -15,6 +15,8 @@ pub struct Options {
   pub optimization: u8,
   /// The name the module carries, which shows up in the listings.
   pub module_name: String,
+  /// Whether the module is an executable's or a compile-time run's.
+  pub purpose: crate::Purpose,
 }
 
 impl Default for Options {
@@ -25,6 +27,7 @@ impl Default for Options {
       features: String::new(),
       optimization: 0,
       module_name: String::from("oj"),
+      purpose: crate::Purpose::Executable,
     }
   }
 }

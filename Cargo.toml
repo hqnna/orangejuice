@@ -13,8 +13,10 @@ oj-codegen = { path = "crates/codegen" }
 oj-diag = { path = "crates/diag" }
 oj-driver = { path = "crates/driver" }
 oj-ir = { path = "crates/ir" }
+oj-jit = { path = "crates/jit" }
 oj-lexer = { path = "crates/lexer" }
 oj-link = { path = "crates/link" }
+oj-runtime = { path = "crates/runtime" }
 oj-scope = { path = "crates/scope" }
 oj-sema = { path = "crates/sema" }
 oj-source = { path = "crates/source" }
@@ -27,6 +29,7 @@ cc = "1"
 clap = { version = "4", features = ["derive"] }
 indexmap = "2"
 insta = "1"
+libloading = "0.8"
 memmap2 = "0.9"
 tempfile = "3"
 walkdir = "2"

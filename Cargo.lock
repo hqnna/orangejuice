@@ -355,6 +355,18 @@ dependencies = [
 [[package]]
 name = "oj-jit"
 version = "0.1.0"
+dependencies = [
+ "inkwell",
+ "llvm-sys",
+ "oj-codegen",
+ "oj-diag",
+ "oj-ir",
+ "oj-runtime",
+ "oj-scope",
+ "oj-sema",
+ "oj-syntax",
+ "oj-types",
+]
 
 [[package]]
 name = "oj-lexer"

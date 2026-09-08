@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use inkwell::builder::Builder;
-use inkwell::context::Context;
+use inkwell::context::ContextRef;
 use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicType, BasicTypeEnum, FunctionType};
 use inkwell::values::{
@@ -25,35 +25,41 @@ use oj_types::{FloatKind, TypeId, TypeKind, Types};
 
 /// The name the C runtime calls. orangejuice emits its own, which sets up a
 /// zeroed `#Context` and calls the program's `main`; the `Runtime_Support`
-/// entry point that would normally own this symbol needs compile-time
-/// execution to initialize temporary storage, which is milestone M6.
+/// entry point that would normally own this symbol sets temporary storage up
+/// through `initializer_of` and a `push_context` (`docs/spec.md` §10).
 const ENTRY_SYMBOL: &str = "main";
 
 pub struct Emitter<'ctx, 'p> {
-  context: &'ctx Context,
+  context: ContextRef<'ctx>,
   module: Module<'ctx>,
   builder: Builder<'ctx>,
   program: &'p Program,
+  /// What the module is for: an executable defines its globals and gets a
+  /// generated `main`; a compile-time module leaves both to the JIT
+  /// (`docs/spec.md` §6.5).
+  purpose: crate::Purpose,
   functions: Vec<FunctionValue<'ctx>>,
   globals: Vec<GlobalValue<'ctx>>,
   strings: HashMap<Box<[u8]>, GlobalValue<'ctx>>,
 }
 
 impl<'ctx, 'p> Emitter<'ctx, 'p> {
-  pub fn new(context: &'ctx Context, program: &'p Program, name: &str) -> Self {
+  pub fn new(module: Module<'ctx>, program: &'p Program, purpose: crate::Purpose) -> Self {
+    let context = module.get_context();
     Self {
-      context,
-      module: context.create_module(name),
       builder: context.create_builder(),
+      context,
+      module,
       program,
+      purpose,
       functions: Vec::new(),
       globals: Vec::new(),
       strings: HashMap::new(),
     }
   }
 
-  pub fn module(&self) -> &Module<'ctx> {
-    &self.module
+  pub fn into_module(self) -> Module<'ctx> {
+    self.module
   }
 
   fn types(&self) -> &'p Types {
@@ -69,7 +75,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       }
       self.emit_body(ProcId(index as u32), procedure)?;
     }
-    self.emit_entry_point()?;
+    if self.purpose == crate::Purpose::Executable {
+      self.emit_entry_point()?;
+    }
     self
       .module
       .verify()
@@ -130,6 +138,20 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   // ------------------------------------------------------ declarations ------
 
   fn declare_globals(&mut self) {
+    // At compile time a global is storage the compiler owns and the JIT binds
+    // by symbol, so the module only declares it (`docs/spec.md` §6.5).
+    if self.purpose == crate::Purpose::CompileTime {
+      for global in &self.program.globals {
+        let storage = self.context.i8_type().array_type(global.size.max(1) as u32);
+        let value = self
+          .module
+          .add_global(storage, Some(AddressSpace::default()), &global.symbol);
+        value.set_alignment(global.alignment as u32);
+        value.set_linkage(Linkage::External);
+        self.globals.push(value);
+      }
+      return;
+    }
     for global in &self.program.globals {
       let (llvm_type, initializer) = match &global.init {
         GlobalInit::Zero => {
@@ -168,12 +190,19 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   }
 
   fn declare_functions(&mut self) {
-    for procedure in &self.program.procedures {
+    for (index, procedure) in self.program.procedures.iter().enumerate() {
       let function_type = self.function_type(&procedure.abi);
       let function = self
         .module
         .add_function(&procedure.symbol, function_type, None);
-      if procedure.has_body() && !procedure.flags.contains(ProcedureFlags::EXPORT) {
+      // A compile-time module shares its JIT dylib with every other one, so
+      // only the procedure the run was built for may claim a public symbol;
+      // the rest are private copies (`docs/spec.md` §6.5).
+      let private = match self.purpose {
+        crate::Purpose::CompileTime => self.program.entry != Some(ProcId(index as u32)),
+        crate::Purpose::Executable => !procedure.flags.contains(ProcedureFlags::EXPORT),
+      };
+      if procedure.has_body() && private {
         function.set_linkage(Linkage::Internal);
       }
       self.functions.push(function);
