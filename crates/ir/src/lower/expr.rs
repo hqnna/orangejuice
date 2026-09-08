@@ -21,9 +21,12 @@ impl Lowering<'_, '_> {
     if let Some(constant) = info.constant.clone() {
       let target = want.unwrap_or_else(|| self.checker.hardened(info.type_id));
       // A constant that is being boxed into an `Any` becomes a value of its
-      // own type first, since that is the type the `Any` records (**L§3.8**).
-      let direct = match self.is_any(target) {
-        true => self.checker.hardened(info.type_id),
+      // own type first, since that is the type the `Any` records (**L§3.8**);
+      // so does one that is being given a count, since the bytes it becomes are
+      // the array's rather than the `{count, data}` pair (**L§3.3**).
+      let own = self.checker.hardened(info.type_id);
+      let direct = match self.is_any(target) || (self.is_view(target) && !self.is_view(own)) {
+        true => own,
         false => target,
       };
       if let Some(value) = self.constant_value(&constant, direct) {
@@ -100,6 +103,19 @@ impl Lowering<'_, '_> {
       return self.type_info_value(queried, target);
     }
     None
+  }
+
+  /// Whether a value of this type is the `{count, data}` pair a view is
+  /// (**L§3.3**).
+  fn is_view(&mut self, type_id: TypeId) -> bool {
+    let underlying = self.checker.types().underlying(type_id);
+    matches!(
+      self.checker.types().kind(underlying),
+      TypeKind::Array {
+        kind: oj_types::ArrayKind::View,
+        ..
+      } | TypeKind::String
+    )
   }
 
   fn is_any(&mut self, type_id: TypeId) -> bool {

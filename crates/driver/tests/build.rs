@@ -1858,3 +1858,17 @@ fn an_asm_block_gathers_through_a_vector_index() {
     "8\n",
   );
 }
+
+#[test]
+fn a_constant_array_carries_its_count_into_a_view() {
+  assert_output(
+    "COUNTS :: int.[1, 2, 3, 4];\n\
+     total :: (values: [] int) -> int {\n\
+       sum := 0;\n\
+       for values  sum += it;\n\
+       return sum;\n\
+     }\n\
+     main :: () { put_number(total(COUNTS)); }\n",
+    "10\n",
+  );
+}
