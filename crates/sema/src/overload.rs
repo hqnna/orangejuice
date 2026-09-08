@@ -16,6 +16,9 @@ pub(crate) struct CallArgument {
   /// `..xs` hands a whole array to a `..T` slot rather than one of its
   /// elements (**L§7.3**).
   pub spread: bool,
+  /// Where the argument was written, and the scope it was written in: a
+  /// `Code` parameter is bound to that rather than to a value (**L§13.1**).
+  pub written: Option<(SourceId, NodeId, oj_scope::ScopeId)>,
 }
 
 impl CallArgument {
@@ -24,6 +27,7 @@ impl CallArgument {
       name: None,
       value,
       spread: false,
+      written: None,
     }
   }
 }
@@ -394,6 +398,11 @@ impl Checker<'_> {
         name: argument.name.and_then(|node| self.ident_name(source, node)),
         value: self.expression_type(scope, source, argument.expression),
         spread: self.is_spread(source, argument.expression),
+        written: Some((
+          source,
+          argument.expression,
+          self.scope_at(source, argument.expression, scope),
+        )),
       })
       .collect()
   }

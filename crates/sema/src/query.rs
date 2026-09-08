@@ -227,6 +227,12 @@ impl Checker<'_> {
     self.decl_key(decl).0
   }
 
+  /// Whether the active instantiation gave a declaration a constant value, so
+  /// that a back end knows it needs no storage (**L§7.8**).
+  pub fn instance_binds(&self, decl: DeclId) -> bool {
+    self.bound_constant(decl).is_some()
+  }
+
   /// How many instantiations the program produced (**L§7.8**). Two call sites
   /// that solve the same constants share one.
   pub fn instance_count(&self) -> usize {

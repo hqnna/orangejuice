@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use oj_diag::{Diagnostic, SourceId, Span};
 use oj_lexer::Symbol;
 use oj_scope::{AstSource, DeclId, DeclKind, ScopeId};
-use oj_sema::{CallPlan, Checker, Const, Expr, InstanceId, ProcedureBody, Value};
+use oj_sema::{CallPlan, Checker, Const, Expr, InstanceId, LoopExpansion, ProcedureBody, Value};
 use oj_syntax::ast::{
   self, DeclarationFlags, ForFlags, IfFlags, LiteralValue, LoopControlType, NodeData, NodeId,
   OperatorType,
@@ -639,7 +639,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       Value::Null => Some(Constant::Null),
       Value::String(text) => Some(Constant::String(text.clone())),
       Value::Bytes(bytes) => Some(Constant::Bytes(bytes.clone())),
-      Value::Type(_) | Value::EnumName(_) => None,
+      // A `Code` value is a piece of the program, not data (**L§13.1**).
+      Value::Type(_) | Value::EnumName(_) | Value::Code { .. } => None,
     }
   }
 

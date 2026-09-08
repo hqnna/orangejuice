@@ -1240,3 +1240,60 @@ fn a_polymorphic_struct_lays_its_members_out_per_instantiation() {
     "42\n16\n",
   );
 }
+
+#[test]
+fn a_for_expansion_iterates_a_container_of_its_own() {
+  assert_output(
+    "Holder :: struct (count: s64, T: Type) {\n\
+       occupied: [count] bool;\n\
+       values:   [count] T;\n\
+     }\n\
+     for_expansion :: (holder: Holder, body: Code, flags: For_Flags) #expand {\n\
+       for ok, slot: holder.occupied {\n\
+         if !ok continue;\n\
+         `it_index := slot;\n\
+         `it := holder.values[slot];\n\
+         #insert body;\n\
+       }\n\
+     }\n\
+     main :: () {\n\
+       h: Holder(8, int);\n\
+       h.occupied[2] = true;  h.values[2] = 42;\n\
+       h.occupied[5] = true;  h.values[5] = 7;\n\
+       for h { put_number(it); put_number(it_index); }\n\
+       for v, n: h  put_number(v * 100 + n);\n\
+     }\n",
+    "42\n2\n7\n5\n4202\n705\n",
+  );
+}
+
+#[test]
+fn a_named_for_expansion_is_chosen_over_the_default() {
+  assert_output(
+    "Bag :: struct { values: [4] int; }\n\
+     for_expansion :: (bag: *Bag, body: Code, flags: For_Flags) #expand {\n\
+       for v, i: bag.values {\n\
+         `it := v;\n\
+         `it_index := i;\n\
+         #insert body;\n\
+       }\n\
+     }\n\
+     positive :: (bag: *Bag, body: Code, flags: For_Flags) #expand {\n\
+       for v, i: bag.values {\n\
+         if v <= 0  continue;\n\
+         `it := v;\n\
+         `it_index := i;\n\
+         #insert body;\n\
+       }\n\
+     }\n\
+     main :: () {\n\
+       b: Bag;\n\
+       b.values[1] = -3;\n\
+       b.values[2] = 9;\n\
+       for b  put_number(it);\n\
+       put(\"--\\n\");\n\
+       for :positive b  put_number(it);\n\
+     }\n",
+    "0\n-3\n9\n0\n--\n9\n",
+  );
+}

@@ -45,6 +45,7 @@ pub(crate) enum ConstKey {
   Null,
   Type(TypeId),
   Name(Symbol),
+  Code(SourceId, NodeId),
 }
 
 pub(crate) fn const_key(value: &Const) -> ConstKey {
@@ -56,6 +57,7 @@ pub(crate) fn const_key(value: &Const) -> ConstKey {
     Value::Null => ConstKey::Null,
     Value::Type(id) => ConstKey::Type(*id),
     Value::EnumName(name) => ConstKey::Name(*name),
+    Value::Code { source, node, .. } => ConstKey::Code(*source, *node),
   }
 }
 
@@ -73,6 +75,10 @@ pub(crate) struct Instance {
   pub outer_scope: ScopeId,
   /// The constants this specialization binds, by the declaration each names.
   pub bindings: Vec<(DeclId, Const)>,
+  /// The type a parameter has in this specialization when the header could not
+  /// say it: `(holder: Holder)` over a polymorphic struct means whichever
+  /// instantiation the call passed (**L§7.8**).
+  pub overrides: Vec<(DeclId, TypeId)>,
   /// The procedure type the bindings produce: the header with every `$T`
   /// replaced.
   pub type_id: TypeId,
@@ -105,6 +111,7 @@ impl Instance {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Solution {
   pub bindings: Vec<(DeclId, Const)>,
+  pub overrides: Vec<(DeclId, TypeId)>,
 }
 
 impl Checker<'_> {
@@ -116,6 +123,20 @@ impl Checker<'_> {
       let instance = self.instance(id);
       if let Some(expansion) = instance.expansion {
         return Some(expansion.caller_scope);
+      }
+      current = instance.parent;
+    }
+    None
+  }
+
+  /// The type the active instantiation gave a parameter the header could not
+  /// name on its own (**L§7.8**).
+  pub(crate) fn bound_parameter_type(&self, id: DeclId) -> Option<TypeId> {
+    let mut current = self.current_instance;
+    while let Some(instance) = current {
+      let instance = self.instance(instance);
+      if let Some((_, type_id)) = instance.overrides.iter().find(|(bound, _)| *bound == id) {
+        return Some(*type_id);
       }
       current = instance.parent;
     }
@@ -261,6 +282,7 @@ impl Checker<'_> {
           root: arguments_scope,
           outer_scope,
           bindings,
+          overrides: Vec::new(),
           type_id: TypeId::UNKNOWN,
           parent: self.current_instance,
           expansion: None,
@@ -433,6 +455,7 @@ impl Checker<'_> {
       root: scopes.constants,
       outer_scope,
       bindings: solution.bindings,
+      overrides: solution.overrides,
       type_id: TypeId::UNKNOWN,
       parent: self.current_instance,
       expansion,
@@ -503,7 +526,13 @@ impl Checker<'_> {
           .map_or(parameter.type_id, |(element, _)| element),
         false => parameter.type_id,
       };
-      if !self.unify_polymorph(target, &argument.value, &mut substitution) {
+      // A parameter written as a bare polymorphic struct takes whichever
+      // instantiation the call passed (**L§7.8**).
+      if let Some(concrete) = self.instantiation_passed(target, argument.value.type_id)
+        && let Some(decl) = self.header_parameter_decl(source, signature, index)
+      {
+        solution.overrides.push((decl, concrete));
+      } else if !self.unify_polymorph(target, &argument.value, &mut substitution) {
         return None;
       }
       // A `$x` parameter is a constant of the instantiation, so the argument
@@ -511,6 +540,33 @@ impl Checker<'_> {
       if let Some(decl) = self.baked_parameter_decl(source, signature, index) {
         let value = argument.value.constant.clone()?;
         solution.bindings.push((decl, value));
+        continue;
+      }
+      // A macro's `Code` parameter is the argument itself, unevaluated
+      // (**L§13.1**); anything else it was handed a constant for is a constant
+      // of the expansion, which is what lets `#assert` and `#if` read it.
+      if signature.is_macro
+        && let Some(decl) = self.header_parameter_decl(source, signature, index)
+      {
+        if parameter.type_id == TypeId::CODE
+          && let Some((written_source, node, written_scope)) = argument.written
+        {
+          solution.bindings.push((
+            decl,
+            Const::new(
+              TypeId::CODE,
+              Value::Code {
+                source: written_source,
+                node,
+                scope: written_scope,
+              },
+            ),
+          ));
+          continue;
+        }
+        if let Some(value) = argument.value.constant.clone() {
+          solution.bindings.push((decl, value));
+        }
       }
     }
 
@@ -564,6 +620,52 @@ impl Checker<'_> {
     {
       return None;
     }
+    self.decl_at(source, parameter)
+  }
+
+  /// Whether `actual` is an instantiation of the polymorphic struct `pattern`
+  /// names, in which case the parameter is of *that* type (**L§7.8**). A
+  /// pointer to one counts, at the same level of indirection.
+  fn instantiation_passed(&self, pattern: TypeId, actual: TypeId) -> Option<TypeId> {
+    let (family, concrete, pointer) = match self.types().pointee(pattern) {
+      Some(family) => (family, self.types().pointee(actual)?, true),
+      None => (pattern, actual, false),
+    };
+    let family = self.types().struct_of(self.types().underlying(family))?;
+    if !self
+      .types()
+      .struct_info(family)
+      .nontextual_flags
+      .contains(oj_types::StructNontextualFlags::POLYMORPHIC)
+    {
+      return None;
+    }
+    let baked = self.types().struct_of(self.types().underlying(concrete))?;
+    if self.types().struct_info(baked).polymorph_source != Some(family) {
+      return None;
+    }
+    Some(match pointer {
+      true => actual,
+      false => concrete,
+    })
+  }
+
+  /// The declaration one parameter of a header introduced.
+  fn header_parameter_decl(
+    &mut self,
+    source: SourceId,
+    signature: &crate::overload::Signature,
+    index: usize,
+  ) -> Option<DeclId> {
+    let (_, header) = signature.header?;
+    let NodeData::ProcedureHeader(payload) = self.ast(source)?.data(header) else {
+      return None;
+    };
+    let parameter = *payload.arguments.get(index)?;
+    let parameter = match self.ast(source)?.data(parameter) {
+      NodeData::Using(using) => using.expression,
+      _ => parameter,
+    };
     self.decl_at(source, parameter)
   }
 

@@ -19,6 +19,13 @@ pub enum Value {
   Type(TypeId),
   /// A `.NAME` whose enum the context has not supplied yet (**L§5.12**).
   EnumName(Symbol),
+  /// A piece of the program, as `Code` (**L§13.1**): the node it was written
+  /// at, and the scope its names resolve in.
+  Code {
+    source: oj_diag::SourceId,
+    node: oj_syntax::ast::NodeId,
+    scope: oj_scope::ScopeId,
+  },
 }
 
 impl Value {
@@ -30,7 +37,7 @@ impl Value {
       Self::Float(value) => Some(*value != 0.0),
       Self::Null => Some(false),
       Self::String(text) => Some(!text.is_empty()),
-      Self::Type(_) | Self::EnumName(_) | Self::Bytes(_) => None,
+      Self::Type(_) | Self::EnumName(_) | Self::Bytes(_) | Self::Code { .. } => None,
     }
   }
 

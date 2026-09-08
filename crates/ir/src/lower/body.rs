@@ -337,8 +337,29 @@ impl Lowering<'_, '_> {
       // An `#insert` adds declarations to a scope the front end already built,
       // which is the mutable program a metaprogram works on (`docs/spec.md`
       // §10).
-      NodeData::DirectiveInsert(_) => {
-        self.unsupported(source, node, "'#insert'", "M8");
+      // `#insert code;` splices the piece of program a `Code` value names, in
+      // the scope it was written in (**L§13.2**).
+      NodeData::DirectiveInsert(insert) => {
+        let expression = insert.expression;
+        let scope = self.checker.scope_for(source, expression, self.body_scope);
+        match self.checker.expression(scope, source, expression).constant {
+          Some(Const {
+            value:
+              Value::Code {
+                source: code_source,
+                node: code,
+                scope: code_scope,
+              },
+            ..
+          }) => {
+            let previous_source = std::mem::replace(&mut self.body_source, code_source);
+            let previous_scope = std::mem::replace(&mut self.body_scope, code_scope);
+            self.statement(code);
+            self.body_source = previous_source;
+            self.body_scope = previous_scope;
+          }
+          _ => self.unsupported(source, node, "'#insert'", "M8"),
+        }
       }
       // An `#asm` block is assembled by the back end, which is the milestone
       // that owns x86-64 (**L§15**).
@@ -398,11 +419,18 @@ impl Lowering<'_, '_> {
       let symbol = self.checker.program().tree().decl(decl).name;
       self.text(symbol)
     };
-    let local = self.new_local(name, type_id);
-    {
-      let key = self.local_key(decl);
-      self.local_of_decl.insert(key, local);
-    }
+    // A `` `it := … `` inside a `for_expansion` writes the loop's own `it`,
+    // which the expansion set aside before the body was spliced in
+    // (**L§7.14**).
+    let key = self.local_key(decl);
+    let local = match self.local_of_decl.get(&key).copied() {
+      Some(existing) => existing,
+      None => {
+        let local = self.new_local(name, type_id);
+        self.local_of_decl.insert(key, local);
+        local
+      }
+    };
     let address = self.local_address(local);
 
     if declaration
@@ -790,14 +818,18 @@ impl Lowering<'_, '_> {
     self.store(address, result);
   }
 
-  /// `for` over a range or over an array (**L§6.5**). A `for_expansion` and a
-  /// reverse range are M7 and an error respectively.
+  /// `for` over a range, over an array, or through the `for_expansion` the
+  /// container's type declares (**L§6.6**, **L§7.14**).
   fn for_statement(&mut self, node: NodeId, payload: &ast::ForNode) {
     let source = self.body_source;
-    if payload.want_replacement_for_expansion.is_some()
-      || payload.want_pointer_expression.is_some()
-      || payload.want_reverse_expression.is_some()
-    {
+    let scope = self
+      .checker
+      .scope_for(source, payload.iteration_expression, self.body_scope);
+    if let Some(expansion) = self.checker.loop_expansion(scope, source, node) {
+      self.expand_for(node, payload, expansion);
+      return;
+    }
+    if payload.want_pointer_expression.is_some() || payload.want_reverse_expression.is_some() {
       self.unsupported(source, node, "a 'for' with computed modifiers", "M7");
       return;
     }
@@ -817,6 +849,125 @@ impl Lowering<'_, '_> {
       Some(right) => self.range_loop(node, payload, right, reverse, index_local, it_decl),
       None => self.array_loop(node, payload, reverse, by_pointer, index_local, it_decl),
     }
+  }
+
+  /// A `for` over a container: the `for_expansion` its type declares is
+  /// spliced in with the loop's body as its `Code` argument, and the `` `it ``
+  /// it exports *is* the loop's own (**L§7.14**).
+  fn expand_for(&mut self, node: NodeId, payload: &ast::ForNode, expansion: LoopExpansion) {
+    let source = self.body_source;
+    let instance = expansion.instance;
+    let previous_instance = self.checker.enter_instance(Some(instance));
+    let expanded = self.expand_for_body(node, payload, expansion);
+    self.checker.enter_instance(previous_instance);
+    if expanded.is_none() {
+      self.unsupported(source, node, "this 'for_expansion'", "M7");
+    }
+  }
+
+  fn expand_for_body(
+    &mut self,
+    node: NodeId,
+    payload: &ast::ForNode,
+    expansion: LoopExpansion,
+  ) -> Option<()> {
+    let source = self.body_source;
+    let instance = expansion.instance;
+    let body = self.checker.instance_body(instance)?;
+    let block = body.block?;
+    let signature = self
+      .checker
+      .types()
+      .procedure_of(self.checker.instance_info(instance).type_id)
+      .cloned()?;
+
+    // The loop's `it` and `it_index` are the macro's exports, so both names
+    // stand for one local.
+    let (loop_it, loop_index) = self.checker.loop_iterators(source, node);
+    for (exported, written, is_index) in [
+      (expansion.it, loop_it, false),
+      (expansion.it_index, loop_index, true),
+    ] {
+      let Some(exported) = exported else { continue };
+      let type_id = self.checker.expansion_iterator_type(expansion, is_index);
+      if self.mentions_unknown(type_id) {
+        return None;
+      }
+      let name = String::from(if is_index { "it_index" } else { "it" });
+      let local = self.new_local(name, type_id);
+      let key = self.local_key(exported);
+      self.local_of_decl.insert(key, local);
+      if let Some(written) = written {
+        let previous = self.checker.enter_instance(None);
+        let key = self.local_key(written);
+        self.checker.enter_instance(previous);
+        self.local_of_decl.insert(key, local);
+      }
+    }
+
+    // The container is the only argument the expansion did not fold into a
+    // constant.
+    let mut container = Some(payload.iteration_expression);
+    for (index, type_id) in signature.arguments.iter().copied().enumerate() {
+      let Some(decl) = body.parameters.get(index).copied().flatten() else {
+        continue;
+      };
+      if self.checker.instance_binds(decl) {
+        continue;
+      }
+      let Some(written) = container.take() else {
+        continue;
+      };
+      let scope = self.checker.scope_for(source, written, self.body_scope);
+      // A `for_expansion` that asked for `*T` gets the container's address
+      // (**L§7.14**).
+      let value = match self.checker.types().pointee(type_id) {
+        Some(pointee) if !self.iterates_a_pointer(scope, source, written) => {
+          let place = self.place(scope, source, written)?;
+          Val {
+            id: place.id,
+            type_id: self.pointer_to(pointee),
+            indirect: false,
+          }
+        }
+        _ => self.expression(scope, source, written, Some(type_id))?,
+      };
+      let name = {
+        let symbol = self.checker.program().tree().decl(decl).name;
+        self.text(symbol)
+      };
+      let local = self.new_local(name, type_id);
+      let address = self.local_address(local);
+      self.store(address, value);
+      let key = self.local_key(decl);
+      self.local_of_decl.insert(key, local);
+    }
+
+    let exit = self.new_block();
+    let previous_source = std::mem::replace(&mut self.body_source, body.source);
+    let previous_scope = std::mem::replace(&mut self.body_scope, body.scope);
+    self.expansions.push(crate::lower::Expansion {
+      exit,
+      results: Vec::new(),
+      defers: self.defers.len(),
+    });
+    self.defers.push(Vec::new());
+    self.statement(block);
+    let scope = self.defers.pop().unwrap_or_default();
+    if !self.terminated() {
+      self.run_defers(&scope);
+      self.terminate(Terminator::Jump(exit));
+    }
+    self.expansions.pop();
+    self.body_source = previous_source;
+    self.body_scope = previous_scope;
+    self.current = exit;
+    Some(())
+  }
+
+  fn iterates_a_pointer(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> bool {
+    let subject = self.checker.expression(scope, source, node).type_id;
+    self.checker.types().is_pointer(subject)
   }
 
   fn range_loop(

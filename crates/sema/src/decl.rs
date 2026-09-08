@@ -39,10 +39,19 @@ impl Checker<'_> {
     }
 
     // Anything that is not an array iterates through a `for_expansion`, which
-    // decides both names' types and is M7 — including the second one, which is
-    // an index only for the built-in kinds (**L§6.8**).
+    // decides both names' types — including the second one, which is an index
+    // only for the built-in kinds (**L§7.14**).
     let Some((element, _)) = self.types().array_of(subject.type_id) else {
-      return TypeId::UNKNOWN;
+      if self.types().underlying(subject.type_id) == TypeId::STRING {
+        return match is_index {
+          true => TypeId::S64,
+          false => TypeId::U8,
+        };
+      }
+      return match self.loop_expansion(scope, source, loop_node) {
+        Some(expansion) => self.expansion_iterator_type(expansion, is_index),
+        None => TypeId::UNKNOWN,
+      };
     };
     if is_index {
       return TypeId::S64;
@@ -255,6 +264,19 @@ impl Checker<'_> {
     parameter: NodeId,
     outer: ScopeId,
   ) -> (TypeId, bool) {
+    // A parameter the instantiation gave a type of its own is that type,
+    // whatever the header wrote (**L§7.8**).
+    if let Some(decl) = self.decl_at(source, parameter)
+      && let Some(overridden) = self.bound_parameter_type(decl)
+    {
+      let varargs = match self.ast(source).map(|ast| ast.data(parameter)) {
+        Some(NodeData::Declaration(declaration)) => declaration
+          .type_inst
+          .is_some_and(|inst| self.is_varargs(source, inst)),
+        _ => false,
+      };
+      return (overridden, varargs);
+    }
     let Some(ast) = self.ast(source) else {
       return (TypeId::UNKNOWN, false);
     };

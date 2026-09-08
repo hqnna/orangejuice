@@ -293,6 +293,8 @@ pub struct Checker<'a> {
   /// (**L§7.13**). Overload resolution reaches down through operators too, so
   /// this is a single piece of state rather than a parameter of every step.
   pub(crate) call_site: Option<Expansion>,
+  /// The `for_expansion` each `for` over a container reached (**L§7.14**).
+  pub(crate) loop_expansions: crate::loops::LoopExpansions,
 }
 
 /// Deep enough for the module tree's nested types, shallow enough that a
@@ -391,6 +393,7 @@ impl<'a> Checker<'a> {
       pending_instances: Vec::new(),
       checked_instances: HashSet::new(),
       call_site: None,
+      loop_expansions: HashMap::new(),
     }
   }
 
@@ -883,6 +886,11 @@ impl<'a> Checker<'a> {
         Some(denoted) => DeclType::type_name(denoted),
         None => DeclType::value(value.type_id),
       };
+    }
+    // A parameter written as a bare polymorphic struct is whichever
+    // instantiation the call passed (**L§7.8**).
+    if let Some(overridden) = self.bound_parameter_type(id) {
+      return DeclType::value(overridden);
     }
     let key = self.decl_key(id);
     match self.states.get(&key) {
