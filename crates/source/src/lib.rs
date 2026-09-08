@@ -1,3 +1,5 @@
+mod modules;
+
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -5,6 +7,11 @@ use std::sync::Arc;
 
 use memmap2::Mmap;
 use oj_diag::{SourceId, SourceMap};
+
+pub use modules::{
+  ImportPath, ModuleError, ModuleKind, ResolvedModule, is_valid_module_name,
+  resolve_directory_module, resolve_file_module, resolve_load, resolve_module,
+};
 
 /// Reads `path` into `map` and returns its id. Files are memory-mapped, which
 /// is what makes lexing a whole module tree cheap; an empty file cannot be
