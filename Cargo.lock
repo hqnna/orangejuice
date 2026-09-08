@@ -229,6 +229,7 @@ dependencies = [
  "oj-diag",
  "oj-lexer",
  "oj-source",
+ "oj-syntax",
  "tempfile",
 ]
 
@@ -297,6 +298,15 @@ dependencies = [
 [[package]]
 name = "oj-syntax"
 version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "insta",
+ "oj-diag",
+ "oj-lexer",
+ "oj-source",
+ "oj-testsupport",
+ "walkdir",
+]
 
 [[package]]
 name = "oj-testsupport"

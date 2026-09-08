@@ -12,6 +12,7 @@ license = "MIT"
 oj-diag = { path = "crates/diag" }
 oj-lexer = { path = "crates/lexer" }
 oj-source = { path = "crates/source" }
+oj-syntax = { path = "crates/syntax" }
 oj-testsupport = { path = "crates/testsupport" }
 
 bitflags = "2"
