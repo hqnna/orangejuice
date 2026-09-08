@@ -235,7 +235,7 @@ pub struct Checker<'a> {
   context: Option<TypeId>,
   /// The definition a struct or enum node produced, so that a type written
   /// twice in the same place is built once.
-  aggregate_types: HashMap<(SourceId, NodeId), TypeId>,
+  aggregate_types: HashMap<(Option<InstanceId>, SourceId, NodeId), TypeId>,
   /// The default value of each struct member that was declared with one, by
   /// member index (**L§8.1**).
   member_defaults: HashMap<StructId, Vec<(usize, SourceId, NodeId)>>,
@@ -590,12 +590,44 @@ impl<'a> Checker<'a> {
     self.enum_scopes.insert(id, scope);
   }
 
+  /// The type a `struct`, `enum` or `#type` node built, ignoring any
+  /// instantiation. Only the `$T` of a header is looked up this way: a
+  /// polymorph variable belongs to the site that wrote it, not to a
+  /// specialization (**L§7.8**).
   pub(crate) fn aggregate_type(&self, source: SourceId, node: NodeId) -> Option<TypeId> {
-    self.aggregate_types.get(&(source, node)).copied()
+    self.aggregate_types.get(&(None, source, node)).copied()
   }
 
   pub(crate) fn record_aggregate_type(&mut self, source: SourceId, node: NodeId, type_id: TypeId) {
-    self.aggregate_types.insert((source, node), type_id);
+    self.aggregate_types.insert((None, source, node), type_id);
+  }
+
+  /// The same, for a definition written where an instantiation can change what
+  /// it means: `Data :: struct { p: *T; }` inside a polymorphic body is one
+  /// type per specialization (**L§7.8**, **L§3.13**).
+  pub(crate) fn aggregate_type_in(
+    &self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<TypeId> {
+    self
+      .aggregate_types
+      .get(&(self.instance_of_scope(scope), source, node))
+      .copied()
+  }
+
+  pub(crate) fn record_aggregate_type_in(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    type_id: TypeId,
+  ) {
+    let instance = self.instance_of_scope(scope);
+    self
+      .aggregate_types
+      .insert((instance, source, node), type_id);
   }
 
   pub(crate) fn types_mut(&mut self) -> &mut Types {

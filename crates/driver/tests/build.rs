@@ -864,3 +864,36 @@ fn a_baked_type_parameter_declares_the_bodys_locals() {
     "0\n0\n",
   );
 }
+
+#[test]
+fn extra_arguments_are_gathered_into_the_varargs_slot() {
+  assert_output(
+    "total :: (values: .. int) -> int {\n\
+       s := 0;\n\
+       for values  s += it;\n\
+       return s;\n\
+     }\n\
+     forward :: (values: .. int) -> int { return total(..values); }\n\
+     main :: () {\n\
+       put_number(total());\n\
+       put_number(total(1, 2, 3, 4));\n\
+       put_number(forward(10, 20));\n\
+     }\n",
+    "0\n10\n30\n",
+  );
+}
+
+#[test]
+fn an_any_vararg_carries_each_arguments_own_type() {
+  assert_output(
+    "integers :: (args: .. Any) -> int {\n\
+       n := 0;\n\
+       for args  if it.type.type == .INTEGER  n += 1;\n\
+       return n;\n\
+     }\n\
+     main :: () {\n\
+       put_number(integers(1, \"two\", 3, 4.5));\n\
+     }\n",
+    "2\n",
+  );
+}

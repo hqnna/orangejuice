@@ -45,9 +45,12 @@ pub struct CallPlan {
   pub type_id: TypeId,
   pub returns: Vec<TypeId>,
   pub arguments: Vec<PlannedArgument>,
-  /// The arguments that landed in a `..T` parameter, which the call site
-  /// gathers into a `[] T` (**L§7.9**).
+  /// The `[] T` a `..T` parameter is, and the arguments that landed in it,
+  /// which the call site gathers into one (**L§7.3**). An argument written
+  /// `..xs` is the whole `[] T` on its own, and is the only one there.
   pub varargs: Option<(TypeId, Vec<PlannedArgument>)>,
+  /// Whether the varargs slot was filled by a single `..xs`.
+  pub varargs_spread: bool,
 }
 
 /// One instantiation, as a back end sees it (**L§7.8**).
@@ -385,7 +388,9 @@ impl Checker<'_> {
         Some(parameter) => (parameter, true),
         None => (signature.parameters.get(vararg_slot?)?, true),
       };
-      let target = match spreads {
+      // `..xs` fills the whole slot; anything else fills one element of it.
+      let spread = self.is_spread(source, argument.expression);
+      let target = match spreads && !spread {
         true => self
           .types()
           .array_of(slot.type_id)
@@ -424,6 +429,10 @@ impl Checker<'_> {
       }
     }
 
+    let varargs_spread = extra.len() == 1
+      && extra
+        .first()
+        .is_some_and(|argument| self.is_spread(argument.source, argument.node));
     let varargs = vararg_slot.map(|slot| {
       let element = signature.parameters[slot].type_id;
       (element, extra)
@@ -436,6 +445,7 @@ impl Checker<'_> {
       returns: signature.returns,
       arguments: planned,
       varargs,
+      varargs_spread,
     })
   }
 }

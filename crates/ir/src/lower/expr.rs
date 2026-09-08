@@ -1217,10 +1217,6 @@ impl Lowering<'_, '_> {
       );
       return None;
     };
-    if plan.varargs.is_some_and(|(_, extra)| !extra.is_empty()) {
-      self.unsupported(source, node, "a call with variable arguments", "M7");
-      return None;
-    }
     // A macro is expanded into its caller rather than called (**L§7.13**);
     // until it is, the call site has nothing to lower.
     if let Some(decl) = plan.callee
@@ -1285,14 +1281,26 @@ impl Lowering<'_, '_> {
           arguments.push(context);
         }
         ParameterKind::Value | ParameterKind::Pointer => {
-          let argument = plan.arguments.get(given)?;
-          given += 1;
-          let value = self.expression(
-            argument.scope,
-            argument.source,
-            argument.node,
-            Some(parameter.type_id),
-          )?;
+          // The last declared parameter of a varargs procedure is a `[] T`
+          // the call site builds out of whatever was written past the fixed
+          // ones (**L§7.3**).
+          let value = match &plan.varargs {
+            Some((view, extra)) if given == plan.arguments.len() => {
+              given += 1;
+              let extra = extra.clone();
+              self.gather_varargs(*view, &extra, plan.varargs_spread)?
+            }
+            _ => {
+              let argument = *plan.arguments.get(given)?;
+              given += 1;
+              self.expression(
+                argument.scope,
+                argument.source,
+                argument.node,
+                Some(parameter.type_id),
+              )?
+            }
+          };
           match parameter.kind {
             ParameterKind::Value => arguments.push(self.scalar(value)),
             _ => arguments.push(self.address_of(value)),
@@ -1319,6 +1327,52 @@ impl Lowering<'_, '_> {
     }
     results.extend(return_places);
     Some(results)
+  }
+
+  /// Builds the `[] T` a `..T` parameter receives: the extra arguments are
+  /// stored into a fixed array of the call's own and handed over as a view
+  /// (**L§7.3**). `..xs` skips that and passes the array it names.
+  fn gather_varargs(
+    &mut self,
+    view: TypeId,
+    extra: &[oj_sema::PlannedArgument],
+    spread: bool,
+  ) -> Option<Val> {
+    if spread {
+      let argument = extra.first()?;
+      let value = self.expression(argument.scope, argument.source, argument.node, Some(view))?;
+      return self.convert(argument.source, argument.node, value, view);
+    }
+    let element = self
+      .checker
+      .types()
+      .array_of(view)
+      .map(|(element, _)| element)?;
+    let count = extra.len() as u64;
+    let storage = self
+      .checker
+      .types_table_mut()
+      .array(element, ArrayKind::Fixed(count));
+    let local = self.new_local(String::from("varargs"), storage);
+    let base = self.local_address(local);
+    let (stride, _) = self.size_align(element);
+    for (index, argument) in extra.iter().enumerate() {
+      let value = self.expression(
+        argument.scope,
+        argument.source,
+        argument.node,
+        Some(element),
+      )?;
+      let value = self.convert(argument.source, argument.node, value, element)?;
+      let slot = self.offset(base, index as u64 * stride, element);
+      self.store(slot, value);
+    }
+    let storage = Val {
+      id: base,
+      type_id: storage,
+      indirect: true,
+    };
+    Some(self.make_view(view, storage, count))
   }
 
   // ------------------------------------------------------- conversions ------

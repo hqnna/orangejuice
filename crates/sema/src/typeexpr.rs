@@ -85,7 +85,7 @@ impl Checker<'_> {
       if base == TypeId::UNKNOWN {
         return TypeId::UNKNOWN;
       }
-      if let Some(existing) = self.aggregate_type(source, node) {
+      if let Some(existing) = self.aggregate_type_in(scope, source, node) {
         return existing;
       }
       let (_, type_id) = self.types_mut().new_variant(VariantInfo {
@@ -93,7 +93,7 @@ impl Checker<'_> {
         base,
         flags,
       });
-      self.record_aggregate_type(source, node, type_id);
+      self.record_aggregate_type_in(scope, source, node, type_id);
       return type_id;
     }
 

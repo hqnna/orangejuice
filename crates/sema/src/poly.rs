@@ -17,6 +17,7 @@ use oj_types::{ArrayKind, PolymorphId, TypeId, TypeKind};
 
 use crate::checker::{Checker, Expr};
 use crate::constants::{Const, Value};
+use crate::overload::CallArgument;
 
 /// One instantiation of a polymorphic procedure (**L§7.8**).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -120,7 +121,7 @@ impl Checker<'_> {
   pub(crate) fn specialize(
     &mut self,
     signature: &crate::overload::Signature,
-    arguments: &[(Option<Symbol>, Expr)],
+    arguments: &[CallArgument],
   ) -> Option<crate::overload::Signature> {
     let instance = self.instantiate(signature, arguments)?;
     let (source, header) = signature.header?;
@@ -194,7 +195,7 @@ impl Checker<'_> {
   pub(crate) fn instantiate(
     &mut self,
     signature: &crate::overload::Signature,
-    arguments: &[(Option<Symbol>, Expr)],
+    arguments: &[CallArgument],
   ) -> Option<InstanceId> {
     let (source, header) = signature.header?;
     let scopes = self.program().procedure_scopes(source, header)?;
@@ -255,7 +256,7 @@ impl Checker<'_> {
   fn solve(
     &mut self,
     signature: &crate::overload::Signature,
-    arguments: &[(Option<Symbol>, Expr)],
+    arguments: &[CallArgument],
     source: SourceId,
     header: NodeId,
     scopes: ProcedureScopes,
@@ -266,12 +267,12 @@ impl Checker<'_> {
     let count = signature.parameters.len();
     let vararg_slot = signature.varargs.then(|| count.saturating_sub(1));
     let mut next = 0usize;
-    for (name, value) in arguments {
-      let index = match name {
+    for argument in arguments {
+      let index = match argument.name {
         Some(name) => signature
           .parameters
           .iter()
-          .position(|parameter| parameter.name == Some(*name))?,
+          .position(|parameter| parameter.name == Some(name))?,
         None => {
           let index = next;
           next += 1;
@@ -284,21 +285,22 @@ impl Checker<'_> {
       };
       let parameter = signature.parameters.get(index)?;
       // An argument in the varargs slot matches the `[] T`'s element
-      // (**L§7.8**): `values: ..$T` takes `T` from the first one.
-      let target = match vararg_slot == Some(index) {
+      // (**L§7.8**): `values: ..$T` takes `T` from the first one. `..xs`
+      // hands over the whole array instead.
+      let target = match vararg_slot == Some(index) && !argument.spread {
         true => self
           .types()
           .array_of(parameter.type_id)
           .map_or(parameter.type_id, |(element, _)| element),
         false => parameter.type_id,
       };
-      if !self.unify_polymorph(target, value, &mut substitution) {
+      if !self.unify_polymorph(target, &argument.value, &mut substitution) {
         return None;
       }
       // A `$x` parameter is a constant of the instantiation, so the argument
       // has to be one (**L§7.8**).
       if let Some(decl) = self.baked_parameter_decl(source, signature, index) {
-        let value = value.constant.clone()?;
+        let value = argument.value.constant.clone()?;
         solution.bindings.push((decl, value));
       }
     }

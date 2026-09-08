@@ -1,12 +1,32 @@
 use oj_diag::SourceId;
 use oj_lexer::Symbol;
 use oj_scope::DeclId;
-use oj_syntax::ast::{Argument, DeclarationFlags, NodeData, NodeId};
+use oj_syntax::ast::{Argument, DeclarationFlags, NodeData, NodeFlags, NodeId};
 use oj_types::TypeId;
 
 use crate::checker::{Checker, Expr};
 use crate::convert;
 use crate::poly::InstanceId;
+
+/// One argument a call site wrote, typed.
+#[derive(Clone, Debug)]
+pub(crate) struct CallArgument {
+  pub name: Option<Symbol>,
+  pub value: Expr,
+  /// `..xs` hands a whole array to a `..T` slot rather than one of its
+  /// elements (**L§7.3**).
+  pub spread: bool,
+}
+
+impl CallArgument {
+  pub fn positional(value: Expr) -> Self {
+    Self {
+      name: None,
+      value,
+      spread: false,
+    }
+  }
+}
 
 /// One parameter of a candidate, as a call site sees it (**L§7.3**).
 #[derive(Clone, Debug)]
@@ -63,7 +83,7 @@ impl Checker<'_> {
   pub(crate) fn resolve_overload(
     &mut self,
     candidates: &[DeclId],
-    arguments: &[(Option<Symbol>, Expr)],
+    arguments: &[CallArgument],
   ) -> Resolved {
     let mut scored: Vec<(u32, Signature)> = Vec::new();
     let mut any_signature = false;
@@ -93,11 +113,7 @@ impl Checker<'_> {
     Resolved::One(winner.1)
   }
 
-  pub(crate) fn accepts(
-    &mut self,
-    signature: &Signature,
-    arguments: &[(Option<Symbol>, Expr)],
-  ) -> bool {
+  pub(crate) fn accepts(&mut self, signature: &Signature, arguments: &[CallArgument]) -> bool {
     self.score(signature, arguments).is_some()
   }
 
@@ -108,7 +124,7 @@ impl Checker<'_> {
   fn score_candidate(
     &mut self,
     signature: Signature,
-    arguments: &[(Option<Symbol>, Expr)],
+    arguments: &[CallArgument],
   ) -> Option<(u32, Signature)> {
     if !signature.polymorphic {
       let distance = self.score(&signature, arguments)?;
@@ -121,29 +137,29 @@ impl Checker<'_> {
 
   /// How far the arguments are from a candidate's parameters, or `None` when
   /// the candidate does not accept them at all.
-  fn score(&mut self, signature: &Signature, arguments: &[(Option<Symbol>, Expr)]) -> Option<u32> {
+  fn score(&mut self, signature: &Signature, arguments: &[CallArgument]) -> Option<u32> {
     let count = signature.parameters.len();
     let positional = arguments
       .iter()
-      .take_while(|(name, _)| name.is_none())
+      .take_while(|argument| argument.name.is_none())
       .count();
     if !signature.varargs && (arguments.len() > count || positional > count) {
       return None;
     }
     if arguments.len() < signature.required() && !signature.varargs {
       // A named argument may still fill a required slot further along.
-      if arguments.iter().all(|(name, _)| name.is_none()) {
+      if arguments.iter().all(|argument| argument.name.is_none()) {
         return None;
       }
     }
 
     let mut total = 0u32;
-    for (index, (name, value)) in arguments.iter().enumerate() {
-      let parameter = match name {
+    for (index, argument) in arguments.iter().enumerate() {
+      let parameter = match argument.name {
         Some(name) => signature
           .parameters
           .iter()
-          .find(|parameter| parameter.name == Some(*name))?,
+          .find(|parameter| parameter.name == Some(name))?,
         None => match signature.parameters.get(index) {
           Some(parameter) => parameter,
           // Past the last declared parameter is the varargs slot, whose
@@ -155,8 +171,12 @@ impl Checker<'_> {
           None => return None,
         },
       };
-      // The varargs parameter is a `[] T`; an argument matches its element.
-      let target = if signature.varargs && Some(parameter) == signature.parameters.last() {
+      // The varargs parameter is a `[] T`; an argument matches its element,
+      // unless it was written `..xs`, which hands over the whole array.
+      let target = if signature.varargs
+        && Some(parameter) == signature.parameters.last()
+        && !argument.spread
+      {
         total = total.saturating_add(convert::VARARGS);
         match self.types().array_of(parameter.type_id) {
           Some((element, _)) => element,
@@ -165,7 +185,7 @@ impl Checker<'_> {
       } else {
         parameter.type_id
       };
-      total = total.saturating_add(self.argument_distance(value, target)?);
+      total = total.saturating_add(self.argument_distance(&argument.value, target)?);
     }
     if signature.polymorphic {
       total = total.saturating_add(convert::POLYMORPH);
@@ -336,17 +356,25 @@ impl Checker<'_> {
     scope: oj_scope::ScopeId,
     source: SourceId,
     arguments: &[Argument],
-  ) -> Vec<(Option<Symbol>, Expr)> {
+  ) -> Vec<CallArgument> {
     arguments
       .iter()
-      .map(|argument| {
-        let name = argument.name.and_then(|node| self.ident_name(source, node));
-        (
-          name,
-          self.expression_type(scope, source, argument.expression),
-        )
+      .map(|argument| CallArgument {
+        name: argument.name.and_then(|node| self.ident_name(source, node)),
+        value: self.expression_type(scope, source, argument.expression),
+        spread: self.is_spread(source, argument.expression),
       })
       .collect()
+  }
+
+  /// Whether a call site wrote `..xs` for this argument (**L§7.3**).
+  pub(crate) fn is_spread(&self, source: SourceId, node: NodeId) -> bool {
+    self.ast(source).is_some_and(|ast| {
+      ast
+        .node(node)
+        .flags
+        .contains(NodeFlags::EXPRESSION_IS_SPREAD)
+    })
   }
 }
 

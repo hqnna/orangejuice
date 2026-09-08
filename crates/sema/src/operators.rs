@@ -33,9 +33,9 @@ impl Checker<'_> {
       return None;
     };
 
-    let arguments: Vec<(Option<oj_lexer::Symbol>, Expr)> = operands
+    let arguments: Vec<crate::overload::CallArgument> = operands
       .iter()
-      .map(|operand| (None, operand.clone()))
+      .map(|operand| crate::overload::CallArgument::positional(operand.clone()))
       .collect();
     let mut resolved = self.resolve_overload(&candidates, &arguments);
     // `#symmetric` lets a two-parameter operator take its arguments the other

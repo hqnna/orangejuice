@@ -57,7 +57,7 @@ impl Checker<'_> {
     node: NodeId,
     outer: ScopeId,
   ) -> TypeId {
-    if let Some(existing) = self.aggregate_type(source, node) {
+    if let Some(existing) = self.aggregate_type_in(outer, source, node) {
       if let Some(owner) = owner {
         self.publish(owner, DeclType::type_name(existing));
       }
@@ -72,7 +72,7 @@ impl Checker<'_> {
 
     let textual = StructTextualFlags::from_bits_truncate(payload.textual_flags.bits());
     let (definition, type_id) = self.types_mut().new_struct(StructInfo::new(name, textual));
-    self.record_aggregate_type(source, node, type_id);
+    self.record_aggregate_type_in(outer, source, node, type_id);
     if let Some(owner) = owner {
       self.publish(owner, DeclType::type_name(type_id));
     }
@@ -418,7 +418,7 @@ impl Checker<'_> {
     node: NodeId,
     outer: ScopeId,
   ) -> TypeId {
-    if let Some(existing) = self.aggregate_type(source, node) {
+    if let Some(existing) = self.aggregate_type_in(outer, source, node) {
       if let Some(owner) = owner {
         self.publish(owner, DeclType::type_name(existing));
       }
@@ -447,7 +447,7 @@ impl Checker<'_> {
     flags.set(EnumTypeFlags::SPECIFIED, payload.marked_as_specified);
 
     let (definition, type_id) = self.types_mut().new_enum(EnumInfo::new(name, base, flags));
-    self.record_aggregate_type(source, node, type_id);
+    self.record_aggregate_type_in(outer, source, node, type_id);
     if let Some(owner) = owner {
       self.publish(owner, DeclType::type_name(type_id));
     }
