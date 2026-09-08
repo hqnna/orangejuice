@@ -435,9 +435,13 @@ impl<'c, 'p> Lowering<'c, 'p> {
       // A `#compiler` procedure has no body either, but the compiler is what
       // answers it, so it keeps the Jai convention and binds to `oj-meta`
       // under the name `#compiler "…"` gave it (**C§3.3**).
+      // A `#compiler` procedure with a body — Preload writes one for
+      // `get_current_workspace` — keeps that body in the executable and is
+      // answered by the compiler only while compile-time code runs (**C§3.3**).
       let intrinsic = body
         .flags
-        .contains(ast::ProcedureFlags::SYNTACTICALLY_MARKED_AS_COMPILER);
+        .contains(ast::ProcedureFlags::SYNTACTICALLY_MARKED_AS_COMPILER)
+        && (body.block.is_none() || self.mode == Mode::CompileTime);
       if intrinsic {
         flags |= ProcedureFlags::FOREIGN | ProcedureFlags::COMPILER;
         symbol = Some(match &body.intrinsic_name {

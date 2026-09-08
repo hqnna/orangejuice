@@ -443,3 +443,56 @@ fn a_workspace_that_fails_reports_a_failed_completion() {
     report.diagnostics
   );
 }
+
+/// `remap_import` and `get_current_workspace`, spelled as the distribution
+/// spells them.
+const REMAPPING: &str = "\
+remap_import :: (w: Workspace, host_module_name: string, import_name: string, replacement_name: string) #compiler;
+get_current_workspace :: () -> Workspace #compiler;
+";
+
+#[test]
+fn a_metaprogram_remaps_an_import_of_the_workspace_it_creates() {
+  let fixture = Fixture::new();
+  fixture.write(
+    "other.jai",
+    "#import \"Dimwit\";\nmain :: () { greet(); }\n",
+  );
+  std::fs::create_dir_all(fixture.path("modules")).expect("the fixture is writable");
+  fixture.write("modules/Flathead.jai", "greet :: () {}\n");
+  let Some(report) = build(
+    &fixture,
+    &(REMAPPING.to_string()
+      + "#run {\n\
+       w := compiler_create_workspace(\"target\");\n\
+       options := get_build_options(w);\n\
+       options.output_executable_name = \"remapped\";\n\
+       set_build_options(options, w);\n\
+       remap_import(w, \"\", \"Dimwit\", \"Flathead\");\n\
+       add_build_file(\"other.jai\", w);\n\
+     }\n\
+     main :: () {}\n"),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("remapped"));
+}
+
+#[test]
+fn get_current_workspace_names_the_program_being_compiled() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &(REMAPPING.to_string()
+      + "#run {\n\
+       here := get_current_workspace();\n\
+       w := compiler_create_workspace(\"target\");\n\
+       if here == w  compiler_report(\"a new workspace should not be this one\");\n\
+       if here == 0  compiler_report(\"compile-time code belongs to a workspace\");\n\
+     }\n\
+     main :: () {}\n"),
+  ) else {
+    return;
+  };
+  assert!(!report.failed, "{}", report.diagnostics.join(""));
+}

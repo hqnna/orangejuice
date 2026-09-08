@@ -106,6 +106,7 @@ pub fn run_input(
     ..oj_scope::Options::default()
   };
   scope_options.import_dirs = options.import_dirs.clone();
+  scope_options.import_remaps = options.import_remaps.clone();
 
   let program = oj_scope::Program::build_input(
     &sources,
@@ -425,6 +426,15 @@ fn workspace_input(
   {
     nested.output_path = Some(PathBuf::from(path));
   }
+  nested.import_remaps = workspace
+    .remaps
+    .iter()
+    .map(|(host, import, replacement)| oj_scope::ImportRemap {
+      host: host.clone(),
+      import: import.clone(),
+      replacement: replacement.clone(),
+    })
+    .collect();
   let input = Input {
     files: workspace.files.clone(),
     strings: workspace

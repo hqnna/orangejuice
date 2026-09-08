@@ -64,9 +64,36 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
       "compiler_wait_for_message",
       compiler_wait_for_message as *const () as usize,
     ),
+    (
+      "get_current_workspace",
+      get_current_workspace as *const () as usize,
+    ),
+    ("remap_import", remap_import as *const () as usize),
   ]
 }
 
+/// `get_current_workspace :: () -> Workspace` (Preload)
+unsafe extern "C" fn get_current_workspace(_context: *mut c_void) -> i64 {
+  with(|meta| meta.current).unwrap_or(0)
+}
+
+/// `remap_import :: (w: Workspace, host_module_name: string, import_name: string, replacement_name: string)`
+unsafe extern "C" fn remap_import(
+  w: i64,
+  host: *const Str,
+  import: *const Str,
+  replacement: *const Str,
+  _context: *mut c_void,
+) {
+  let host = unsafe { read_str(host) };
+  let import = unsafe { read_str(import) };
+  let replacement = unsafe { read_str(replacement) };
+  with(|meta| {
+    if let Some(workspace) = meta.workspace(w) {
+      workspace.remaps.push((host, import, replacement));
+    }
+  });
+}
 /// `compiler_begin_intercept :: (w: Workspace, flags: Intercept_Flags = 0)`
 unsafe extern "C" fn compiler_begin_intercept(w: i64, flags: u32, _context: *mut c_void) {
   with(|meta| meta.begin_intercept(w, flags));

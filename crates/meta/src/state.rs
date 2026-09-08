@@ -75,6 +75,11 @@ pub struct Workspace {
   /// (**C§3.1**).
   pub started: bool,
   pub destroyed: bool,
+  /// The compilation.s own workspace, which nobody created and nobody builds
+  /// again (**C§3.1**).
+  pub implicit: bool,
+  /// `remap_import` calls: host module, import name, replacement (**C§3.3**).
+  pub remaps: Vec<(String, String, String)>,
   /// Whether a metaprogram watched this workspace compile, in which case the
   /// driver has nothing left to do for it.
   pub intercepted: bool,
@@ -179,8 +184,16 @@ pub struct Meta {
 }
 
 impl Meta {
+  /// A compilation, with the workspace the program itself is (**C§3.1**).
+  /// `get_current_workspace` names it, and `w = -1` means it.
   pub fn new() -> Self {
-    Self::default()
+    let mut meta = Self::default();
+    let id = meta.create_workspace(String::new());
+    meta.current = id;
+    if let Some(workspace) = meta.workspace(id) {
+      workspace.implicit = true;
+    }
+    meta
   }
 
   /// Copies `text` into the compilation's arena and describes it the way Jai
@@ -228,6 +241,8 @@ impl Meta {
       status: WorkspaceStatus::Ok,
       started: false,
       destroyed: false,
+      implicit: false,
+      remaps: Vec::new(),
       intercepted: false,
     });
     id
@@ -416,9 +431,8 @@ impl Meta {
   /// The workspaces a driver still has to build: the ones source was added to
   /// and that nobody destroyed.
   pub fn buildable(&self) -> impl Iterator<Item = &Workspace> {
-    self
-      .workspaces
-      .iter()
-      .filter(|workspace| workspace.started && !workspace.destroyed && !workspace.intercepted)
+    self.workspaces.iter().filter(|workspace| {
+      workspace.started && !workspace.destroyed && !workspace.intercepted && !workspace.implicit
+    })
   }
 }

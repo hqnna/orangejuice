@@ -48,6 +48,8 @@ pub struct BuildOptions {
   /// Everything after a lone `-`, which the program and its `#run`s see
   /// (**L§14.4**).
   pub compile_time_command_line: Vec<String>,
+  /// `remap_import` calls a metaprogram made for this workspace (**C§3.3**).
+  pub import_remaps: Vec<oj_scope::ImportRemap>,
   /// `-version`, which prints the version and stops when no file follows.
   pub print_version: bool,
   /// `-help` / `-?`, which prints the vendored metaprogram's help text.

@@ -56,6 +56,26 @@ pub struct Options {
   pub follow_imports: bool,
   /// Parse the distribution's `Preload.jai` into the root scope (**L§11.4**).
   pub load_preload: bool,
+  /// `remap_import` calls a metaprogram made for this workspace: the module
+  /// the `#import` is written in, the name it names, and what to import
+  /// instead — or nothing at all, which blocks it (**C§3.3**).
+  pub import_remaps: Vec<ImportRemap>,
+}
+
+/// One `remap_import` (**C§3.3**). `host` is `""` for the main program and
+/// `"*"` for every module; `import` is `"*"` for every import, in which case
+/// `replacement` has to be empty.
+#[derive(Clone, Debug)]
+pub struct ImportRemap {
+  pub host: String,
+  pub import: String,
+  pub replacement: String,
+}
+
+impl ImportRemap {
+  fn matches(&self, host: &str, import: &str) -> bool {
+    (self.host == "*" || self.host == host) && (self.import == "*" || self.import == import)
+  }
 }
 
 impl Default for Options {
@@ -65,6 +85,7 @@ impl Default for Options {
       import_dirs: Vec::new(),
       follow_imports: true,
       load_preload: true,
+      import_remaps: Vec::new(),
     }
   }
 }
@@ -1274,7 +1295,19 @@ impl<'a> Program<'a> {
     }
 
     let from = self.path_of(source);
-    let name = String::from_utf8_lossy(&import.name).into_owned();
+    let mut name = String::from_utf8_lossy(&import.name).into_owned();
+    // A metaprogram may have said this import is somebody else, or is nobody
+    // at all (**C§3.3**).
+    if import.import_type == ImportType::ShortName {
+      match self.remapped(scope, &name) {
+        Some(Some(replacement)) => name = replacement,
+        Some(None) => {
+          self.tree.add_pending(scope, PendingProvider::FailedImport);
+          return None;
+        }
+        None => {}
+      }
+    }
     let resolved = match import.import_type {
       ImportType::ShortName => match oj_source::resolve_module(&name, &self.import_path) {
         Ok(resolved) => resolved,
@@ -1319,6 +1352,33 @@ impl<'a> Program<'a> {
     self.record_module(name, resolved.entry.clone(), module, ModuleKind::File);
     self.load_module_files(module, &resolved.entry, Some((source, span)));
     Some(module)
+  }
+
+  /// What `#import "name"` written in `scope` should import instead, if a
+  /// metaprogram remapped it (**C§3.3**). `Some(None)` means the import is
+  /// blocked: the compiler does not even look for it.
+  fn remapped(&self, scope: ScopeId, name: &str) -> Option<Option<String>> {
+    if self.options.import_remaps.is_empty() {
+      return None;
+    }
+    let host = self
+      .tree
+      .enclosing_module(scope)
+      .and_then(|module| {
+        self
+          .module_records
+          .borrow()
+          .iter()
+          .find(|record| record.scope == module)
+          .map(|record| record.name.clone())
+      })
+      .unwrap_or_default();
+    let remap = self
+      .options
+      .import_remaps
+      .iter()
+      .find(|remap| remap.matches(&host, name))?;
+    Some((!remap.replacement.is_empty()).then(|| remap.replacement.clone()))
   }
 
   /// The textual argument list that keys an instantiation, taken from the

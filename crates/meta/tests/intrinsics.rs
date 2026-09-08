@@ -37,9 +37,16 @@ fn every_symbol_the_compiler_answers_is_one_the_module_declares() {
     eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
     return;
   };
-  let path = jai_dir.join("modules/Compiler/Compiler.jai");
-  let text = std::fs::read_to_string(&path).expect("the Compiler module should be readable");
-  let declared = declared_symbols(&text);
+  // Preload declares a couple of them too, `get_current_workspace` among them.
+  let paths = [
+    jai_dir.join("modules/Compiler/Compiler.jai"),
+    jai_dir.join("modules/Preload.jai"),
+  ];
+  let mut declared = HashSet::new();
+  for path in &paths {
+    let text = std::fs::read_to_string(path).expect("the module should be readable");
+    declared.extend(declared_symbols(&text));
+  }
   assert!(
     declared.contains("compiler_create_workspace"),
     "the scan should find the obvious ones: {declared:?}"
@@ -48,8 +55,7 @@ fn every_symbol_the_compiler_answers_is_one_the_module_declares() {
   for (symbol, _) in oj_meta::intrinsics() {
     assert!(
       declared.contains(*symbol),
-      "'{symbol}' is not declared #compiler in {}",
-      path.display()
+      "'{symbol}' is not declared #compiler anywhere in the distribution"
     );
   }
 }
