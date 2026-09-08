@@ -57,6 +57,8 @@ impl Checker<'_> {
           denoted: None,
           constant: None,
           lvalue,
+          overloads: Vec::new(),
+          explicitly_cast: false,
         };
       }
       // A nested type or procedure reached through a value (**L§8.3**).
@@ -149,16 +151,22 @@ impl Checker<'_> {
           denoted: None,
           constant: None,
           lvalue,
+          overloads: Vec::new(),
+          explicitly_cast: false,
         },
       });
     }
     if name == self.data_name() {
       let pointer = self.types_mut().pointer_to(element);
+      // A fixed array's `.data` is its storage and is not assignable
+      // (**L§3.3**).
       return Some(Expr {
         type_id: pointer,
         denoted: None,
         constant: None,
-        lvalue: lvalue && kind != ArrayKind::Fixed(0) && !matches!(kind, ArrayKind::Fixed(_)),
+        lvalue: lvalue && !matches!(kind, ArrayKind::Fixed(_)),
+        overloads: Vec::new(),
+        explicitly_cast: false,
       });
     }
     if kind == ArrayKind::Resizable {

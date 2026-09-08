@@ -53,11 +53,27 @@ impl Value {
 pub struct Const {
   pub type_id: TypeId,
   pub value: Value,
+  /// The value was written as a hexadecimal or binary literal, which the
+  /// reference reads as a bit pattern rather than a number: `b: s64 =
+  /// 0xcafebabe00c0ffee;` fits, where the same value in decimal would not
+  /// (**L§2.6**, **L§5.10**).
+  pub bit_pattern: bool,
 }
 
 impl Const {
   pub fn new(type_id: TypeId, value: Value) -> Self {
-    Self { type_id, value }
+    Self {
+      type_id,
+      value,
+      bit_pattern: false,
+    }
+  }
+
+  pub fn bit_pattern(type_id: TypeId, value: Value) -> Self {
+    Self {
+      bit_pattern: true,
+      ..Self::new(type_id, value)
+    }
   }
 
   pub fn untyped_int(value: i128) -> Self {

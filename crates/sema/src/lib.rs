@@ -7,14 +7,17 @@
 //! what makes data scopes order-independent (**L§11.7**).
 
 mod aggregate;
+mod body;
 mod call;
 mod checker;
 mod constants;
+mod convert;
 mod decl;
 mod dump;
 mod expr;
 mod fold;
 mod member;
+mod overload;
 mod typeexpr;
 
 pub use checker::{Checker, DeclType, Expr};

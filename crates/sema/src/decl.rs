@@ -90,10 +90,55 @@ impl Checker<'_> {
       }
       return DeclType::type_name(denoted);
     }
-    // A variable takes the *hardened* type of its initializer: an integer
-    // literal becomes `s64` and a float literal its default width
-    // (**L§5.10**).
+    // A constant declared without a type slot keeps the literal's own type, so
+    // that it still adapts to whatever asks for it (**L§5.10** rule 2). A
+    // variable hardens instead: an integer literal becomes `s64` and a float
+    // literal its default width.
+    if declaration.flags.contains(DeclarationFlags::IS_CONSTANT) {
+      return DeclType::value(value.type_id);
+    }
     DeclType::value(self.harden(value.type_id))
+  }
+
+  /// One name of a compound declaration (**L§4.5**). The names share a type
+  /// slot, but not a value: `a, b := 1, 2;` distributes the comma-separated
+  /// values, and `q, r, ok := divide(x, y);` distributes the call's returns.
+  pub(crate) fn compound_declaration_type(
+    &mut self,
+    id: DeclId,
+    decl_scope: ScopeId,
+    source: SourceId,
+    declaration: &Declaration,
+    index: usize,
+  ) -> DeclType {
+    if declaration.type_inst.is_some() {
+      return self.declaration_type(id, decl_scope, source, declaration);
+    }
+    let Some(expression) = declaration.expression else {
+      return DeclType::UNKNOWN;
+    };
+    let Some(ast) = self.ast(source) else {
+      return DeclType::UNKNOWN;
+    };
+
+    match ast.data(expression) {
+      NodeData::CommaSeparatedArguments { arguments } => match arguments.get(index) {
+        Some(argument) => {
+          let value = self.expression_type(decl_scope, source, argument.node);
+          DeclType::value(self.harden(value.type_id))
+        }
+        None => DeclType::UNKNOWN,
+      },
+      NodeData::ProcedureCall(_) => {
+        let returns = self.call_return_types(decl_scope, source, expression);
+        match returns.get(index) {
+          Some(type_id) => DeclType::value(*type_id),
+          None => DeclType::UNKNOWN,
+        }
+      }
+      _ if index == 0 => self.declaration_type(id, decl_scope, source, declaration),
+      _ => DeclType::UNKNOWN,
+    }
   }
 
   pub(crate) fn ident_name(&self, source: SourceId, node: NodeId) -> Option<Symbol> {
@@ -137,6 +182,11 @@ impl Checker<'_> {
       if varargs && index + 1 == payload.arguments.len() {
         signature.varargs = true;
       }
+      // A `$` parameter is baked per call, which makes the procedure a family
+      // rather than a value (**L§7.8**).
+      if self.is_baked_parameter(source, *parameter) || self.is_polymorphic_type(type_id) {
+        signature.flags |= oj_types::ProcedureFlags::IS_POLYMORPHIC;
+      }
       signature.arguments.push(type_id);
     }
     for parameter in &payload.returns {
@@ -176,6 +226,20 @@ impl Checker<'_> {
         self.parameter_type(source, expression, outer)
       }
       _ => (TypeId::UNKNOWN, false),
+    }
+  }
+
+  /// Whether a parameter was written `$name` or `$$name`, which bakes its
+  /// value into the instantiation (**L§7.8**).
+  fn is_baked_parameter(&self, source: SourceId, parameter: NodeId) -> bool {
+    let Some(ast) = self.ast(source) else {
+      return false;
+    };
+    match ast.data(parameter) {
+      NodeData::Declaration(declaration) => declaration.flags.intersects(
+        DeclarationFlags::AUTO_VALUE_BAKE | DeclarationFlags::AUTO_VALUE_BAKE_IS_REQUIRED,
+      ),
+      _ => false,
     }
   }
 

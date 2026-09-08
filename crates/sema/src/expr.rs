@@ -63,7 +63,13 @@ impl Checker<'_> {
         let expression = cast.expression;
         self.expression_type(scope, source, expression);
         match cast.target_type {
-          Some(target) => Expr::value(self.type_from_node(scope, source, target)),
+          Some(target) => {
+            let type_id = self.type_from_node(scope, source, target);
+            Expr {
+              explicitly_cast: true,
+              ..Expr::value(type_id)
+            }
+          }
           // `xx` takes the type the context asks for (**L§5.6**).
           None => Expr::UNKNOWN,
         }
@@ -101,7 +107,15 @@ impl Checker<'_> {
       // `#compile_time` is a `bool` but not a constant one (**L§5.14**).
       NodeData::DirectiveCompileTime => Expr::value(TypeId::BOOL),
       NodeData::DirectiveCode { .. } | NodeData::DirectiveCallerCode => Expr::value(TypeId::CODE),
-      NodeData::Block(_) => Expr::value(TypeId::VOID),
+      // A block in expression position is an `ifx` branch: its value is its
+      // last expression statement (**L§5.13**).
+      NodeData::Block(block) => match block.statements.last() {
+        Some(last) => {
+          let last = *last;
+          self.expression_type(scope, source, last)
+        }
+        None => Expr::value(TypeId::VOID),
+      },
       _ => Expr::UNKNOWN,
     }
   }
@@ -114,7 +128,14 @@ impl Checker<'_> {
     flags: LiteralFlags,
   ) -> Expr {
     match value {
-      LiteralValue::Integer(number) => Expr::constant(Const::untyped_int(i128::from(*number))),
+      LiteralValue::Integer(number) => {
+        let value = Value::Int(i128::from(*number));
+        if flags.intersects(LiteralFlags::HEX | LiteralFlags::BINARY) {
+          Expr::constant(Const::bit_pattern(TypeId::UNTYPED_INT, value))
+        } else {
+          Expr::constant(Const::new(TypeId::UNTYPED_INT, value))
+        }
+      }
       LiteralValue::Float(number) => {
         let kind =
           if flags.intersects(LiteralFlags::REQUIRES_FLOAT64 | LiteralFlags::DEFAULTS_TO_FLOAT64) {
@@ -215,7 +236,10 @@ impl Checker<'_> {
       if real.is_empty() {
         return Expr::UNKNOWN;
       }
-      return Expr::value(TypeId::OVERLOAD_SET);
+      return Expr {
+        overloads: real,
+        ..Expr::value(TypeId::OVERLOAD_SET)
+      };
     };
 
     let resolved = self.decl_type(only);
@@ -228,11 +252,20 @@ impl Checker<'_> {
       .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)
     {
       if let Some(value) = self.decl_constant(only) {
-        return Expr::constant(value);
+        return Expr {
+          overloads: vec![only],
+          ..Expr::constant(value)
+        };
       }
-      return Expr::value(resolved.value);
+      return Expr {
+        overloads: vec![only],
+        ..Expr::value(resolved.value)
+      };
     }
-    Expr::place(resolved.value)
+    Expr {
+      overloads: vec![only],
+      ..Expr::place(resolved.value)
+    }
   }
 
   fn unary_type(
@@ -251,6 +284,8 @@ impl Checker<'_> {
           denoted: None,
           constant: Some(Const::new(TypeId::UNTYPED_ENUM, Value::EnumName(name))),
           lvalue: false,
+          overloads: Vec::new(),
+          explicitly_cast: false,
         },
         None => Expr::UNKNOWN,
       };
@@ -327,18 +362,34 @@ impl Checker<'_> {
       };
     }
 
-    // A shift's result is the left operand's type; everything else unifies
-    // (**L§5.2**, **L§5.10**).
-    let unified = if matches!(
+    // Subtracting two pointers gives the element difference as `s64`
+    // (**L§3.2**).
+    if operator == OperatorType::MINUS
+      && self.types().is_pointer(left_type.type_id)
+      && self.types().is_pointer(right_type.type_id)
+    {
+      return Expr::value(TypeId::S64);
+    }
+
+    // A shift's result is the left operand's type; so is a bitwise operator's
+    // when the left operand was explicitly cast, which is how
+    // `cast,trunc(u32) a ^ b` stays a `u32` (**L§5.2**). Everything else
+    // unifies (**L§5.10**).
+    let keeps_left = matches!(
       operator,
       OperatorType::SHIFT_LEFT
         | OperatorType::SHIFT_RIGHT
         | OperatorType::ROTATE_LEFT
         | OperatorType::ROTATE_RIGHT
-    ) {
+    ) || (left_type.explicitly_cast
+      && matches!(
+        operator,
+        OperatorType::BITWISE_AND | OperatorType::BITWISE_OR | OperatorType::BITWISE_XOR
+      ));
+    let unified = if keeps_left {
       left_type.type_id
     } else {
-      self.unify(left_type.type_id, right_type.type_id)
+      self.unify_operands(&left_type, &right_type)
     };
     match self.fold_binary(operator, &left_type, &right_type) {
       Some(value) => Expr::constant(Const::new(unified, value.value)),
@@ -346,9 +397,27 @@ impl Checker<'_> {
     }
   }
 
-  /// `Match` for two flexible operands (**L§5.10**): an untyped literal takes
-  /// the other side's type, and integers of different widths unify to the one
-  /// that holds both.
+  /// `Match` for two flexible operands (**L§5.10**): a literal or a numeric
+  /// constant takes the other side's type, and integers of different widths
+  /// unify to the one that holds both.
+  fn unify_operands(&mut self, left: &Expr, right: &Expr) -> TypeId {
+    // A constant behaves like a literal of its value, so `size_of(u64) * n`
+    // has `n`'s type rather than the constant's (**L§5.10** rule 2).
+    for (constant, other) in [(left, right), (right, left)] {
+      if let Some(crate::constants::Value::Int(number)) =
+        constant.constant.as_ref().map(|value| &value.value)
+        && self.types().integer_kind(constant.type_id).is_some()
+        && other.constant.is_none()
+        && let Some(kind) = self.types().integer_kind(other.type_id)
+        && self.types().enum_of(other.type_id).is_none()
+        && kind.holds(*number)
+      {
+        return other.type_id;
+      }
+    }
+    self.unify(left.type_id, right.type_id)
+  }
+
   pub(crate) fn unify(&mut self, left: TypeId, right: TypeId) -> TypeId {
     if left == right {
       return left;
@@ -432,7 +501,9 @@ impl Checker<'_> {
     match kind {
       TypeQueryKind::SizeOf => match self.layout_of(type_id).map(|layout| layout.size) {
         Some(size) => Expr::constant(Const::new(TypeId::S64, Value::Int(i128::from(size)))),
-        None => Expr::value(TypeId::S64),
+        // The size of a type the front end cannot lay out yet is not `s64`
+        // with an unknown value: it is not known at all.
+        None => Expr::UNKNOWN,
       },
       TypeQueryKind::TypeInfo => {
         let info = self.type_info_type(type_id);

@@ -50,6 +50,13 @@ pub struct Expr {
   pub constant: Option<Const>,
   /// Whether the expression may be assigned to (**L§7.6**).
   pub lvalue: bool,
+  /// The declarations a name stood for, when it named more than one: an
+  /// overload set is not a type, so only a call site can narrow it
+  /// (**L§7.5**).
+  pub overloads: Vec<DeclId>,
+  /// The expression is an explicit `cast(T)`. A bitwise operator whose left
+  /// operand was cast keeps the cast's type rather than widening (**L§5.2**).
+  pub explicitly_cast: bool,
 }
 
 impl Expr {
@@ -58,6 +65,8 @@ impl Expr {
     denoted: None,
     constant: None,
     lvalue: false,
+    overloads: Vec::new(),
+    explicitly_cast: false,
   };
 
   pub fn value(type_id: TypeId) -> Self {
@@ -66,6 +75,8 @@ impl Expr {
       denoted: None,
       constant: None,
       lvalue: false,
+      overloads: Vec::new(),
+      explicitly_cast: false,
     }
   }
 
@@ -82,6 +93,8 @@ impl Expr {
       denoted: value.as_type(),
       constant: Some(value),
       lvalue: false,
+      overloads: Vec::new(),
+      explicitly_cast: false,
     }
   }
 
@@ -91,6 +104,8 @@ impl Expr {
       denoted: Some(denoted),
       constant: Some(Const::type_value(denoted)),
       lvalue: false,
+      overloads: Vec::new(),
+      explicitly_cast: false,
     }
   }
 
@@ -206,7 +221,7 @@ pub struct Checker<'a> {
   completing: Vec<(StructId, SourceId, NodeId)>,
   /// The shared `declaration_properties` of each name in a compound
   /// declaration (**L§4.5**): `a, b: float;` declares two names off one type.
-  compound_properties: HashMap<(SourceId, NodeId), NodeId>,
+  compound_properties: HashMap<(SourceId, NodeId), (NodeId, usize)>,
   /// `#Context`, built once from `Context_Base` and the program's
   /// `#add_context` declarations (**L§10.2**).
   context: Option<TypeId>,
@@ -249,10 +264,10 @@ impl<'a> Checker<'a> {
         else {
           continue;
         };
-        for argument in arguments {
+        for (index, argument) in arguments.iter().enumerate() {
           compound_properties.insert(
             (unit.source, argument.node),
-            compound.declaration_properties,
+            (compound.declaration_properties, index),
           );
         }
       }
@@ -290,6 +305,7 @@ impl<'a> Checker<'a> {
     while let Some(definition) = self.pending_bodies.keys().copied().next() {
       self.complete_struct(definition);
     }
+    self.check_bodies();
   }
 
   pub(crate) fn record_pending_body(
@@ -461,7 +477,11 @@ impl<'a> Checker<'a> {
     matches!(self.states.get(&id), Some(State::Resolving))
   }
 
-  pub(crate) fn compound_properties(&self, source: SourceId, node: NodeId) -> Option<NodeId> {
+  pub(crate) fn compound_properties(
+    &self,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<(NodeId, usize)> {
     self.compound_properties.get(&(source, node)).copied()
   }
 
@@ -654,7 +674,7 @@ impl<'a> Checker<'a> {
             {
               return DeclType::type_name(self.polymorph_type(source, node, ident.name));
             }
-            let Some(properties) = self.compound_properties(source, node) else {
+            let Some((properties, index)) = self.compound_properties(source, node) else {
               return DeclType::UNKNOWN;
             };
             let Some(NodeData::Declaration(declaration)) =
@@ -662,7 +682,7 @@ impl<'a> Checker<'a> {
             else {
               return DeclType::UNKNOWN;
             };
-            self.declaration_type(id, decl.scope, source, declaration)
+            self.compound_declaration_type(id, decl.scope, source, declaration, index)
           }
           _ => DeclType::UNKNOWN,
         }
