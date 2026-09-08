@@ -58,7 +58,7 @@ impl Lowering<'_, '_> {
         body.header,
         format!(
           "Code generation for '{name}' needs a type the front end cannot work out yet \
-           (polymorphs and macros are milestone M7, '#run' is milestone M6)."
+           (polymorphs and macros are milestone M7)."
         ),
       );
       return;
@@ -287,8 +287,23 @@ impl Lowering<'_, '_> {
         let (operator, left, right) = (*operator, *left, *right);
         self.assignment(node, operator, left, right);
       }
-      NodeData::PushContext { .. } => {
-        self.unsupported(source, node, "'push_context'", "M6");
+      // `push_context c { … }` runs the block with `c` as the context
+      // (**L§6.9**). Every call carries the context pointer explicitly, so
+      // making it current is a matter of which pointer the block hands on.
+      NodeData::PushContext { to_push, block, .. } => {
+        let (to_push, block) = (*to_push, *block);
+        let saved = self.context_value;
+        if let Some(to_push) = to_push {
+          let scope = self.checker.scope_for(source, to_push, self.body_scope);
+          let context = self.context_type;
+          if let Some(value) = self.expression(scope, source, to_push, Some(context)) {
+            self.context_value = Some(self.address_of(value));
+          }
+        }
+        if let Some(block) = block {
+          self.statement(block);
+        }
+        self.context_value = saved;
       }
       // A `#run` statement already happened, when the front end typechecked
       // the body around it (**L§6.11**); the executable holds nothing for it.
@@ -345,7 +360,7 @@ impl Lowering<'_, '_> {
     }
     let type_id = self.checker.decl_type(decl).value;
     if self.mentions_unknown(type_id) {
-      self.unsupported(source, node, "a declaration of unknown type", "M6/M7");
+      self.unsupported(source, node, "a declaration of unknown type", "M7");
       return;
     }
     let name = {

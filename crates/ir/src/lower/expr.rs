@@ -36,7 +36,7 @@ impl Lowering<'_, '_> {
         source,
         node,
         "an expression whose type the front end cannot work out yet",
-        "M6/M7",
+        "M7",
       );
       return None;
     }
@@ -378,7 +378,7 @@ impl Lowering<'_, '_> {
         None
       }
       _ => {
-        self.unsupported(source, node, "this expression", "M6/M7");
+        self.unsupported(source, node, "this expression", "M7");
         None
       }
     }
@@ -457,7 +457,7 @@ impl Lowering<'_, '_> {
           "This name stands for more than one procedure; only a call site can choose between them.",
         );
       } else {
-        self.unsupported(source, node, "this name", "M6/M7");
+        self.unsupported(source, node, "this name", "M7");
       }
       return None;
     };
@@ -523,7 +523,7 @@ impl Lowering<'_, '_> {
         None
       }
       _ => {
-        self.unsupported(source, node, "this name", "M6/M7");
+        self.unsupported(source, node, "this name", "M7");
         None
       }
     }
@@ -1213,7 +1213,7 @@ impl Lowering<'_, '_> {
         source,
         node,
         "a call the front end could not resolve to one procedure",
-        "M6/M7",
+        "M7",
       );
       return None;
     };
@@ -1414,7 +1414,7 @@ impl Lowering<'_, '_> {
     }
 
     if !self.is_scalar(from) || !self.is_scalar(to) {
-      self.unsupported(source, node, "this conversion", "M6/M7");
+      self.unsupported(source, node, "this conversion", "M7");
       return None;
     }
 
@@ -1483,7 +1483,7 @@ impl Lowering<'_, '_> {
             }
           },
           _ => {
-            self.unsupported(source, node, "this conversion", "M6/M7");
+            self.unsupported(source, node, "this conversion", "M7");
             return None;
           }
         }

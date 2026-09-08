@@ -223,12 +223,12 @@ fn a_range_loop_counts_it_and_it_index() {
 
 #[test]
 fn a_construct_a_later_milestone_owns_names_that_milestone() {
-  let Some(lowered) = lower("main :: () { push_context context {} }\n") else {
+  let Some(lowered) = lower("main :: () { f := initializer_of(int); }\n") else {
     return;
   };
   assert_eq!(
     lowered.errors,
-    ["Code generation for 'push_context' is not implemented yet (milestone M6)."]
+    ["Code generation for 'initializer_of' is not implemented yet (milestone M6)."]
   );
 }
 

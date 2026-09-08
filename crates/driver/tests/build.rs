@@ -805,3 +805,21 @@ fn a_location_knows_where_it_was_written() {
     built.output
   );
 }
+
+#[test]
+fn push_context_changes_what_the_block_and_its_callees_see() {
+  assert_output(
+    "#add_context marker: int;\n\
+     show :: () {\n\
+       if context.marker == 7  put(\"seven\\n\"); else put(\"zero\\n\");\n\
+     }\n\
+     main :: () {\n\
+       show();\n\
+       c := context;\n\
+       c.marker = 7;\n\
+       push_context c { show(); }\n\
+       show();\n\
+     }\n",
+    "zero\nseven\nzero\n",
+  );
+}
