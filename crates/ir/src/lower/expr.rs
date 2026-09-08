@@ -456,6 +456,18 @@ impl Lowering<'_, '_> {
     })
   }
 
+  /// Whether a type is a whole number as far as a cast is concerned: an
+  /// integer, a `bool` or an enum (**L§3.2**, **L§5.6**).
+  fn is_integral(&self, type_id: TypeId) -> bool {
+    let types = self.checker.types();
+    let underlying = types.underlying(type_id);
+    types.is_integer(underlying)
+      || matches!(
+        types.kind(underlying),
+        TypeKind::Bool | TypeKind::Enum(_) | TypeKind::UntypedInt
+      )
+  }
+
   /// The `count` word of anything that starts with one: a `string`, a `[] T`
   /// or a `[..] T` (**L§3.3**, **L§3.4**).
   fn count_of(&mut self, value: Val) -> Option<Val> {
@@ -582,11 +594,32 @@ impl Lowering<'_, '_> {
         })
       }
       DeclKind::Constant => {
-        // A constant that did not fold is one whose value is a procedure or a
-        // `Code`, neither of which the front end represents yet.
-        let _ = type_id;
-        self.unsupported(source, node, "this constant", "M7");
-        None
+        // A constant the front end could not fold is one whose value has no
+        // data form — `temp :: Allocator.{temporary_allocator_proc, null}`
+        // holds a procedure's address (**L§5.11**). It has no storage of its
+        // own, so its value is built where it is used.
+        let (Some(declared), Some(at)) = (info.source, info.node) else {
+          self.unsupported(source, node, "this constant", "M7");
+          return None;
+        };
+        let Some(NodeData::Declaration(declaration)) =
+          self.checker.tree_of(declared).map(|ast| ast.data(at))
+        else {
+          self.unsupported(source, node, "this constant", "M7");
+          return None;
+        };
+        let Some(expression) = declaration.expression else {
+          self.unsupported(source, node, "this constant", "M7");
+          return None;
+        };
+        if !self.constants.insert(decl) {
+          self.unsupported(source, node, "this constant", "M7");
+          return None;
+        }
+        let scope = self.checker.scope_for(declared, expression, info.scope);
+        let value = self.expression(scope, declared, expression, Some(type_id));
+        self.constants.remove(&decl);
+        value
       }
       _ => {
         self.unsupported(source, node, "this name", "M7");
@@ -813,10 +846,13 @@ impl Lowering<'_, '_> {
     // it rather than being lowered on its own.
     let left_type = self.checker.expression(scope, source, left).type_id;
     let right_type = self.checker.expression(scope, source, right).type_id;
+    // A shift keeps the left operand's type, which for a literal is what it
+    // defaults to: `1 << n` is an `s64` (**L§5.2**, **L§5.10**).
+    let result = self.checker.hardened(info.type_id);
     let operand = if binary.is_comparison() {
       self.comparison_type(left_type, right_type)
     } else {
-      info.type_id
+      result
     };
     // Pointer arithmetic is not a unification: `p - q` is an `s64` but its
     // operands are pointers, and `p + n` keeps the pointer (**L§3.2**).
@@ -835,7 +871,7 @@ impl Lowering<'_, '_> {
       BinaryOp::ShiftLeft | BinaryOp::ShiftRight | BinaryOp::RotateLeft | BinaryOp::RotateRight
     ) || self.checker.types().is_pointer(left_value.type_id);
     let right_value = self.expression(scope, source, right, wanted.filter(|_| !keeps_left))?;
-    self.binary_values(source, node, binary, left_value, right_value, info.type_id)
+    self.binary_values(source, node, binary, left_value, right_value, result)
   }
 
   /// `a == b` on strings: the same count and the same bytes (**L§3.4**). The
@@ -1288,8 +1324,17 @@ impl Lowering<'_, '_> {
     right: NodeId,
   ) -> Option<Val> {
     let base = self.expression(scope, source, left, None)?;
-    let base = self.dereference(base);
     let index = self.expression(scope, source, right, Some(TypeId::S64))?;
+    // `p[i]` indexes a pointer as if it were an array (**L§5.4**), unless the
+    // front end chose an `operator []` over that.
+    let wanted = self.checker.expression(scope, source, node).type_id;
+    if let Some(element) = self.checker.types().pointee(base.type_id)
+      && element == wanted
+    {
+      let data = self.scalar(base);
+      return Some(self.element_at(data, index, element));
+    }
+    let base = self.dereference(base);
     let Some((element, kind)) = self.checker.types().array_of(base.type_id) else {
       self.unsupported(source, node, "'operator []'", "M7");
       return None;
@@ -1308,6 +1353,12 @@ impl Lowering<'_, '_> {
         dest
       }
     };
+    Some(self.element_at(data, index, element))
+  }
+
+  /// The storage of one element, `stride` bytes apart from the first
+  /// (**L§3.3**).
+  fn element_at(&mut self, data: ValueId, index: Val, element: TypeId) -> Val {
     let (stride, _) = self.size_align(element);
     let index = self.scalar(index);
     let pointer = self.pointer_to(element);
@@ -1316,13 +1367,13 @@ impl Lowering<'_, '_> {
       dest,
       base: data,
       index,
-      stride,
+      stride: stride.max(1),
     });
-    Some(Val {
+    Val {
       id: dest,
       type_id: element,
       indirect: true,
-    })
+    }
   }
 
   fn ifx_value(
@@ -1836,11 +1887,14 @@ impl Lowering<'_, '_> {
       return None;
     }
 
+    // A `bool` and an enum are integers as far as a cast to a pointer is
+    // concerned (**L§3.2**).
+    let (from_integral, to_integral) = (self.is_integral(from), self.is_integral(to));
     let types = self.checker.types();
     let kind = match (&from_kind, &to_kind) {
       _ if types.is_pointer(from) && types.is_pointer(to) => ConvertKind::Bitcast,
-      _ if types.is_pointer(from) && types.is_integer(to) => ConvertKind::PointerToInteger,
-      _ if types.is_integer(from) && types.is_pointer(to) => ConvertKind::IntegerToPointer,
+      _ if types.is_pointer(from) && to_integral => ConvertKind::PointerToInteger,
+      _ if from_integral && types.is_pointer(to) => ConvertKind::IntegerToPointer,
       _ if matches!(from_kind, TypeKind::Procedure(_)) && types.is_pointer(to) => {
         ConvertKind::Bitcast
       }

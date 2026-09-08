@@ -129,6 +129,9 @@ struct Lowering<'c, 'p> {
   /// local per expansion, so the instantiation is part of the key
   /// (**L§7.13**).
   local_of_decl: HashMap<(Option<InstanceId>, DeclId), LocalId>,
+  /// The constants whose value is being built right now, so that one that
+  /// names itself stops instead of looping.
+  constants: std::collections::HashSet<DeclId>,
   loops: Vec<Loop>,
   /// The macros whose bodies are being spliced in right now, innermost last
   /// (**L§7.13**).
@@ -171,6 +174,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       value_types: Vec::new(),
       current: BlockId(0),
       local_of_decl: HashMap::new(),
+      constants: std::collections::HashSet::new(),
       loops: Vec::new(),
       expansions: Vec::new(),
       call_sites: Vec::new(),

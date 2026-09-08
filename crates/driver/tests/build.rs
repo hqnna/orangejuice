@@ -1049,3 +1049,59 @@ fn a_view_is_true_when_it_holds_something() {
     "full\nempty\n",
   );
 }
+
+#[test]
+fn a_pointer_is_indexed_like_an_array() {
+  assert_output(
+    "main :: () {\n\
+       s := \"hello\";\n\
+       p := s.data;\n\
+       put_number(cast(int) p[1]);\n\
+     }\n",
+    "101\n",
+  );
+}
+
+#[test]
+fn a_complement_folds_and_a_shift_keeps_the_left_operand() {
+  assert_output(
+    "main :: () {\n\
+       MASK :: ~(64 - 1);\n\
+       put_number(MASK);\n\
+       n := 13;\n\
+       put_number((n + 7) & ~7);\n\
+       shift := 3;\n\
+       put_number(1 << shift);\n\
+     }\n",
+    "-64\n16\n8\n",
+  );
+}
+
+#[test]
+fn a_bool_and_an_enum_cast_to_a_pointer() {
+  assert_output(
+    "Caps :: enum_flags u32 { A; B; }\n\
+     main :: () {\n\
+       yes := cast(*void) true;\n\
+       both := cast(*void) (Caps.A | .B);\n\
+       put_number(cast(int) yes);\n\
+       put_number(cast(int) both);\n\
+     }\n",
+    "1\n3\n",
+  );
+}
+
+#[test]
+fn a_constant_that_holds_a_procedure_is_built_where_it_is_used() {
+  assert_output(
+    "Handler :: struct { proc: (int) -> int; tag: int; }\n\
+     double :: (x: int) -> int { return x * 2; }\n\
+     DOUBLER :: Handler.{double, 7};\n\
+     main :: () {\n\
+       h := DOUBLER;\n\
+       put_number(h.proc(21));\n\
+       put_number(h.tag);\n\
+     }\n",
+    "42\n7\n",
+  );
+}

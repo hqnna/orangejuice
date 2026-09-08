@@ -340,6 +340,11 @@ impl Lowering<'_, '_> {
       NodeData::DirectiveInsert(_) => {
         self.unsupported(source, node, "'#insert'", "M8");
       }
+      // An `#asm` block is assembled by the back end, which is the milestone
+      // that owns x86-64 (**L§15**).
+      NodeData::Asm(_) => {
+        self.unsupported(source, node, "'#asm'", "M9");
+      }
       _ => {
         let scope = self.checker.scope_for(source, node, self.body_scope);
         self.expression(scope, source, node, None);

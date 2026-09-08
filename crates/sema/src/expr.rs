@@ -452,7 +452,38 @@ impl Checker<'_> {
           None => Expr::UNKNOWN,
         }
       }
-      OperatorType::NOT => Expr::value(TypeId::BOOL),
+      OperatorType::NOT => match inner
+        .constant
+        .as_ref()
+        .and_then(|value| value.value.truth())
+      {
+        Some(truth) => Expr::constant(Const::bool(!truth)),
+        None => Expr::value(TypeId::BOOL),
+      },
+      // `~` on a constant folds, which is what makes `MASK :: ~(SIZE - 1)` a
+      // constant and `x & ~7` an ordinary integer expression (**L§5.11**).
+      OperatorType::BITWISE_NOT
+        if inner
+          .constant
+          .as_ref()
+          .is_some_and(|value| value.value.as_int().is_some()) =>
+      {
+        let value = inner
+          .constant
+          .as_ref()
+          .and_then(|value| value.value.as_int())
+          .expect("the guard checked it");
+        let width = self.types().integer_kind(inner.type_id);
+        let complement = match width {
+          Some(kind) => !value & ((1i128 << (kind.size() * 8)) - 1),
+          None => !value,
+        };
+        let complement = match width {
+          Some(kind) if kind.is_signed() => !value,
+          _ => complement,
+        };
+        Expr::constant(Const::new(inner.type_id, Value::Int(complement)))
+      }
       OperatorType::MINUS | OperatorType::PLUS | OperatorType::BITWISE_NOT => {
         // A struct's unary operators are overloads like its binary ones
         // (**L§7.7**).
@@ -505,6 +536,14 @@ impl Checker<'_> {
             _ => result,
           };
         }
+      }
+      // `p[i]` indexes a pointer as if it were an array (**L§5.4**). A
+      // pointer to a struct is left alone: that is where an `operator *[]`
+      // would apply, and resolving one is M7's own business.
+      if let Some(pointee) = self.types().pointee(operands[0].type_id)
+        && self.types().struct_of(pointee).is_none()
+      {
+        return Expr::place(pointee);
       }
       return Expr::UNKNOWN;
     }
