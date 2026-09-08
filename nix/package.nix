@@ -14,6 +14,19 @@ let
       || builtins.match ".*/tests/.*\\.(jai|snap)$" path != null;
   };
 
+  # `llvm-sys` links LLVM, libffi, zlib, libxml2, ncurses and libstdc++
+  # dynamically. A binary nix installs gets an rpath from the fixup phase, but
+  # a test binary is run out of the build directory before that, so the rpath
+  # has to be linked in — the same one `nix/shell.nix` puts on the dev shell.
+  runtimeLibraries = [
+    llvm.llvm.lib
+    pkgs.zlib
+    pkgs.libffi
+    pkgs.libxml2
+    pkgs.ncurses
+    pkgs.stdenv.cc.cc.lib
+  ];
+
   commonArgs = {
     inherit src;
     pname = "orangejuice";
@@ -31,6 +44,7 @@ let
     ];
 
     LLVM_SYS_191_PREFIX = "${llvm.llvm.dev}";
+    RUSTFLAGS = "-C link-arg=-Wl,-rpath,${pkgs.lib.makeLibraryPath runtimeLibraries}";
   };
 
   cargoArtifacts = craneLib.buildDepsOnly commonArgs;
