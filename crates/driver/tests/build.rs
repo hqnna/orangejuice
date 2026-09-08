@@ -1471,3 +1471,14 @@ fn an_inserted_string_declares_names_at_file_scope() {
     "42\n",
   );
 }
+
+#[test]
+fn an_inserted_string_can_stand_where_an_expression_goes() {
+  assert_output(
+    "twice :: (n: int) -> int { return n + n; }\n\
+     call :: \"twice(#insert argument);\";\n\
+     argument :: \"21;\";\n\
+     main :: () { put_number(#insert call); }\n",
+    "42\n",
+  );
+}

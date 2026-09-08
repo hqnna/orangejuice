@@ -164,6 +164,9 @@ pub enum InsertKind {
   Data(Visibility),
   Members,
   Imperative,
+  /// An `#insert` in expression position, whose text has to be one expression
+  /// statement and which declares nothing (**L§13.2**).
+  Expression,
 }
 
 /// Where declarations written at this point in a data scope go. A file's
@@ -1907,6 +1910,18 @@ impl<'a> Program<'a> {
           self.imperative_statement(&parsed, *statement, scope, source);
         }
       }
+      InsertKind::Expression => {
+        if statements.len() != 1 {
+          self.error(
+            at.0,
+            self.span_of(at.0, at.1),
+            "An #insert in expression position must be one expression statement.",
+          );
+        }
+        for statement in &statements {
+          self.walk(&parsed, *statement, scope, source);
+        }
+      }
     }
     Some(expansion)
   }
@@ -2240,18 +2255,10 @@ impl Program<'_> {
           source,
         );
       }
+      // Reaching an `#insert` through the expression walk means it stands where
+      // a value goes; a statement one is admitted by whoever walks statements.
       NodeData::DirectiveInsert(_) => {
-        let kind = if self.tree.scope_kind(scope).is_program_scope() {
-          InsertKind::Data(Visibility::Export)
-        } else if matches!(
-          self.tree.scope_kind(scope),
-          ScopeKind::StructMembers | ScopeKind::Enum
-        ) {
-          InsertKind::Members
-        } else {
-          InsertKind::Imperative
-        };
-        self.insert(parsed, node, scope, kind, source);
+        self.insert(parsed, node, scope, InsertKind::Expression, source);
       }
       NodeData::DirectiveProcedureName { argument } => {
         if let Some(argument) = *argument {
@@ -2326,6 +2333,10 @@ impl Program<'_> {
     if matches!(parsed.ast.data(statement), NodeData::Struct(_)) {
       let mut target = DataTarget::nested(scope);
       self.anonymous_aggregate(parsed, statement, &mut target, source);
+      return;
+    }
+    if matches!(parsed.ast.data(statement), NodeData::DirectiveInsert(_)) {
+      self.insert(parsed, statement, scope, InsertKind::Imperative, source);
       return;
     }
     self.walk(parsed, statement, scope, source);

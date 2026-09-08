@@ -107,6 +107,12 @@ impl Checker<'_> {
       NodeData::DirectiveExists(_) => Expr::constant(Const::bool(false)),
       // `#compile_time` is a `bool` but not a constant one (**L§5.14**).
       NodeData::DirectiveCompileTime => Expr::value(TypeId::BOOL),
+      // An `#insert` where a value goes stands for the one expression its text
+      // parses into (**L§13.2**).
+      NodeData::DirectiveInsert(_) => match self.insert_expression(scope, source, node) {
+        Some((source, scope, expression)) => self.expression_type(scope, source, expression),
+        None => Expr::UNKNOWN,
+      },
       // `#code,null` is the one `Code` that is a constant on its own: it names
       // no program, tests false, and inserts nothing (**L§13.1**).
       NodeData::DirectiveCode { flags, .. } if flags.contains(oj_syntax::ast::CodeFlags::NULL) => {

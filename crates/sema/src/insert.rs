@@ -48,6 +48,33 @@ impl Checker<'_> {
     source: SourceId,
     node: NodeId,
   ) -> Option<Expansion> {
+    self.expand_insert_as(scope, source, node, None)
+  }
+
+  /// The one expression an `#insert` in expression position stands for
+  /// (**L§13.2**), with the source and scope to read it in.
+  pub fn insert_expression(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<(SourceId, ScopeId, NodeId)> {
+    let expansion = self.expand_insert_as(scope, source, node, Some(InsertKind::Expression))?;
+    let ast = self.ast(expansion.source)?;
+    let expression = match ast.data(expansion.root) {
+      NodeData::Block(block) => *block.statements.first()?,
+      _ => expansion.root,
+    };
+    Some((expansion.source, expansion.scope, expression))
+  }
+
+  fn expand_insert_as(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    kind: Option<InsertKind>,
+  ) -> Option<Expansion> {
     if let Some(existing) = self.program().expansion_of(source, node) {
       return Some(existing);
     }
@@ -68,7 +95,7 @@ impl Checker<'_> {
       .value;
     match value {
       Value::String(text) => {
-        let kind = insert_kind(self, target);
+        let kind = kind.unwrap_or_else(|| insert_kind(self, target));
         self
           .program()
           .insert_source(target, kind, (source, node), &text)

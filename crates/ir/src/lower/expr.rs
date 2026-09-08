@@ -384,6 +384,18 @@ impl Lowering<'_, '_> {
         self.unsupported(source, node, "an anonymous procedure", "M7");
         None
       }
+      // An `#insert` where a value goes is the one expression its text parsed
+      // into, read in the scope the `#insert` was written in (**L§13.2**).
+      NodeData::DirectiveInsert(_) => {
+        let (inner_source, inner_scope, expression) =
+          self.checker.insert_expression(scope, source, node)?;
+        let previous_source = std::mem::replace(&mut self.body_source, inner_source);
+        let previous_scope = std::mem::replace(&mut self.body_scope, inner_scope);
+        let value = self.expression(inner_scope, inner_source, expression, want);
+        self.body_source = previous_source;
+        self.body_scope = previous_scope;
+        value
+      }
       // `#compile_time` is a value each back end folds for itself: true in
       // compile-time code, false in the executable (**L§6.10**).
       NodeData::DirectiveCompileTime => {

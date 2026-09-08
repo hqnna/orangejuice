@@ -529,3 +529,18 @@ fn an_inserted_string_declares_names_the_checker_then_types() {
     },
   );
 }
+
+#[test]
+fn an_inserted_string_can_stand_where_an_expression_goes() {
+  check(
+    "
+    a :: \"20;\";
+    b :: \"22;\";
+    total :: (#insert a) + (#insert b);
+    ",
+    |checker| {
+      assert_eq!(errors(checker), Vec::<String>::new());
+      assert_eq!(type_of(checker, "total"), "s64");
+    },
+  );
+}
