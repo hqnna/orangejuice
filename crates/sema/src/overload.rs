@@ -182,6 +182,12 @@ impl Checker<'_> {
       } else {
         parameter.type_id
       };
+      // An argument to a macro's `Code` parameter is wrapped rather than
+      // converted: whatever was written is the code (**L§7.13**).
+      if signature.is_macro && target == TypeId::CODE {
+        total = total.saturating_add(convert::LITERAL);
+        continue;
+      }
       total = total.saturating_add(self.argument_distance(&argument.value, target)?);
     }
     if signature.polymorphic {

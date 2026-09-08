@@ -1754,23 +1754,36 @@ impl Lowering<'_, '_> {
     // written; each parameter becomes a local of the expansion.
     let mut given = 0usize;
     for (index, type_id) in signature.arguments.iter().copied().enumerate() {
-      let value = match &plan.varargs {
-        Some((slot, view, extra)) if *slot == index => {
+      let declared = body.parameters.get(index).copied().flatten();
+      let spread = matches!(&plan.varargs, Some((slot, _, _)) if *slot == index);
+      let written = match spread {
+        true => None,
+        false => {
+          let argument = *plan.arguments.get(given)?;
+          given += 1;
+          Some(argument)
+        }
+      };
+      // A parameter the expansion folded into a constant has no storage, and
+      // a `Code` one is the argument itself, which is spliced in wherever the
+      // body says rather than evaluated here (**L§7.13**).
+      if declared.is_some_and(|decl| self.checker.instance_binds(decl)) {
+        continue;
+      }
+      let value = match (written, &plan.varargs) {
+        (Some(argument), _) => self.expression(
+          argument.scope,
+          argument.source,
+          argument.node,
+          Some(type_id),
+        )?,
+        (None, Some((_, view, extra))) => {
           let extra = extra.clone();
           self.gather_varargs(*view, &extra, plan.varargs_spread)?
         }
-        _ => {
-          let argument = *plan.arguments.get(given)?;
-          given += 1;
-          self.expression(
-            argument.scope,
-            argument.source,
-            argument.node,
-            Some(type_id),
-          )?
-        }
+        (None, None) => continue,
       };
-      let Some(decl) = body.parameters.get(index).copied().flatten() else {
+      let Some(decl) = declared else {
         continue;
       };
       let name = {
