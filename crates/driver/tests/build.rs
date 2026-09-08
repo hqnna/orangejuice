@@ -1391,3 +1391,12 @@ fn a_named_return_left_out_takes_its_default() {
     "8\n0\n",
   );
 }
+
+#[test]
+fn caller_code_reaches_a_macros_body_as_a_default() {
+  assert_output(
+    "twice :: (v: int, call := #caller_code) -> int #expand { return v * 2; }\n\
+     main :: () { put_number(twice(21)); }\n",
+    "42\n",
+  );
+}

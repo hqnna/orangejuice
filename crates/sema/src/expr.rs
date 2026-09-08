@@ -90,11 +90,24 @@ impl Checker<'_> {
         let location = self.source_code_location_type();
         Expr::value(location)
       }
+      // `#caller_code` is the whole call the macro was expanded from, as
+      // `Code` (**L§7.13**).
+      NodeData::DirectiveCallerCode => match self.expansion_site().or(self.call_site) {
+        Some(site) => Expr::constant(Const::new(
+          TypeId::CODE,
+          Value::Code {
+            source: site.source,
+            node: site.node,
+            scope: site.caller_scope,
+          },
+        )),
+        None => Expr::value(TypeId::CODE),
+      },
       NodeData::DirectiveProcedureName { .. } => Expr::value(TypeId::STRING),
       NodeData::DirectiveExists(_) => Expr::constant(Const::bool(false)),
       // `#compile_time` is a `bool` but not a constant one (**L§5.14**).
       NodeData::DirectiveCompileTime => Expr::value(TypeId::BOOL),
-      NodeData::DirectiveCode { .. } | NodeData::DirectiveCallerCode => Expr::value(TypeId::CODE),
+      NodeData::DirectiveCode { .. } => Expr::value(TypeId::CODE),
       NodeData::DirectiveRun(_) => self.run_type(scope, source, node),
       // A block in expression position is an `ifx` branch: its value is its
       // last expression statement (**L§5.13**).

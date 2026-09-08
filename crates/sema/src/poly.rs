@@ -115,6 +115,20 @@ pub(crate) struct Solution {
 }
 
 impl Checker<'_> {
+  /// Where the innermost active macro was invoked (**L§7.13**), which is what
+  /// `#caller_code` names.
+  pub(crate) fn expansion_site(&self) -> Option<Expansion> {
+    let mut current = self.current_instance;
+    while let Some(id) = current {
+      let instance = self.instance(id);
+      if let Some(expansion) = instance.expansion {
+        return Some(expansion);
+      }
+      current = instance.parent;
+    }
+    None
+  }
+
   /// The scope a name that the macro's own scopes do not hold falls back to:
   /// the block the innermost active macro expanded into (**L§7.13**).
   pub(crate) fn caller_scope(&self) -> Option<ScopeId> {
@@ -604,6 +618,26 @@ impl Checker<'_> {
       solution
         .bindings
         .push((id, Const::new(TypeId::TYPE, Value::Type(bound))));
+    }
+
+    // A macro's `Code` parameter the call site left out takes its default,
+    // which is how `call := #caller_code` reaches the body (**L§7.13**).
+    if signature.is_macro {
+      for (index, parameter) in signature.parameters.iter().enumerate() {
+        if parameter.type_id != TypeId::CODE || slots.contains(&index) {
+          continue;
+        }
+        let (Some(default), Some(decl)) = (
+          parameter.default,
+          self.header_parameter_decl(source, signature, index),
+        ) else {
+          continue;
+        };
+        let scope = self.scope_at(source, default, scopes.arguments);
+        if let Some(value) = self.expression_type(scope, source, default).constant {
+          solution.bindings.push((decl, value));
+        }
+      }
     }
 
     // A parameter whose type mentions a variable that no constants block
