@@ -434,6 +434,21 @@ impl Checker<'_> {
           ..Expr::constant(value)
         };
       }
+      // `assert :: Basic.assert` is a name for what it aliases rather than a
+      // value of its own, which is what lets a call site resolve it the way it
+      // would resolve the original — a polymorphic procedure and a macro have
+      // no type until then (**L§7.5**, **L§7.8**).
+      let aliased = self.aliased_declarations(only);
+      if !aliased.is_empty() {
+        let type_id = match aliased[..] {
+          [target] => self.decl_type(target).value,
+          _ => TypeId::OVERLOAD_SET,
+        };
+        return Expr {
+          overloads: aliased,
+          ..Expr::value(type_id)
+        };
+      }
       return Expr {
         overloads: vec![only],
         ..Expr::value(resolved.value)
@@ -443,6 +458,42 @@ impl Checker<'_> {
       overloads: vec![only],
       ..Expr::place(resolved.value)
     }
+  }
+
+  /// What a constant that is written as a bare name or a module member
+  /// stands for, when that name is one or more procedures (**L§7.5**). The
+  /// alias is those declarations rather than a value, which is what lets a
+  /// call site resolve it the way it would resolve the original.
+  fn aliased_declarations(&mut self, decl: DeclId) -> Vec<DeclId> {
+    let info = self.program().tree().decl(decl);
+    let (Some(source), Some(node)) = (info.source, info.node) else {
+      return Vec::new();
+    };
+    let Some(NodeData::Declaration(declaration)) = self.ast(source).map(|ast| ast.data(node))
+    else {
+      return Vec::new();
+    };
+    let Some(expression) = declaration.expression else {
+      return Vec::new();
+    };
+    let names_a_name = matches!(
+      self.ast(source).map(|ast| ast.data(expression)),
+      Some(NodeData::Ident(_))
+        | Some(NodeData::BinaryOperator {
+          operator: oj_syntax::ast::OperatorType::DOT,
+          ..
+        })
+    );
+    if !names_a_name {
+      return Vec::new();
+    }
+    let aliased = self
+      .expression_type(info.scope, source, expression)
+      .overloads;
+    aliased
+      .into_iter()
+      .filter(|id| *id != decl && self.program().tree().decl(*id).kind == DeclKind::Procedure)
+      .collect()
   }
 
   fn unary_type(

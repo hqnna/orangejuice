@@ -148,6 +148,7 @@ struct Names {
   is_cross_compiling: Symbol,
   machine_options_size: Symbol,
   temporary_storage_size: Symbol,
+  stack_trace: Symbol,
   operating_system_tag: Symbol,
   cpu_tag: Symbol,
   count: Symbol,
@@ -191,6 +192,7 @@ impl Names {
       is_cross_compiling: interner.intern(b"IS_CROSS_COMPILING"),
       machine_options_size: interner.intern(b"MACHINE_OPTIONS_SIZE"),
       temporary_storage_size: interner.intern(b"TEMPORARY_STORAGE_SIZE"),
+      stack_trace: interner.intern(b"_STACK_TRACE"),
       operating_system_tag: interner.intern(b"Operating_System_Tag"),
       cpu_tag: interner.intern(b"CPU_Tag"),
       count: interner.intern(b"count"),
@@ -1056,6 +1058,10 @@ impl<'a> Checker<'a> {
     }
     // Runtime_Support sizes the first thread's temporary storage by this, and
     // the compiler is what defines it, from `Build_Options` (**C§4**).
+    if name == self.names.stack_trace {
+      self.record_constant(id, Const::bool(true));
+      return DeclType::value(TypeId::BOOL);
+    }
     if name == self.names.temporary_storage_size {
       let size = i128::from(TEMPORARY_STORAGE_SIZE);
       self.record_constant(id, Const::new(TypeId::S64, crate::Value::Int(size)));

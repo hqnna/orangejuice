@@ -28,6 +28,7 @@ preload [0]
   builtin IS_CROSS_COMPILING
   builtin MACHINE_OPTIONS_SIZE
   builtin TEMPORARY_STORAGE_SIZE
+  builtin _STACK_TRACE
   module [1]
     module Helper -> [3]
     constant MAX

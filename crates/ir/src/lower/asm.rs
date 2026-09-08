@@ -892,7 +892,8 @@ impl Lowering<'_, '_> {
           text.push_str(&register_name(register.class, register.assigned, bits));
         }
         Operand::Slot(index) => {
-          text.push_str(&slot_name(operands, *index, instruction));
+          let used = instruction.bits_for(operands.slots[*index].class);
+          text.push_str(&slot_name(operands, *index, used));
         }
         Operand::Memory {
           base,
@@ -1020,15 +1021,16 @@ fn place_name(operands: &Operands, place: Place, bits: u32, instruction: &Resolv
       };
       register_name(register.class, register.assigned, bits)
     }
-    Place::Slot(index) => slot_name(operands, index, instruction),
+    // A base and an index are addresses, whatever width the instruction
+    // works at.
+    Place::Slot(index) => slot_name(operands, index, bits),
   }
 }
 
 /// An operand of the assembly, with the size modifier that says which part of
 /// it this instruction means when the block uses it at more than one width.
-fn slot_name(operands: &Operands, index: usize, instruction: &Resolved) -> String {
+fn slot_name(operands: &Operands, index: usize, used: u32) -> String {
   let slot = &operands.slots[index];
-  let used = instruction.bits_for(slot.class);
   if used == slot.bits {
     return format!("${}", slot.position);
   }

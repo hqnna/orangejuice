@@ -527,8 +527,10 @@ impl<'a> Program<'a> {
     self.declare_builtin(b"IS_CROSS_COMPILING", Some(ConstValue::Bool(false)));
     self.declare_builtin(b"MACHINE_OPTIONS_SIZE", Some(ConstValue::Int(256)));
     // Runtime_Support sizes the first thread's temporary storage by this, and
-    // the compiler is what defines it (**C§4**).
+    // the compiler is what defines it, out of `Build_Options` (**C§4**);
+    // `_STACK_TRACE` is where `Build_Options.stack_trace` reaches the modules.
     self.declare_builtin(b"TEMPORARY_STORAGE_SIZE", Some(ConstValue::Int(32768)));
+    self.declare_builtin(b"_STACK_TRACE", Some(ConstValue::Bool(true)));
   }
 
   fn declare_builtin(&self, name: &[u8], value: Option<ConstValue>) {

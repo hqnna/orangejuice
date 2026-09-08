@@ -1716,3 +1716,61 @@ fn a_foreign_procedure_takes_and_returns_a_struct_by_value() {
   assert_eq!(built.status, 0, "the program should exit cleanly");
   assert_eq!(built.output, "42\n42\n402\n42\n75\n42\n33\n");
 }
+
+#[test]
+fn a_c_call_procedure_is_a_callback_a_library_can_call() {
+  assert_output(
+    "qsort :: (base: *void, count: u64, size: u64, compare: (*void, *void) -> s32 #c_call)\n\
+       #foreign libc;\n\
+     compare_ints :: (a: *void, b: *void) -> s32 #c_call {\n\
+       x := (cast(*s32) a).*;\n\
+       y := (cast(*s32) b).*;\n\
+       if x < y  return -1;\n\
+       if x > y  return 1;\n\
+       return 0;\n\
+     }\n\
+     main :: () {\n\
+       values: [5] s32;\n\
+       values[0] = 5; values[1] = 3; values[2] = 9; values[3] = 1; values[4] = 7;\n\
+       qsort(values.data, 5, size_of(s32), compare_ints);\n\
+       for values  put_number(cast(int) it);\n\
+     }\n",
+    "1\n3\n5\n7\n9\n",
+  );
+}
+
+#[test]
+fn threads_run_the_procedure_they_were_given() {
+  assert_output(
+    "Thread :: #import \"Thread\";\n\
+     Atomics :: #import \"Atomics\";\n\
+     counter: s64 = 0;\n\
+     worker :: (thread: *Thread.Thread) -> s64 {\n\
+       for 1..1000  Atomics.atomic_add(*counter, 1);\n\
+       return 0;\n\
+     }\n\
+     main :: () {\n\
+       threads: [4] Thread.Thread;\n\
+       for * threads  Thread.thread_init(it, worker);\n\
+       for * threads  Thread.thread_start(it);\n\
+       for * threads  while !Thread.thread_is_done(it) {}\n\
+       put_number(counter);\n\
+     }\n",
+    "4000\n",
+  );
+}
+
+#[test]
+fn a_constant_that_names_a_polymorphic_procedure_is_that_procedure() {
+  assert_output(
+    "Basic :: #import \"Basic\";\n\
+     assert :: Basic.assert;\n\
+     double :: (x: $T) -> T { return x + x; }\n\
+     twice :: double;\n\
+     main :: () {\n\
+       assert(twice(21) == 42);\n\
+       put_number(twice(21));\n\
+     }\n",
+    "42\n",
+  );
+}
