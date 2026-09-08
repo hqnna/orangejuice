@@ -31,6 +31,30 @@ impl Lowering<'_, '_> {
       }
     }
 
+    // A polymorphic procedure or a quick lambda takes the shape of the
+    // concrete procedure it is given to (**L§7.8**, **L§7.9**).
+    if let Some(target) = want
+      && matches!(
+        self.checker.tree_of(source).map(|ast| ast.data(node)),
+        Some(NodeData::Ident(_) | NodeData::ProcedureHeader(_))
+      )
+      && let Some(instance) = self
+        .checker
+        .procedure_instance_for(scope, source, node, target)
+    {
+      let id = self.instance_id(instance);
+      let procedure_type = self.procedures[id.0 as usize].type_id;
+      let dest = self.value(procedure_type);
+      self.emit(Inst::ProcedureAddress {
+        dest,
+        procedure: id,
+      });
+      return Some(Val {
+        id: dest,
+        type_id: procedure_type,
+        indirect: false,
+      });
+    }
     // `xx e` has no type of its own: whatever asked for the value decides it
     // (**L§5.6**), so it is not the unknown the next check reports.
     if self.checker.types().is_unknown(info.type_id) && info.overloads.is_empty() && !info.autocast
@@ -1574,9 +1598,25 @@ impl Lowering<'_, '_> {
         let id = self.instance_id(instance);
         (Callee::Direct(id), self.procedures[id.0 as usize].flags)
       }
-      (None, Some(decl)) => {
+      // A declaration that *is* a procedure is called by name; a parameter or
+      // a constant that merely holds one is called through its value
+      // (**L§7.5**).
+      (None, Some(decl)) if self.checker.procedure_body(decl).is_some() => {
         let id = self.procedure_id(decl);
         (Callee::Direct(id), self.procedures[id.0 as usize].flags)
+      }
+      (None, Some(decl)) => {
+        let value = self.declaration_value(source, node, decl, plan.type_id)?;
+        let pointer = self.scalar(value);
+        let mut flags = ProcedureFlags::empty();
+        if let Some(signature) = self.checker.types().procedure_of(plan.type_id)
+          && signature.flags.intersects(
+            oj_types::ProcedureFlags::IS_C_CALL | oj_types::ProcedureFlags::HAS_NO_CONTEXT,
+          )
+        {
+          flags |= ProcedureFlags::NO_CONTEXT;
+        }
+        (Callee::Indirect(pointer), flags)
       }
       (None, None) => {
         let NodeData::ProcedureCall(call) = self.checker.tree_of(source)?.data(node).clone() else {

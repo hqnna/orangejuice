@@ -220,6 +220,42 @@ impl Checker<'_> {
     }
   }
 
+  /// A polymorphic procedure written where a concrete one is wanted is
+  /// instantiated to it (**L§7.8**), which is also how a quick lambda passed
+  /// as an argument becomes a real procedure (**L§7.9**).
+  pub fn procedure_instance_for(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    target: TypeId,
+  ) -> Option<InstanceId> {
+    let key = (self.current_instance, source, node);
+    if let Some(found) = self.argument_instances.get(&key) {
+      return Some(*found);
+    }
+    let wanted = self.types().procedure_of(target).cloned()?;
+    let value = self.expression_type(scope, source, node);
+    let signature = match self.polymorphic_procedure(&value) {
+      Some(decl) => self.signature_of(decl),
+      None => match self.ast(source).map(|ast| ast.data(node)) {
+        Some(NodeData::ProcedureHeader(_)) => self.signature_of_header(source, node, scope),
+        _ => None,
+      },
+    };
+    let signature = signature.filter(|signature| signature.polymorphic)?;
+    let arguments: Vec<crate::overload::CallArgument> = wanted
+      .arguments
+      .iter()
+      .map(|type_id| crate::overload::CallArgument::positional(Expr::value(*type_id)))
+      .collect();
+    let specialized = self.specialize(&signature, &arguments)?;
+    let instance = specialized.instance?;
+    self.use_instance(instance);
+    self.argument_instances.insert(key, instance);
+    Some(instance)
+  }
+
   /// Which instantiation a declaration belongs to, as the active one sees it:
   /// a local written inside a macro's body is a different local in every
   /// expansion (**L§7.8**, **L§7.13**).
@@ -435,9 +471,11 @@ impl Checker<'_> {
           .map_or(slot.type_id, |(element, _)| element),
         false => slot.type_id,
       };
+      let written = self.scope_at(source, argument.expression, scope);
+      self.procedure_instance_for(written, source, argument.expression, target);
       let planned = PlannedArgument {
         source,
-        scope: self.scope_at(source, argument.expression, scope),
+        scope: written,
         node: argument.expression,
         target,
       };

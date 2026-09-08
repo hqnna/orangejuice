@@ -40,6 +40,18 @@ impl Checker<'_> {
     {
       return Some(POLYMORPH);
     }
+    // A polymorphic procedure takes the shape of the concrete one it is
+    // given to (**L§7.8**), which is how a quick lambda becomes a member's
+    // value (**L§7.9**).
+    if self.types().procedure_of(target).is_some()
+      && self.types().procedure_of(from).is_some_and(|signature| {
+        signature
+          .flags
+          .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC)
+      })
+    {
+      return Some(POLYMORPH);
+    }
 
     // Every value converts to `Any`, except an untyped struct or array literal
     // and a bare unary-dot enum name, which have no type to record

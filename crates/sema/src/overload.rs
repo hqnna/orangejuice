@@ -1,6 +1,6 @@
 use oj_diag::SourceId;
 use oj_lexer::Symbol;
-use oj_scope::DeclId;
+use oj_scope::{DeclId, ScopeId};
 use oj_syntax::ast::{Argument, DeclarationFlags, NodeData, NodeFlags, NodeId};
 use oj_types::TypeId;
 
@@ -237,6 +237,21 @@ impl Checker<'_> {
     if let Some(distance) = self.implicit_conversion(value, target) {
       return Some(distance);
     }
+    // A polymorphic procedure passed where a concrete one is wanted is
+    // instantiated to it (**L§7.8**).
+    if self.types().procedure_of(target).is_some()
+      && (self.polymorphic_procedure(value).is_some()
+        || self
+          .types()
+          .procedure_of(value.type_id)
+          .is_some_and(|signature| {
+            signature
+              .flags
+              .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC)
+          }))
+    {
+      return Some(convert::POLYMORPH);
+    }
     let pointee = self.types().pointee(value.type_id)?;
     self.types().struct_of(pointee)?;
     let mut dereferenced = value.clone();
@@ -301,6 +316,47 @@ impl Checker<'_> {
       decl: Some(candidate),
       header,
       type_id: resolved.value,
+      instance: None,
+    })
+  }
+
+  /// The polymorphic procedure a name or a written header stands for, when it
+  /// has no runtime value of its own (**L§7.8**).
+  pub(crate) fn polymorphic_procedure(&mut self, value: &Expr) -> Option<DeclId> {
+    let [only] = value.overloads[..] else {
+      return None;
+    };
+    let signature = self.signature_of(only)?;
+    signature.polymorphic.then_some(only)
+  }
+
+  /// A candidate built from a header nobody declared: a quick lambda written
+  /// where an argument goes (**L§7.9**).
+  pub(crate) fn signature_of_header(
+    &mut self,
+    source: SourceId,
+    header: NodeId,
+    scope: ScopeId,
+  ) -> Option<Signature> {
+    let type_id = self.procedure_type(source, header, scope);
+    let procedure = self.types().procedure_of(type_id)?.clone();
+    let parameters = self.header_parameters(source, header, &procedure.arguments);
+    let polymorphic = procedure
+      .flags
+      .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC)
+      || procedure
+        .arguments
+        .iter()
+        .any(|argument| self.is_polymorphic_type(*argument));
+    Some(Signature {
+      parameters,
+      returns: procedure.returns.clone(),
+      vararg_slot: procedure.vararg_index.map(|index| index as usize),
+      polymorphic,
+      is_macro: self.is_macro_header(source, header),
+      decl: None,
+      header: Some((source, header)),
+      type_id,
       instance: None,
     })
   }
@@ -394,7 +450,7 @@ impl Checker<'_> {
   /// The named and positional arguments of a call, typed.
   pub(crate) fn call_arguments(
     &mut self,
-    scope: oj_scope::ScopeId,
+    scope: ScopeId,
     source: SourceId,
     arguments: &[Argument],
   ) -> Vec<CallArgument> {

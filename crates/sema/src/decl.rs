@@ -132,6 +132,14 @@ impl Checker<'_> {
     }
 
     let Some(expression) = declaration.expression else {
+      // A parameter with neither a type slot nor a default is a quick
+      // lambda's, and those are all `$`-inferred (**L§7.9**).
+      if self.program().tree().decl(id).kind == oj_scope::DeclKind::Parameter
+        && let Some(name) = name
+        && let Some(at) = self.program().tree().decl(id).node
+      {
+        return DeclType::value(self.polymorph_type(source, at, name));
+      }
       return DeclType::UNKNOWN;
     };
     let value = self.expression_type(decl_scope, source, expression);
@@ -236,7 +244,12 @@ impl Checker<'_> {
     signature.flags = procedure_flags(flags);
 
     for (index, parameter) in payload.arguments.iter().enumerate() {
-      let (type_id, varargs) = self.parameter_type(source, *parameter, outer);
+      let (type_id, varargs) = self.parameter_type(
+        source,
+        *parameter,
+        outer,
+        flags.contains(ProcedureFlags::QUICK),
+      );
       if varargs {
         signature.varargs = true;
         signature.vararg_index = Some(index as u32);
@@ -249,11 +262,65 @@ impl Checker<'_> {
       signature.arguments.push(type_id);
     }
     for parameter in &payload.returns {
-      let (type_id, _) = self.parameter_type(source, *parameter, outer);
+      let (type_id, _) = self.parameter_type(
+        source,
+        *parameter,
+        outer,
+        flags.contains(ProcedureFlags::QUICK),
+      );
       signature.returns.push(type_id);
+    }
+    // A quick lambda's return type is the one thing in the language that is
+    // inferred from a body (**L§7.9**).
+    if payload.returns.is_empty()
+      && flags.contains(ProcedureFlags::QUICK)
+      && let Some(inferred) = self.quick_return_type(source, header, outer)
+    {
+      signature.returns.push(inferred);
     }
 
     self.types_mut().procedure(signature)
+  }
+
+  /// What a quick lambda's body returns (**L§7.9**). `None` when the body has
+  /// no `return` with a value, which makes the lambda return nothing.
+  fn quick_return_type(
+    &mut self,
+    source: SourceId,
+    header: NodeId,
+    outer: ScopeId,
+  ) -> Option<TypeId> {
+    let NodeData::ProcedureHeader(payload) = self.ast(source)?.data(header) else {
+      return None;
+    };
+    let body = payload.body_or_null?;
+    let NodeData::ProcedureBody { block, .. } = self.ast(source)?.data(body) else {
+      return None;
+    };
+    let value = self.first_returned_value(source, *block)?;
+    let scope = self.scope_at(source, value, outer);
+    let type_id = self.expression_type(scope, source, value).type_id;
+    match self.types().is_unknown(type_id) {
+      true => None,
+      false => Some(self.harden(type_id)),
+    }
+  }
+
+  /// The first value a block `return`s, however deeply it is nested.
+  fn first_returned_value(&self, source: SourceId, node: NodeId) -> Option<NodeId> {
+    let ast = self.ast(source)?;
+    match ast.data(node) {
+      NodeData::Return { arguments, .. } => arguments.first().map(|argument| argument.expression),
+      NodeData::Block(block) => block
+        .statements
+        .iter()
+        .find_map(|statement| self.first_returned_value(source, *statement)),
+      NodeData::If(payload) => [payload.then_block, payload.else_block]
+        .into_iter()
+        .flatten()
+        .find_map(|branch| self.first_returned_value(source, branch)),
+      _ => None,
+    }
   }
 
   /// One parameter or named return. `using p: Player` and `$T` parameters look
@@ -263,6 +330,7 @@ impl Checker<'_> {
     source: SourceId,
     parameter: NodeId,
     outer: ScopeId,
+    quick: bool,
   ) -> (TypeId, bool) {
     // A parameter the instantiation gave a type of its own is that type,
     // whatever the header wrote (**L§7.8**).
@@ -285,6 +353,15 @@ impl Checker<'_> {
         let Some(type_inst) = declaration.type_inst else {
           // `name := "Hello"` is a parameter typed by its default (**L§5.10**).
           let Some(expression) = declaration.expression else {
+            // A quick lambda's parameters are all `$`-inferred (**L§7.9**).
+            let name = declaration
+              .name
+              .and_then(|node| self.ident_name(source, node));
+            if let Some(name) = name
+              && quick
+            {
+              return (self.polymorph_type(source, parameter, name), false);
+            }
             return (TypeId::UNKNOWN, false);
           };
           let value = self.expression_type(outer, source, expression);
@@ -295,7 +372,7 @@ impl Checker<'_> {
       }
       NodeData::Using(using) => {
         let expression = using.expression;
-        self.parameter_type(source, expression, outer)
+        self.parameter_type(source, expression, outer, quick)
       }
       _ => (TypeId::UNKNOWN, false),
     }

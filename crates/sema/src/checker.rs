@@ -295,6 +295,9 @@ pub struct Checker<'a> {
   pub(crate) call_site: Option<Expansion>,
   /// The `for_expansion` each `for` over a container reached (**L§7.14**).
   pub(crate) loop_expansions: crate::loops::LoopExpansions,
+  /// The instantiation each polymorphic procedure written as an argument
+  /// became (**L§7.8**).
+  pub(crate) argument_instances: HashMap<(Option<InstanceId>, SourceId, NodeId), InstanceId>,
 }
 
 /// Deep enough for the module tree's nested types, shallow enough that a
@@ -394,6 +397,7 @@ impl<'a> Checker<'a> {
       checked_instances: HashSet::new(),
       call_site: None,
       loop_expansions: HashMap::new(),
+      argument_instances: HashMap::new(),
     }
   }
 

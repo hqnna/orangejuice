@@ -1311,3 +1311,30 @@ fn a_pointer_to_a_struct_is_indexed_when_nothing_overloads_the_subscript() {
     "11\n",
   );
 }
+
+#[test]
+fn a_quick_lambda_is_a_polymorphic_procedure() {
+  assert_output(
+    "square :: x => x * x;\n\
+     apply :: (f: (int) -> int, v: int) -> int { return f(v); }\n\
+     main :: () {\n\
+       put_number(square(3));\n\
+       put_number(apply(square, 5));\n\
+       put_number(apply(x => x + 1, 41));\n\
+     }\n",
+    "9\n25\n42\n",
+  );
+}
+
+#[test]
+fn a_procedure_held_in_a_member_is_called_through_its_value() {
+  assert_output(
+    "Handler :: struct { run: (int) -> int; }\n\
+     main :: () {\n\
+       h: Handler;\n\
+       h.run = x => x * 3;\n\
+       put_number(h.run(14));\n\
+     }\n",
+    "42\n",
+  );
+}

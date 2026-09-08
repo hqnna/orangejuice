@@ -593,6 +593,21 @@ impl Checker<'_> {
         .push((id, Const::new(TypeId::TYPE, Value::Type(bound))));
     }
 
+    // A parameter whose type mentions a variable that no constants block
+    // declares — a quick lambda's, which are all `$`-inferred (**L§7.9**) —
+    // takes the solved type directly.
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+      let solved = self.substitute(parameter.type_id, &substitution);
+      if solved == parameter.type_id {
+        continue;
+      }
+      if let Some(decl) = self.header_parameter_decl(source, signature, index)
+        && !solution.overrides.iter().any(|(bound, _)| *bound == decl)
+      {
+        solution.overrides.push((decl, solved));
+      }
+    }
+
     let _ = header;
     solution.bindings.sort_by_key(|(id, _)| *id);
     Some(solution)
@@ -667,6 +682,23 @@ impl Checker<'_> {
       _ => parameter,
     };
     self.decl_at(source, parameter)
+  }
+
+  /// The type with every polymorph variable the solution decided replaced by
+  /// what it decided (**L§7.8**).
+  fn substitute(&mut self, type_id: TypeId, substitution: &HashMap<PolymorphId, TypeId>) -> TypeId {
+    match self.types().kind(type_id).clone() {
+      TypeKind::Polymorph(definition) => substitution.get(&definition).copied().unwrap_or(type_id),
+      TypeKind::Pointer(pointee) => {
+        let pointee = self.substitute(pointee, substitution);
+        self.types_mut().pointer_to(pointee)
+      }
+      TypeKind::Array { element, kind } => {
+        let element = self.substitute(element, substitution);
+        self.types_mut().array(element, kind)
+      }
+      _ => type_id,
+    }
   }
 
   /// Matches a parameter type against the type of what a call site passes,
