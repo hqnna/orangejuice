@@ -12,9 +12,11 @@ license = "MIT"
 oj-diag = { path = "crates/diag" }
 oj-lexer = { path = "crates/lexer" }
 oj-scope = { path = "crates/scope" }
+oj-sema = { path = "crates/sema" }
 oj-source = { path = "crates/source" }
 oj-syntax = { path = "crates/syntax" }
 oj-testsupport = { path = "crates/testsupport" }
+oj-types = { path = "crates/types" }
 
 bitflags = "2"
 clap = { version = "4", features = ["derive"] }

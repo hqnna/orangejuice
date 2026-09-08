@@ -270,6 +270,22 @@ impl<'a> Program<'a> {
     self.main
   }
 
+  /// The scope holding the members of the `struct`, `union` or `enum` written
+  /// at `node`. The typechecker reads the members from it in declaration
+  /// order, which is the order they are laid out in (**L§3.14**).
+  pub fn aggregate_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
+    self.aggregate_scopes.get(&(source, node)).copied()
+  }
+
+  /// Every recorded aggregate body, as `(source, node, members scope)`. The
+  /// typechecker inverts this to find the definition a member scope belongs to.
+  pub fn aggregate_scopes(&self) -> impl Iterator<Item = (SourceId, NodeId, ScopeId)> + '_ {
+    self
+      .aggregate_scopes
+      .iter()
+      .map(|((source, node), scope)| (*source, *node, *scope))
+  }
+
   pub fn has_errors(&self) -> bool {
     self.diagnostics.iter().any(Diagnostic::is_error)
   }
@@ -290,7 +306,7 @@ impl<'a> Program<'a> {
     self.declare_builtin(b"OS", Some(ConstValue::EnumName(linux)));
     self.declare_builtin(b"CPU", Some(ConstValue::EnumName(x64)));
     self.declare_builtin(b"IS_CROSS_COMPILING", Some(ConstValue::Bool(false)));
-    self.declare_builtin(b"MACHINE_OPTIONS_SIZE", None);
+    self.declare_builtin(b"MACHINE_OPTIONS_SIZE", Some(ConstValue::Int(256)));
   }
 
   fn declare_builtin(&mut self, name: &[u8], value: Option<ConstValue>) {

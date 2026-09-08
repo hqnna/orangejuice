@@ -1,0 +1,136 @@
+use oj_diag::SourceId;
+use oj_scope::ScopeId;
+use oj_syntax::ast::{InstFlags, NodeData, NodeId};
+use oj_types::{ArrayKind, FloatKind, PolymorphInfo, TypeId, TypeKind, VariantFlags, VariantInfo};
+
+use crate::checker::Checker;
+
+impl Checker<'_> {
+  /// The type a type slot stands for. Every type slot is a
+  /// `TYPE_INSTANTIATION` (**C§5.3**), whose shape says whether it is a
+  /// pointer, an array, a `#type` directive or an arbitrary type-valued
+  /// expression.
+  pub(crate) fn type_from_node(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> TypeId {
+    if !self.enter() {
+      return TypeId::UNKNOWN;
+    }
+    let result = self.type_from_node_inner(scope, source, node);
+    self.leave();
+    result
+  }
+
+  fn type_from_node_inner(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> TypeId {
+    let Some(ast) = self.ast(source) else {
+      return TypeId::UNKNOWN;
+    };
+    // A procedure type in a type slot needs no `#type` (**L§3.7**):
+    // `proc: (x: int) -> int;` and `initializer: (*void) #no_context;` are the
+    // header itself.
+    if matches!(ast.data(node), NodeData::ProcedureHeader(_)) {
+      return self.procedure_type(source, node, scope);
+    }
+    let NodeData::TypeInstantiation(inst) = ast.data(node) else {
+      // A type written where an expression was expected: a struct literal's
+      // type slot lands here.
+      return self
+        .expression_type(scope, source, node)
+        .denoted
+        .unwrap_or(TypeId::UNKNOWN);
+    };
+
+    if let Some(pointee) = inst.pointer_to {
+      let pointee = self.type_from_node(scope, source, pointee);
+      return self.types_mut().pointer_to(pointee);
+    }
+
+    if let Some(element) = inst.array_element_type {
+      let element = self.type_from_node(scope, source, element);
+      // `..T` in a parameter builds the callee's `[] T` (**L§7.4**).
+      let kind = if inst.inst_flags.contains(InstFlags::VARARGS)
+        || inst.inst_flags.contains(InstFlags::ARRAY_VIEW)
+      {
+        ArrayKind::View
+      } else if inst.inst_flags.contains(InstFlags::RESIZABLE) {
+        ArrayKind::Resizable
+      } else {
+        match inst
+          .array_dimension
+          .and_then(|dimension| self.const_int(scope, source, dimension))
+        {
+          Some(count) if count >= 0 => ArrayKind::Fixed(count as u64),
+          // `[$N] T` and dimensions that need the interpreter are not decided
+          // here; the array stays unknown rather than wrong.
+          _ => return TypeId::UNKNOWN,
+        }
+      };
+      return self.types_mut().array(element, kind);
+    }
+
+    if let Some(target) = inst.type_directive_target {
+      let base = self.type_from_node(scope, source, target);
+      let flags = if inst.inst_flags.contains(InstFlags::TYPE_DIRECTIVE_DISTINCT) {
+        VariantFlags::DISTINCT
+      } else if inst.inst_flags.contains(InstFlags::TYPE_DIRECTIVE_ISA) {
+        VariantFlags::ISA
+      } else {
+        // A bare `#type expr` only forces the parse; it makes no new type
+        // (**L§3.7**).
+        return base;
+      };
+      if base == TypeId::UNKNOWN {
+        return TypeId::UNKNOWN;
+      }
+      if let Some(existing) = self.aggregate_type(source, node) {
+        return existing;
+      }
+      let (_, type_id) = self.types_mut().new_variant(VariantInfo {
+        name: None,
+        base,
+        flags,
+      });
+      self.record_aggregate_type(source, node, type_id);
+      return type_id;
+    }
+
+    let Some(expression) = inst.type_valued_expression else {
+      return TypeId::UNKNOWN;
+    };
+
+    self.type_from_node(scope, source, expression)
+  }
+
+  /// Declares the polymorph variable `name` written at `node`, once per site.
+  pub(crate) fn polymorph_type(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    name: oj_lexer::Symbol,
+  ) -> TypeId {
+    if let Some(existing) = self.aggregate_type(source, node) {
+      return existing;
+    }
+    let (_, type_id) = self.types_mut().new_polymorph(PolymorphInfo {
+      name,
+      restriction: None,
+    });
+    self.record_aggregate_type(source, node, type_id);
+    type_id
+  }
+
+  /// Gives an untyped literal the type it defaults to when nothing else asks
+  /// for one: `s64` for integers, its own width for floats (**L§5.10**).
+  pub(crate) fn harden(&self, type_id: TypeId) -> TypeId {
+    match self.types().kind(type_id) {
+      TypeKind::UntypedInt => TypeId::S64,
+      TypeKind::UntypedFloat(FloatKind::F32) => TypeId::FLOAT32,
+      TypeKind::UntypedFloat(FloatKind::F64) => TypeId::FLOAT64,
+      TypeKind::UntypedEnum | TypeKind::UntypedLiteral | TypeKind::OverloadSet => TypeId::UNKNOWN,
+      _ => type_id,
+    }
+  }
+}

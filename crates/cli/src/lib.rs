@@ -95,6 +95,13 @@ pub enum DumpStage {
     #[arg(long)]
     file_only: bool,
   },
+  /// The types the file declares, with their layout
+  Types {
+    file: PathBuf,
+    /// Check this file alone, without following its `#load`s and `#import`s
+    #[arg(long)]
+    file_only: bool,
+  },
   /// The typed IR of the live procedures
   Ir {
     file: PathBuf,
@@ -193,6 +200,7 @@ fn execute(cli: &Cli) -> u8 {
       DumpStage::Tokens { file } => dump_tokens(file),
       DumpStage::Ast { file, tree } => dump_ast(file, *tree),
       DumpStage::Scopes { file, file_only } => dump_scopes(file, *file_only),
+      DumpStage::Types { file, file_only } => dump_types(file, *file_only),
       DumpStage::Ir { .. } => not_implemented("oj dump ir", "M5"),
       DumpStage::Asm { .. } => not_implemented("oj dump asm", "M5"),
     },
@@ -310,6 +318,40 @@ fn dump_scopes(path: &Path, file_only: bool) -> u8 {
     failed = true;
   }
   if failed { EXIT_FAILURE } else { EXIT_SUCCESS }
+}
+
+/// `oj dump types`: resolves one file the way `oj dump scopes` does, then
+/// types every declaration and prints the scope tree with each name's type and
+/// the layout of every struct and enum it declares.
+fn dump_types(path: &Path, file_only: bool) -> u8 {
+  let sources = SourceMap::new();
+  let interner = Interner::new();
+  let options = if file_only {
+    oj_scope::Options::single_file()
+  } else {
+    oj_scope::Options {
+      jai_dir: jai_dir(),
+      ..oj_scope::Options::default()
+    }
+  };
+
+  let program = oj_scope::Program::build(&sources, &interner, path, options);
+  let mut checker = oj_sema::Checker::new(&program);
+  checker.check();
+
+  print!("{}", oj_sema::print_types(&checker));
+  println!("{}", oj_sema::summary(&checker));
+
+  for diagnostic in program.diagnostics().iter().chain(checker.diagnostics()) {
+    let file = sources.file(diagnostic.source);
+    eprint!("{}", oj_diag::render(diagnostic, &file));
+  }
+
+  if program.has_errors() || checker.has_errors() || program.units().is_empty() {
+    EXIT_FAILURE
+  } else {
+    EXIT_SUCCESS
+  }
 }
 
 /// The jai distribution the standard modules come from: `OJ_JAI_DIR`, else a
@@ -467,6 +509,36 @@ mod tests {
     assert_eq!(dump_scopes_of("x := 1;\nx := 2;\n").0, EXIT_FAILURE);
     assert_eq!(
       exit_code(["oj", "dump", "scopes", "no/such/file.jai"]),
+      EXIT_FAILURE
+    );
+  }
+
+  fn dump_types_of(source: &str) -> (u8, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("input.jai");
+    std::fs::write(&path, source).expect("the input should be writable");
+    (
+      exit_code(["oj", "dump", "types", "--file-only", path.to_str().unwrap()]),
+      dir,
+    )
+  }
+
+  #[test]
+  fn dump_types_succeeds_on_a_well_formed_file() {
+    assert_eq!(
+      dump_types_of("Point :: struct { x, y: float; }\nmain :: () {}\n").0,
+      EXIT_SUCCESS
+    );
+  }
+
+  #[test]
+  fn dump_types_fails_on_a_struct_that_contains_itself_or_a_missing_file() {
+    assert_eq!(
+      dump_types_of("Bad :: struct { self: Bad; }\n").0,
+      EXIT_FAILURE
+    );
+    assert_eq!(
+      exit_code(["oj", "dump", "types", "no/such/file.jai"]),
       EXIT_FAILURE
     );
   }

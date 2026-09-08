@@ -355,6 +355,15 @@ impl ScopeTree {
     }
   }
 
+  /// The declarations of `name` an importer of `scope` can see: the scope's own
+  /// exported ones and whatever a transitive `using` made its own. This is what
+  /// `Module.name` reaches through a named `#import` (**L§11.2**).
+  pub fn lookup_exported(&self, scope: ScopeId, name: Symbol) -> Vec<DeclId> {
+    let mut found = Vec::new();
+    self.collect_exports(scope, name, &mut Vec::new(), &mut found);
+    found
+  }
+
   /// The exported declarations of `name` in the scopes `scope` imports, plus
   /// whatever those scopes made their own with a transitive `using`. What a
   /// scope merely `#import`ed stops there (**L§11.2**).
