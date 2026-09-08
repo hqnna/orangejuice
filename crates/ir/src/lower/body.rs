@@ -31,6 +31,7 @@ impl Lowering<'_, '_> {
     self.current = BlockId(0);
     self.local_of_decl.clear();
     self.asm_registers.clear();
+    self.asm_register_aliases.clear();
     self.loops.clear();
     self.expansions.clear();
     self.call_sites.clear();
@@ -1474,6 +1475,7 @@ impl Lowering<'_, '_> {
     self.current = BlockId(0);
     self.local_of_decl.clear();
     self.asm_registers.clear();
+    self.asm_register_aliases.clear();
     self.loops.clear();
     self.expansions.clear();
     self.call_sites.clear();

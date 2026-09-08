@@ -170,6 +170,10 @@ struct Lowering<'c, 'p> {
   /// The registers the `#asm` blocks of the procedure in hand have declared,
   /// which the blocks after them still name (**L§15**).
   asm_registers: HashMap<(Option<InstanceId>, DeclId), asm::AsmRegisterState>,
+  /// A macro parameter of type `__reg` names the caller's register rather than
+  /// storage of its own (**L§15**), so it is bound here instead of becoming a
+  /// local.
+  asm_register_aliases: HashMap<(Option<InstanceId>, DeclId), DeclId>,
   /// `Runtime_Support.__jai_runtime_init`, which the generated entry point
   /// calls before the program (**C§13**).
   runtime_init: Option<ProcId>,
@@ -213,6 +217,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       body_scope: ScopeId(0),
       body_source: SourceId(0),
       asm_registers: HashMap::new(),
+      asm_register_aliases: HashMap::new(),
       runtime_init: None,
     }
   }

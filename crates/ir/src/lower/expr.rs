@@ -1797,6 +1797,26 @@ impl Lowering<'_, '_> {
   /// parameters become locals holding what the call site passed, its `return`s
   /// jump to a block after the splice, and its value is whatever it left in
   /// the storage set aside for it.
+  /// `__reg`, the type Preload gives a register a macro can take (**L§15**).
+  fn is_register_type(&mut self, type_id: TypeId) -> bool {
+    let register = self.checker.preload_named_type("__reg");
+    !self.checker.types().is_unknown(register) && type_id == register
+  }
+
+  /// The `#asm` register an argument names, when it names one.
+  fn asm_register_named(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<DeclId> {
+    let info = self.checker.expression(scope, source, node);
+    let [only] = info.overloads[..] else {
+      return None;
+    };
+    (self.checker.program().tree().decl(only).kind == DeclKind::AsmRegister).then_some(only)
+  }
+
   fn expand_macro(&mut self, plan: &CallPlan, instance: InstanceId) -> Option<Vec<Val>> {
     let previous_instance = self.checker.enter_instance(Some(instance));
     // The whole expansion — its arguments and its body — is written at the
@@ -1841,6 +1861,17 @@ impl Lowering<'_, '_> {
       // a `Code` one is the argument itself, which is spliced in wherever the
       // body says rather than evaluated here (**L§7.13**).
       if declared.is_some_and(|decl| self.checker.instance_binds(decl)) {
+        continue;
+      }
+      // A macro may take a register (**L§15**): the name is bound to the
+      // caller's, and nothing is generated for the binding.
+      if let (Some(decl), Some(argument)) = (declared, written)
+        && self.is_register_type(type_id)
+        && let Some(target) =
+          self.asm_register_named(argument.scope, argument.source, argument.node)
+      {
+        let key = self.local_key(decl);
+        self.asm_register_aliases.insert(key, target);
         continue;
       }
       let value = match (written, &plan.varargs) {

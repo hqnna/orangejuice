@@ -72,7 +72,17 @@ enum Operand {
     index: Option<Place>,
     scale: u64,
     displacement: i64,
+    /// `[p]!` reads one lane and repeats it across the register (**L§15**).
+    broadcast: bool,
   },
+}
+
+/// The EVEX decorations an operand carries: the mask applied to what is
+/// written, and the rounding an instruction was told to use (**L§15**).
+#[derive(Default)]
+struct Decorations {
+  mask: Option<(usize, bool)>,
+  rounding: Option<Option<oj_syntax::ast::RoundingMode>>,
 }
 
 /// Where a memory operand's base or index sits.
@@ -92,6 +102,7 @@ struct Resolved {
   /// The `lock_` the reference writes into the opcode name (**L§15**).
   locked: bool,
   operands: Vec<Operand>,
+  decorations: Vec<Decorations>,
 }
 
 /// Where the lowering stands while it reads one operand.
@@ -139,6 +150,8 @@ struct Operands {
 struct Bindings {
   inputs: Vec<AsmBinding>,
   outputs: Vec<AsmBinding>,
+  /// The registers the block writes and nothing reads back.
+  clobbers: Vec<String>,
   /// Where each output goes: the storage, the value the block produced, and
   /// the type that storage was declared as.
   stores: Vec<(ValueId, ValueId, TypeId)>,
@@ -223,6 +236,7 @@ impl Lowering<'_, '_> {
       };
 
       let mut written_operands = Vec::new();
+      let mut written_decorations: Vec<Decorations> = Vec::new();
       for (position, operand) in instruction.operands.iter().enumerate() {
         let at = At {
           scope,
@@ -242,10 +256,15 @@ impl Lowering<'_, '_> {
           scalar_bits,
           vector_bits,
         };
-        let Some(operand) = self.asm_operand(&at, operand, &mut operands) else {
+        let decoration = match self.asm_decorations(&at, operand, &mut operands) {
+          Some(decoration) => decoration,
+          None => return,
+        };
+        let Some(resolved) = self.asm_operand(&at, operand, &mut operands) else {
           return;
         };
-        written_operands.push(operand);
+        written_operands.push(resolved);
+        written_decorations.push(decoration);
       }
       if instruction.mnemonic.is_some() {
         resolved.push(Resolved {
@@ -256,6 +275,7 @@ impl Lowering<'_, '_> {
           vex,
           locked,
           operands: written_operands,
+          decorations: written_decorations,
         });
       }
     }
@@ -282,7 +302,7 @@ impl Lowering<'_, '_> {
       text,
       inputs: bindings.inputs,
       outputs: bindings.outputs,
-      clobbers: Vec::new(),
+      clobbers: bindings.clobbers,
     });
     // The instructions used each operand at their own width, so what comes
     // back is narrowed to what the variable was declared as (**L§15**).
@@ -331,6 +351,7 @@ impl Lowering<'_, '_> {
     let mut outputs = Vec::new();
     let mut stores: Vec<(ValueId, ValueId, TypeId)> = Vec::new();
     let mut tied: Vec<(usize, ValueId)> = Vec::new();
+    let mut clobbers: Vec<String> = Vec::new();
 
     for slot in &operands.slots {
       let Some((address, type_id)) = slot.written.then_some(slot.address).flatten() else {
@@ -349,6 +370,11 @@ impl Lowering<'_, '_> {
     }
     for register in &operands.registers {
       let Some(local) = register.local else {
+        // A register the block uses but keeps nothing in is still one the
+        // procedure around it may not have left something live in.
+        if let Some(assigned) = register.assigned {
+          clobbers.push(constraint_name(register.class, Some(assigned)));
+        }
         continue;
       };
       let address = self.local_address(local);
@@ -385,10 +411,13 @@ impl Lowering<'_, '_> {
         });
       }
     }
+    clobbers.sort();
+    clobbers.dedup();
     Bindings {
       inputs,
       outputs,
       stores,
+      clobbers,
     }
   }
 
@@ -460,21 +489,51 @@ impl Lowering<'_, '_> {
     }
   }
 
+  /// The EVEX mask and rounding an operand was written with (**L§15**). A
+  /// mask names a register the block declared, so it is placed like any other.
+  fn asm_decorations(
+    &mut self,
+    at: &At,
+    operand: &AsmOperand,
+    operands: &mut Operands,
+  ) -> Option<Decorations> {
+    let mut decorations = Decorations::default();
+    if let Some(mask) = &operand.mask {
+      let at = At {
+        fresh: AsmClass::Omr,
+        pin: None,
+        writes: false,
+        ..*at
+      };
+      let Place::Register(index) = self.asm_place(&at, mask.register, false, operands)? else {
+        self.error(
+          at.source,
+          at.node,
+          "An '#asm' mask has to name a register the block declared (**L§15**).",
+        );
+        return None;
+      };
+      decorations.mask = Some((index, mask.zeroing));
+    }
+    // A `!` on a memory operand is the broadcast, which the operand itself
+    // carries; on a register one it is the rounding mode.
+    if let Some(flag) = operand.flag
+      && !matches!(operand.kind, AsmOperandKind::Memory(_))
+    {
+      decorations.rounding = Some(match flag {
+        oj_syntax::ast::AsmFlag::Plain => None,
+        oj_syntax::ast::AsmFlag::Rounding(mode) => Some(mode),
+      });
+    }
+    Some(decorations)
+  }
+
   fn asm_operand(
     &mut self,
     at: &At,
     operand: &AsmOperand,
     operands: &mut Operands,
   ) -> Option<Operand> {
-    if operand.mask.is_some() || operand.flag.is_some() {
-      self.error(
-        at.source,
-        at.node,
-        "orangejuice does not assemble the EVEX masking, broadcast and rounding \
-         operands of an '#asm' block yet (milestone M10).",
-      );
-      return None;
-    }
     match &operand.kind {
       AsmOperandKind::Declaration(declaration) => {
         let index = self.asm_declaration(at, declaration, operands)?;
@@ -533,6 +592,7 @@ impl Lowering<'_, '_> {
           index,
           scale,
           displacement,
+          broadcast: operand.flag.is_some(),
         })
       }
     }
@@ -635,7 +695,8 @@ impl Lowering<'_, '_> {
     by_reference: bool,
     operands: &mut Operands,
   ) -> Option<Place> {
-    let key = self.asm_key(at, expression);
+    let key = self.asm_key_of(at, expression);
+    let key = self.asm_alias(key);
     if let Some(place) = operands.by_key.get(&key).copied() {
       return match place {
         Place::Register(index) => {
@@ -699,7 +760,26 @@ impl Lowering<'_, '_> {
     Some(Place::Slot(index))
   }
 
-  fn asm_key(&mut self, at: &At, expression: NodeId) -> Key {
+  /// A macro parameter of type `__reg` is the caller's register (**L§15**).
+  fn asm_alias(&self, key: Key) -> Key {
+    let mut key = key;
+    for _ in 0..MAX_ALIAS_STEPS {
+      let Key::Decl(decl) = key else {
+        return key;
+      };
+      let Some(target) = self
+        .asm_register_aliases
+        .get(&self.local_key(decl))
+        .copied()
+      else {
+        return key;
+      };
+      key = Key::Decl(target);
+    }
+    key
+  }
+
+  fn asm_key_of(&mut self, at: &At, expression: NodeId) -> Key {
     let info = self.checker.expression(at.scope, at.source, expression);
     match info.overloads[..] {
       [only] => Key::Decl(only),
@@ -871,6 +951,11 @@ impl Lowering<'_, '_> {
         text.push('v');
       }
       text.push_str(form.text);
+      // AVX512 has no untyped `vmovdqu`: a 512-bit move names the lane width it
+      // moves in (**L§15**).
+      if instruction.vector_bits == 512 && matches!(form.text, "movdqu" | "movdqa") {
+        text.push_str("64");
+      }
     }
 
     let positions: Vec<usize> = match form.operands {
@@ -882,6 +967,7 @@ impl Lowering<'_, '_> {
         .filter(|position| *position < instruction.operands.len())
         .collect(),
     };
+    let mut rounding: Option<&str> = None;
     for (written, position) in positions.into_iter().enumerate() {
       text.push_str(if written == 0 { " " } else { ", " });
       match &instruction.operands[position] {
@@ -905,12 +991,17 @@ impl Lowering<'_, '_> {
           index,
           scale,
           displacement,
+          broadcast,
         } => {
           if !form.bare_memory {
-            let bits = form.memory_bits.unwrap_or(match form.class {
-              AsmClass::Vec => instruction.vector_bits,
-              _ => instruction.scalar_bits,
-            });
+            // A broadcast reads one lane, so what it names is that wide.
+            let bits = match broadcast {
+              true => form.element_bits,
+              false => form.memory_bits.unwrap_or(match form.class {
+                AsmClass::Vec => instruction.vector_bits,
+                _ => instruction.scalar_bits,
+              }),
+            };
             text.push_str(memory_size(bits));
           }
           text.push('[');
@@ -932,8 +1023,39 @@ impl Lowering<'_, '_> {
             std::cmp::Ordering::Equal => {}
           }
           text.push(']');
+          if *broadcast {
+            let lanes = instruction.vector_bits / form.element_bits.max(1);
+            let _ = write!(text, "{{1to{lanes}}}");
+          }
         }
       }
+      if let Some(decorations) = instruction.decorations.get(position) {
+        if let Some((index, zeroing)) = decorations.mask {
+          let register = &operands.registers[index];
+          let _ = write!(
+            text,
+            " {{{}}}",
+            register_name(register.class, register.assigned, 0)
+          );
+          if zeroing {
+            text.push_str(" {z}");
+          }
+        }
+        if let Some(mode) = decorations.rounding {
+          rounding = Some(match mode {
+            None => "{sae}",
+            Some(oj_syntax::ast::RoundingMode::Nearest) => "{rn-sae}",
+            Some(oj_syntax::ast::RoundingMode::Down) => "{rd-sae}",
+            Some(oj_syntax::ast::RoundingMode::Up) => "{ru-sae}",
+            Some(oj_syntax::ast::RoundingMode::Zero) => "{rz-sae}",
+          });
+        }
+      }
+    }
+    // The embedded rounding an instruction was told to use is an operand of
+    // its own, after the ones it works on (**L§15**).
+    if let Some(rounding) = rounding {
+      let _ = write!(text, ", {rounding}");
     }
     Some(text)
   }
@@ -1068,6 +1190,9 @@ fn immediate_of(constant: &oj_sema::Const) -> Option<i128> {
   }
 }
 
+/// Deep enough for a macro that passes a register on to another macro.
+const MAX_ALIAS_STEPS: usize = 8;
+
 const GPR_NAMES: [[&str; 4]; 16] = [
   ["al", "ax", "eax", "rax"],
   ["cl", "cx", "ecx", "rcx"],
@@ -1175,6 +1300,8 @@ struct Form {
   scalar_bits: Option<u32>,
   /// The width of a memory operand, when the instruction fixes it.
   memory_bits: Option<u32>,
+  /// The width of one lane, which is what a broadcast memory operand repeats.
+  element_bits: u32,
   /// The registers the encoding leaves implicit, which the block has to pin
   /// (**L§15**).
   pins: &'static [(usize, u32)],
@@ -1201,6 +1328,7 @@ const fn form(text: &'static str, operands: Ops, class: AsmClass) -> Form {
     destination_class: None,
     scalar_bits: None,
     memory_bits: None,
+    element_bits: 32,
     pins: &[],
     writes: &[0],
     vex: false,
@@ -1414,6 +1542,27 @@ static FORMS: &[(&str, Form)] = &[
   }),
   ("pinsrd", Form { scalar_bits: Some(32), ..vector("pinsrd", Ops::All) }),
   ("pinsrq", Form { scalar_bits: Some(64), ..vector("pinsrq", Ops::All) }),
+  // A broadcast reads one lane and repeats it; a gather addresses through a
+  // vector index, which carries no width of its own (**L§15**).
+  ("broadcastss", Form { memory_bits: Some(32), ..vector("broadcastss", Ops::All) }),
+  ("broadcastsd", Form {
+    memory_bits: Some(64),
+    element_bits: 64,
+    ..vector("broadcastsd", Ops::All)
+  }),
+  ("gatherdps", Form { bare_memory: true, ..vector("gatherdps", Ops::All) }),
+  ("gatherdpd", Form { bare_memory: true, element_bits: 64, ..vector("gatherdpd", Ops::All) }),
+  ("gatherqps", Form { bare_memory: true, ..vector("gatherqps", Ops::All) }),
+  ("gatherqpd", Form { bare_memory: true, element_bits: 64, ..vector("gatherqpd", Ops::All) }),
+  // The op-mask registers of AVX512.
+  ("kmovb", Form { scalar_bits: Some(32), ..form("kmovb", Ops::All, AsmClass::Omr) }),
+  ("kmovw", Form { scalar_bits: Some(32), ..form("kmovw", Ops::All, AsmClass::Omr) }),
+  ("kmovd", Form { scalar_bits: Some(32), ..form("kmovd", Ops::All, AsmClass::Omr) }),
+  ("kmovq", Form { scalar_bits: Some(64), ..form("kmovq", Ops::All, AsmClass::Omr) }),
+  ("kandw", form("kandw", Ops::All, AsmClass::Omr)),
+  ("korw", form("korw", Ops::All, AsmClass::Omr)),
+  ("kxorw", form("kxorw", Ops::All, AsmClass::Omr)),
+  ("knotw", form("knotw", Ops::All, AsmClass::Omr)),
   // The widening moves spell their two widths into the mnemonic.
   ("movzxbw", implicit("", Ops::All, AsmClass::Gpr, &[])),
   ("movzxbd", implicit("", Ops::All, AsmClass::Gpr, &[])),

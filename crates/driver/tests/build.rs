@@ -1812,3 +1812,49 @@ fn the_file_module_writes_and_reads_a_file() {
     "written\n",
   );
 }
+
+#[test]
+fn a_macro_takes_the_registers_it_is_given() {
+  assert_output(
+    "reg :: __reg;\n\
+     add_the_two_regs :: (left: reg, right: reg) #expand {\n\
+       #asm { add left, right; }\n\
+     }\n\
+     main :: () {\n\
+       #asm { mov a:, 12; mov b:, 18; }\n\
+       add_the_two_regs(b, a);\n\
+       c: s64 = ---;\n\
+       #asm { mov c, b; }\n\
+       put_number(c);\n\
+     }\n",
+    "30\n",
+  );
+}
+
+#[test]
+fn an_asm_block_gathers_through_a_vector_index() {
+  assert_output(
+    "Machine :: #import \"Machine_X64\";\n\
+     main :: () {\n\
+       info := Machine.get_cpu_info();\n\
+       if !Machine.check_feature(info.feature_leaves, Machine.x86_Feature_Flag.AVX2) {\n\
+         put_number(8);\n\
+         return;\n\
+       }\n\
+       source := float.[1, 2, 3, 4, 5, 6, 7, 8];\n\
+       indices := u32.[7, 6, 5, 4, 3, 2, 1, 0];\n\
+       gathered: [8] float;\n\
+       source_pointer := source.data;\n\
+       index_pointer := indices.data;\n\
+       gathered_pointer := gathered.data;\n\
+       #asm AVX, AVX2 {\n\
+         movdqu vindex:, [index_pointer];\n\
+         pcmpeqd gather_mask:, gather_mask, gather_mask;\n\
+         gatherdps gather_dest:, [source_pointer + vindex*4], gather_mask;\n\
+         movdqu [gathered_pointer], gather_dest;\n\
+       }\n\
+       put_number(cast(int) gathered[0]);\n\
+     }\n",
+    "8\n",
+  );
+}
