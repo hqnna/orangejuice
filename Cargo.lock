@@ -228,6 +228,7 @@ dependencies = [
  "clap",
  "oj-diag",
  "oj-lexer",
+ "oj-scope",
  "oj-source",
  "oj-syntax",
  "tempfile",
@@ -281,6 +282,16 @@ version = "0.1.0"
 [[package]]
 name = "oj-scope"
 version = "0.1.0"
+dependencies = [
+ "insta",
+ "oj-diag",
+ "oj-lexer",
+ "oj-source",
+ "oj-syntax",
+ "oj-testsupport",
+ "tempfile",
+ "walkdir",
+]
 
 [[package]]
 name = "oj-sema"

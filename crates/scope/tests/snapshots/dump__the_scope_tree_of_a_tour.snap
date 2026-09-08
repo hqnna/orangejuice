@@ -1,0 +1,103 @@
+---
+source: crates/scope/tests/dump.rs
+expression: dump
+---
+preload [0]
+  builtin s8
+  builtin s16
+  builtin s32
+  builtin s64
+  builtin u8
+  builtin u16
+  builtin u32
+  builtin u64
+  builtin v128
+  builtin int
+  builtin float
+  builtin float32
+  builtin float64
+  builtin string
+  builtin void
+  builtin bool
+  builtin Any
+  builtin Code
+  builtin Type
+  builtin _
+  builtin OS
+  builtin CPU
+  builtin IS_CROSS_COMPILING
+  builtin MACHINE_OPTIONS_SIZE
+  module [1]
+    module Helper -> [3]
+    constant MAX
+    constant PLATFORM
+    enum Color
+    struct Point
+    struct Pair
+    placeholder GENERATED
+    procedure main
+    procedure use
+    using [3]
+    using [13]
+    file <inputs>/tour.jai [2]
+      variable private_state #scope_file
+      procedure distance #scope_file
+      procedure sum #scope_file
+      enum [13]
+        constant RED
+        constant GREEN
+      struct arguments [14]
+        struct members [15]
+          variable x
+          variable y
+          struct Nested
+          struct arguments [16]
+            struct members [17]
+              variable depth
+      struct arguments [18]
+        parameter Key
+        parameter Value
+        struct members [19]
+          variable key
+          variable value
+      procedure constants [20]
+        procedure arguments [21]
+          parameter a
+          parameter b
+          procedure returns [22]
+            block [23]
+              variable dx
+              variable dy
+      procedure constants [24]
+        procedure arguments [25]
+          parameter values
+          procedure returns [26]
+            parameter total
+            block [27]
+              block [28]
+                iterator it
+                iterator it_index
+                block [29]
+      procedure constants [30]
+        procedure arguments [31]
+          procedure returns [32]
+            block [33]
+              variable p
+              variable shade
+      procedure constants [34]
+        procedure arguments [35]
+          parameter s
+          procedure returns [36]
+            block [37]
+  module [3]
+    procedure widget
+    procedure internal #scope_module
+    file <inputs>/modules/Widget.jai [4]
+      procedure constants [5]
+        procedure arguments [6]
+          procedure returns [7]
+            block [8]
+      procedure constants [9]
+        procedure arguments [10]
+          procedure returns [11]
+            block [12]

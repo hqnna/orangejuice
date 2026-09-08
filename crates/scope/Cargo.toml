@@ -5,3 +5,15 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+
+[dependencies]
+oj-diag.workspace = true
+oj-lexer.workspace = true
+oj-source.workspace = true
+oj-syntax.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+oj-testsupport.workspace = true
+tempfile.workspace = true
+walkdir.workspace = true
