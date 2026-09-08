@@ -10,6 +10,11 @@ pub enum Value {
   Float(f64),
   Bool(bool),
   String(Box<[u8]>),
+  /// The storage of an aggregate a `#run` produced, laid out the way its type
+  /// says (**L§12.1**). A pointer inside those bytes is the compiler's, not
+  /// the program's; the reference remaps the ones that name globals and warns
+  /// about the rest.
+  Bytes(Box<[u8]>),
   Null,
   Type(TypeId),
   /// A `.NAME` whose enum the context has not supplied yet (**L§5.12**).
@@ -25,7 +30,7 @@ impl Value {
       Self::Float(value) => Some(*value != 0.0),
       Self::Null => Some(false),
       Self::String(text) => Some(!text.is_empty()),
-      Self::Type(_) | Self::EnumName(_) => None,
+      Self::Type(_) | Self::EnumName(_) | Self::Bytes(_) => None,
     }
   }
 

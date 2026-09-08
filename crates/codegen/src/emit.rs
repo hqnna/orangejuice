@@ -41,6 +41,8 @@ pub struct Emitter<'ctx, 'p> {
   functions: Vec<FunctionValue<'ctx>>,
   globals: Vec<GlobalValue<'ctx>>,
   strings: HashMap<Box<[u8]>, GlobalValue<'ctx>>,
+  /// How many aggregate constants have been laid down, so each gets a name.
+  constants: usize,
 }
 
 impl<'ctx, 'p> Emitter<'ctx, 'p> {
@@ -55,6 +57,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       functions: Vec::new(),
       globals: Vec::new(),
       strings: HashMap::new(),
+      constants: 0,
     }
   }
 
@@ -232,6 +235,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
             .into(),
         )
       }
+      Constant::Bytes(bytes) => Some(self.context.const_string(bytes, false).into()),
       Constant::Zero => Some(self.llvm_type(type_id).const_zero()),
       _ => {
         let llvm_type = self.llvm_type(type_id);
@@ -281,6 +285,23 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     global.set_alignment(1);
     self.strings.insert(Box::from(text), global);
     global
+  }
+
+  /// Read-only storage holding an aggregate constant's bytes, aligned the way
+  /// its type asks so that loads out of it are legal.
+  fn bytes_data(&mut self, bytes: &[u8], alignment: u32) -> PointerValue<'ctx> {
+    let data = self.context.const_string(bytes, false);
+    let global = self.module.add_global(
+      data.get_type(),
+      Some(AddressSpace::default()),
+      &format!(".data.{}", self.constants),
+    );
+    self.constants += 1;
+    global.set_initializer(&data);
+    global.set_constant(true);
+    global.set_linkage(Linkage::Private);
+    global.set_alignment(alignment);
+    global.as_pointer_value()
   }
 
   // -------------------------------------------------------------- bodies ----
@@ -363,6 +384,16 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
           Constant::String(text) => {
             let global = self.string_view(text);
             global.as_pointer_value().into()
+          }
+          // An aggregate constant is data, and its value is where that data
+          // sits (**L§3.14**).
+          Constant::Bytes(bytes) => {
+            let alignment = self
+              .types()
+              .align_of(self.types().underlying(type_id))
+              .unwrap_or(1)
+              .max(1);
+            self.bytes_data(bytes, alignment as u32).into()
           }
           _ => {
             let llvm_type = self.llvm_type(type_id);

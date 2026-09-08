@@ -33,6 +33,10 @@ pub enum Constant {
   /// The bytes of a string literal. The value it produces is the `string`
   /// itself — `{count, data}` — with `data` pointing at read-only storage.
   String(Box<[u8]>),
+  /// The storage of an aggregate a `#run` produced, laid out the way its type
+  /// says (**L§12.1**). It becomes read-only data, and the value is its
+  /// address.
+  Bytes(Box<[u8]>),
   /// All-zero storage of the value's type, which is what an aggregate starts
   /// out as (**L§4.6**).
   Zero,

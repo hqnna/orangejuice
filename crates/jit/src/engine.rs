@@ -257,6 +257,7 @@ fn write_constant(types: &Types, type_id: TypeId, constant: &Constant, bytes: &m
       Some(FloatKind::F32) => copy(&(*value as f32).to_le_bytes(), bytes),
       _ => copy(&value.to_le_bytes(), bytes),
     },
+    Constant::Bytes(source) => copy(source, bytes),
     Constant::Null | Constant::Zero => {}
     // A string in a global would need its characters somewhere the JIT can
     // point at; the reference puts them in the read-only segment, which is
@@ -312,6 +313,13 @@ fn read_value(types: &Types, type_id: TypeId, bytes: &[u8]) -> Option<oj_sema::C
       // before anything else can reuse it.
       let text = unsafe { std::slice::from_raw_parts(data as *const u8, count as usize) }.to_vec();
       Some(Const::string(text.into_boxed_slice()))
+    }
+    // Everything else is storage: the run wrote its bytes into the buffer, and
+    // those bytes are the constant (**L§12.1**). A pointer inside them still
+    // points into the compiler's memory, which the reference remaps only when
+    // it names a global (`docs/spec.md` §10).
+    TypeKind::Struct(_) | TypeKind::Array { .. } => {
+      Some(Const::new(type_id, Value::Bytes(bytes.into())))
     }
     _ => None,
   }

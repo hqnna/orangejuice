@@ -565,3 +565,31 @@ fn an_assertion_that_holds_reports_nothing() {
     "ok\n",
   );
 }
+
+#[test]
+fn a_run_produces_a_struct_the_program_reads_members_out_of() {
+  assert_output(
+    "Point :: struct { x: int; y: int; }\n\
+     make :: () -> Point { p: Point; p.x = 3; p.y = 4; return p; }\n\
+     P :: #run make();\n\
+     main :: () { put_number(P.x); put_number(P.y); }\n",
+    "3\n4\n",
+  );
+}
+
+#[test]
+fn a_run_produces_an_array_the_program_indexes() {
+  assert_output(
+    "TABLE :: #run -> [4] u8 {\n\
+       t: [4] u8;\n\
+       for i: 0..3  t[i] = cast(u8)(97 + i);\n\
+       return t;\n\
+     };\n\
+     main :: () {\n\
+       table := TABLE;\n\
+       write(1, table.data, 4);\n\
+       put(\"\\n\");\n\
+     }\n",
+    "abcd\n",
+  );
+}

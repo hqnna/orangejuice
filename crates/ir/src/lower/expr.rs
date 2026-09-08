@@ -31,6 +31,12 @@ impl Lowering<'_, '_> {
         let value = self.string_constant(text.clone());
         return self.convert(source, node, value, target);
       }
+      // An aggregate a `#run` produced is read-only data the program reads out
+      // of, the same as any other constant (**L§12.1**).
+      if let Value::Bytes(bytes) = &constant.value {
+        let value = self.bytes_constant(bytes.clone(), target);
+        return self.convert(source, node, value, target);
+      }
     }
 
     if self.checker.types().is_unknown(info.type_id) && info.overloads.is_empty() {
@@ -62,6 +68,22 @@ impl Lowering<'_, '_> {
     Val {
       id: dest,
       type_id: TypeId::STRING,
+      indirect: true,
+    }
+  }
+
+  /// The storage of an aggregate constant: the value is its address, the way
+  /// every aggregate value is (**L§3.14**).
+  fn bytes_constant(&mut self, bytes: Box<[u8]>, type_id: TypeId) -> Val {
+    let pointer = self.pointer_to(type_id);
+    let dest = self.value(pointer);
+    self.emit(Inst::Const {
+      dest,
+      value: Constant::Bytes(bytes),
+    });
+    Val {
+      id: dest,
+      type_id,
       indirect: true,
     }
   }

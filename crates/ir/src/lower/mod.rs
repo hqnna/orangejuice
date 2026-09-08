@@ -510,6 +510,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       Value::Bool(flag) => Some(Constant::Bool(*flag)),
       Value::Null => Some(Constant::Null),
       Value::String(text) => Some(Constant::String(text.clone())),
+      Value::Bytes(bytes) => Some(Constant::Bytes(bytes.clone())),
       Value::Type(_) | Value::EnumName(_) => None,
     }
   }

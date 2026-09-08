@@ -257,6 +257,7 @@ fn constant_text(value: &Constant) -> String {
     Constant::Bool(flag) => flag.to_string(),
     Constant::Null => String::from("null"),
     Constant::String(text) => format!("{:?}", String::from_utf8_lossy(text)),
+    Constant::Bytes(bytes) => format!("{} bytes of compile-time data", bytes.len()),
     Constant::Zero => String::from("zero"),
   }
 }
