@@ -1152,3 +1152,36 @@ fn compare_and_swap_is_an_atomic_exchange() {
     "1\n0\n1\n0\n",
   );
 }
+
+#[test]
+fn a_pointer_argument_is_dereferenced_into_the_member_it_marks_as() {
+  assert_output(
+    "Base :: struct { tag: int; }\n\
+     Derived :: struct { using #as base: Base; extra: int; }\n\
+     show :: (b: Base) -> int { return b.tag; }\n\
+     main :: () {\n\
+       d: Derived;\n\
+       d.tag = 42;\n\
+       put_number(show(*d));\n\
+     }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn a_using_of_a_value_reaches_the_constants_of_its_struct() {
+  assert_output(
+    "Builder :: struct {\n\
+       Buffer :: struct { count: s64; allocated: s64; }\n\
+       bytes: [64] u8;\n\
+     }\n\
+     room :: (using b: *Builder) -> int {\n\
+       return bytes.count - size_of(Buffer);\n\
+     }\n\
+     main :: () {\n\
+       b: Builder;\n\
+       put_number(room(*b));\n\
+     }\n",
+    "48\n",
+  );
+}

@@ -237,3 +237,22 @@ fn a_using_of_an_enum_type_makes_its_members_names() {
     },
   );
 }
+
+#[test]
+fn a_using_of_a_value_reaches_the_constants_of_its_struct() {
+  build(
+    "
+    Builder :: struct {
+      Buffer :: struct { count: s64; }
+      bytes: [64] u8;
+    }
+    room :: (using b: *Builder) -> s64 {
+      return bytes.count - size_of(Buffer);
+    }
+    ",
+    |checker| {
+      assert!(errors(checker).is_empty(), "{:?}", errors(checker));
+      assert_eq!(type_of(checker, "room"), "(*Builder) -> s64");
+    },
+  );
+}

@@ -780,9 +780,11 @@ impl Checker<'_> {
       .else_block
       .map(|node| self.expression_type(scope, source, node));
     match (then_value, else_value) {
-      // A branch written `xx e` takes the other one's type (**L§5.6**).
-      (Some(left), Some(right)) if left.autocast => Expr::value(right.type_id),
-      (Some(left), Some(right)) if right.autocast => Expr::value(left.type_id),
+      // A branch written `xx e` takes the other one's type (**L§5.6**), and
+      // so does one that is `null`, which names no type of its own
+      // (**L§3.2**).
+      (Some(left), Some(right)) if left.autocast || is_null(&left) => Expr::value(right.type_id),
+      (Some(left), Some(right)) if right.autocast || is_null(&right) => Expr::value(left.type_id),
       (Some(left), Some(right)) => Expr::value(self.unify(left.type_id, right.type_id)),
       (Some(only), None) | (None, Some(only)) => Expr::value(only.type_id),
       (None, None) => Expr::value(TypeId::VOID),
@@ -812,6 +814,13 @@ impl Checker<'_> {
     let name = self.interned().intern(b"Source_Code_Location");
     self.preload_type(name)
   }
+}
+
+fn is_null(value: &Expr) -> bool {
+  matches!(
+    value.constant.as_ref().map(|constant| &constant.value),
+    Some(Value::Null)
+  )
 }
 
 fn negate(value: &Const) -> Option<Const> {

@@ -1922,6 +1922,29 @@ impl Lowering<'_, '_> {
       });
     }
 
+    // Passing a `*S` where an `S` is wanted follows the pointer (**L§7.6**),
+    // which is also how a `*S` reaches the member `S` marked `#as`.
+    if let Some(pointee) = self.checker.types().pointee(from)
+      && self
+        .checker
+        .types()
+        .struct_of(self.checker.types().underlying(pointee))
+        .is_some()
+      && self
+        .checker
+        .types()
+        .struct_of(self.checker.types().underlying(to))
+        .is_some()
+    {
+      let address = self.scalar(value);
+      let inner = Val {
+        id: address,
+        type_id: pointee,
+        indirect: true,
+      };
+      return self.convert(source, node, inner, target);
+    }
+
     // A struct converts to the member it marked `#as` (**L§8.4**).
     if let TypeKind::Struct(definition) = from_kind {
       let member = self

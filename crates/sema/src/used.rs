@@ -26,6 +26,9 @@ pub struct UsedMember {
   /// (**L§6.8**): `using p: *Player` reads through `p`.
   pub through_pointer: bool,
   pub member: StructMember,
+  /// The struct the member belongs to, so that a nested constant can be
+  /// looked up where it was declared rather than read out of storage.
+  pub definition: oj_types::StructId,
 }
 
 impl Checker<'_> {
@@ -39,7 +42,10 @@ impl Checker<'_> {
   ) -> Option<UsedMember> {
     let name = self.ident_name(source, node)?;
     let start = self.scope_at(source, node, scope);
-    self.resolve_used_member(start, name)
+    // A nested constant has no storage for a back end to address.
+    self
+      .resolve_used_member(start, name)
+      .filter(|found| !found.member.is_constant())
   }
 
   pub(crate) fn resolve_used_member(&mut self, scope: ScopeId, name: Symbol) -> Option<UsedMember> {
@@ -119,6 +125,7 @@ impl Checker<'_> {
       base_type,
       through_pointer,
       member,
+      definition,
     })
   }
 
@@ -153,8 +160,23 @@ impl Checker<'_> {
         return Some(found);
       }
       let member = checker.member_of_used_value(from, value, name)?;
+      // A nested constant — `Buffer :: struct { … }` inside `String_Builder`
+      // — has no storage; it is what its declaration says (**L§8.3**).
+      if member.member.is_constant() {
+        return checker.nested_constant(member.definition, name);
+      }
       Some(Expr::place(member.member.type_id))
     })
+  }
+
+  /// A constant declared inside a struct's body, resolved where it was
+  /// written (**L§8.3**).
+  fn nested_constant(&mut self, definition: oj_types::StructId, name: Symbol) -> Option<Expr> {
+    let scope = self.struct_scope(definition)?;
+    match self.program().tree().lookup(scope, name) {
+      oj_scope::Resolution::Found(candidates) => Some(self.declarations_type(&candidates)),
+      _ => None,
+    }
   }
 
   /// A name a `using` of a *type* brings in: an enum's members, or a struct's
