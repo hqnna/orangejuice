@@ -59,21 +59,7 @@ impl Checker<'_> {
       NodeData::TypeInstantiation(_) => {
         Expr::type_expression(self.type_from_node(scope, source, node))
       }
-      NodeData::Cast(cast) => {
-        let expression = cast.expression;
-        self.expression_type(scope, source, expression);
-        match cast.target_type {
-          Some(target) => {
-            let type_id = self.type_from_node(scope, source, target);
-            Expr {
-              explicitly_cast: true,
-              ..Expr::value(type_id)
-            }
-          }
-          // `xx` takes the type the context asks for (**L§5.6**).
-          None => Expr::UNKNOWN,
-        }
-      }
+      NodeData::Cast(cast) => self.cast_type(scope, source, node, cast),
       NodeData::ProcedureCall(_) => self.call_type(scope, source, node),
       NodeData::TypeQuery {
         query_kind,

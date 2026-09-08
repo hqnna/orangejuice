@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oj_diag::{Diagnostic, SourceId, Span};
 use oj_lexer::{Interner, Symbol};
@@ -230,6 +230,7 @@ pub struct Checker<'a> {
   aggregate_types: HashMap<(SourceId, NodeId), TypeId>,
   stack: Vec<DeclId>,
   diagnostics: Vec<Diagnostic>,
+  reported: HashSet<(SourceId, Span, String)>,
   depth: u32,
 }
 
@@ -292,6 +293,7 @@ impl<'a> Checker<'a> {
       aggregate_types: HashMap::new(),
       stack: Vec::new(),
       diagnostics: Vec::new(),
+      reported: HashSet::new(),
       depth: 0,
     }
   }
@@ -560,15 +562,24 @@ impl<'a> Checker<'a> {
   }
 
   pub(crate) fn error(&mut self, source: SourceId, span: Span, message: impl Into<String>) {
-    self
-      .diagnostics
-      .push(Diagnostic::error(source, span, message));
+    self.report(Diagnostic::error(source, span, message));
   }
 
   pub(crate) fn info(&mut self, source: SourceId, span: Span, message: impl Into<String>) {
-    self
-      .diagnostics
-      .push(Diagnostic::info(source, span, message));
+    self.report(Diagnostic::info(source, span, message));
+  }
+
+  /// An expression is typed wherever it is asked about — once for the
+  /// declaration it belongs to and again when its body is checked — so the
+  /// same complaint reaches here more than once. It is reported once.
+  fn report(&mut self, diagnostic: Diagnostic) {
+    if self.reported.insert((
+      diagnostic.source,
+      diagnostic.span,
+      diagnostic.message.clone(),
+    )) {
+      self.diagnostics.push(diagnostic);
+    }
   }
 
   pub fn type_name(&self, type_id: TypeId) -> String {

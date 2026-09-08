@@ -391,3 +391,74 @@ fn a_polymorphic_procedure_body_is_left_to_its_instantiations() {
     ",
   );
 }
+
+#[test]
+fn a_cast_takes_its_target_type() {
+  accepts(
+    "
+    f :: (a: s64, p: *s64) {
+      b: u8 = cast,trunc(u8) a;
+      c: float64 = cast(float64) a;
+      q: *u8 = cast(*u8) p;
+      n: s64 = cast(s64) p;
+      e: bool = cast(bool) a;
+    }
+    ",
+  );
+}
+
+#[test]
+fn the_casts_the_reference_rejects_are_reported_in_its_words() {
+  assert_eq!(
+    errors("f :: () { x := cast(void) 3; }"),
+    vec!["Casting a non-zero-sized value to void is invalid.".to_string()]
+  );
+  assert_eq!(
+    errors("f :: () { p: *s64; v := cast([] s64) p; }"),
+    vec!["Cannot cast from a pointer to a non-fixed array type.".to_string()]
+  );
+  assert_eq!(
+    errors("f :: () { x := cast,trunc,no_check(u8) 300; }"),
+    vec![
+      "This cast has inconsistent modifiers. (It is flagged both 'trunc' and 'no_check')."
+        .to_string()
+    ]
+  );
+  assert_eq!(
+    errors("f :: () { s := \"hi\"; n := cast(s64) s; }"),
+    vec!["String cannot cast to this type (the target type is s64.)".to_string()]
+  );
+  assert_eq!(
+    errors(
+      "
+      A :: struct { a: s64; }
+      B :: struct { b: s64; }
+      f :: () { a: A; b := cast(B) a; }
+      "
+    ),
+    vec![
+      "Cannot cast from one struct to another without force modifiers. \
+       Type wanted: B (8 bytes); type given: A (8 bytes)"
+        .to_string()
+    ]
+  );
+}
+
+#[test]
+fn force_and_a_conversion_the_compiler_would_make_anyway_are_allowed() {
+  accepts(
+    "
+    A :: struct { a: s64; }
+    B :: struct { b: s64; }
+    Base :: struct { x: s64; }
+    Derived :: struct { #as using base: Base; }
+    Handle :: #type,distinct A;
+    f :: (d: Derived, h: Handle) {
+      a: A;
+      b := cast,force(B) a;
+      base := cast(Base) d;
+      plain := cast(A) h;
+    }
+    ",
+  );
+}
