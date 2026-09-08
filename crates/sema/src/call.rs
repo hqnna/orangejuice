@@ -59,6 +59,17 @@ impl Checker<'_> {
     source: SourceId,
     node: NodeId,
   ) -> Option<crate::overload::Signature> {
+    self.at_call_site(scope, source, node, |checker| {
+      checker.resolve_call_inner(scope, source, node)
+    })
+  }
+
+  fn resolve_call_inner(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<crate::overload::Signature> {
     let ast = self.ast(source)?;
     let NodeData::ProcedureCall(call) = ast.data(node) else {
       return None;

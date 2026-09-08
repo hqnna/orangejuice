@@ -7,7 +7,7 @@ use oj_syntax::ast::{Ast, NodeData, NodeId};
 use oj_types::{EnumId, StructId, TypeId, Types};
 
 use crate::constants::Const;
-use crate::poly::{Instance, InstanceId, InstanceKey};
+use crate::poly::{Expansion, Instance, InstanceId, InstanceKey};
 
 /// What a declared name stands for once its type is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,6 +271,10 @@ pub struct Checker<'a> {
   /// Instantiations whose bodies nobody has checked yet.
   pub(crate) pending_instances: Vec<InstanceId>,
   pub(crate) checked_instances: HashSet<InstanceId>,
+  /// The call being resolved right now, which is where a macro expands
+  /// (**L§7.13**). Overload resolution reaches down through operators too, so
+  /// this is a single piece of state rather than a parameter of every step.
+  pub(crate) call_site: Option<Expansion>,
 }
 
 /// Deep enough for the module tree's nested types, shallow enough that a
@@ -368,6 +372,7 @@ impl<'a> Checker<'a> {
       current_instance: None,
       pending_instances: Vec::new(),
       checked_instances: HashSet::new(),
+      call_site: None,
     }
   }
 

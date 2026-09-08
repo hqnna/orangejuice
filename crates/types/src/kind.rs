@@ -148,8 +148,13 @@ pub struct ProcedureType {
   pub arguments: Vec<TypeId>,
   pub returns: Vec<TypeId>,
   pub flags: ProcedureFlags,
-  /// The last parameter is `..T`, which makes the call site build a `[] T`.
+  /// One parameter is `..T`, which makes the call site build a `[] T` out of
+  /// whatever it wrote there. It need not be the last: `print(format, args:
+  /// ..Any, to_standard_error := false)` puts a defaulted one after it, which
+  /// only a named argument can fill (**L§7.3**).
   pub varargs: bool,
+  /// Which parameter that is.
+  pub vararg_index: Option<u32>,
 }
 
 impl ProcedureType {
@@ -159,6 +164,7 @@ impl ProcedureType {
       returns,
       flags: ProcedureFlags::empty(),
       varargs: false,
+      vararg_index: None,
     }
   }
 }

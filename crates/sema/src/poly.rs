@@ -23,9 +23,16 @@ use crate::overload::CallArgument;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceId(pub u32);
 
-/// What makes two instantiations the same one: the same header, bound to the
-/// same constants (**L§7.8**).
-pub(crate) type InstanceKey = (SourceId, NodeId, Vec<(DeclId, TypeId, ConstKey)>);
+/// What makes two instantiations the same one: the same header bound to the
+/// same constants (**L§7.8**). A macro is not shared at all — it expands once
+/// per call site, into that site's block (**L§7.13**) — so its key carries the
+/// site and the instantiation the site was written in.
+pub(crate) type InstanceKey = (
+  SourceId,
+  NodeId,
+  Option<(SourceId, NodeId, Option<InstanceId>)>,
+  Vec<(DeclId, TypeId, ConstKey)>,
+);
 
 /// A [`Const`] projected onto something hashable, so that instantiations can be
 /// looked up by the values they bind.
@@ -69,6 +76,20 @@ pub(crate) struct Instance {
   /// The instantiation this one was created inside, when the header is nested
   /// in another polymorphic body.
   pub parent: Option<InstanceId>,
+  /// Where a macro expands, when the header is one: the call site and the
+  /// scope it was written in, which is the scope the macro's body can also see
+  /// names in (**L§7.13**).
+  pub expansion: Option<Expansion>,
+}
+
+/// Where a macro was invoked (**L§7.13**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Expansion {
+  pub source: SourceId,
+  pub node: NodeId,
+  /// The scope the call was written in: a name the macro's own scopes do not
+  /// hold is looked up here, and a backticked one always is.
+  pub caller_scope: ScopeId,
 }
 
 impl Instance {
@@ -85,6 +106,20 @@ pub(crate) struct Solution {
 }
 
 impl Checker<'_> {
+  /// The scope a name that the macro's own scopes do not hold falls back to:
+  /// the block the innermost active macro expanded into (**L§7.13**).
+  pub(crate) fn caller_scope(&self) -> Option<ScopeId> {
+    let mut current = self.current_instance;
+    while let Some(id) = current {
+      let instance = self.instance(id);
+      if let Some(expansion) = instance.expansion {
+        return Some(expansion.caller_scope);
+      }
+      current = instance.parent;
+    }
+    None
+  }
+
   /// The value the active instantiation gave a declaration, if it bound one
   /// (**L§7.8**).
   pub(crate) fn bound_constant(&self, id: DeclId) -> Option<Const> {
@@ -97,6 +132,27 @@ impl Checker<'_> {
       current = instance.parent;
     }
     None
+  }
+
+  /// Runs `body` with `site` as the call being resolved, which is where a
+  /// macro reached from it expands (**L§7.13**).
+  pub(crate) fn at_call_site<T>(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    body: impl FnOnce(&mut Self) -> T,
+  ) -> T {
+    let previous = self.call_site.replace(Expansion {
+      source,
+      node,
+      // A macro's body sees the block the call was written in, which is not
+      // always the scope the walk was handed (**L§7.13**).
+      caller_scope: self.nearest_scope(source, node, scope),
+    });
+    let result = body(self);
+    self.call_site = previous;
+    result
   }
 
   /// Runs `body` with `instance` as the active instantiation.
@@ -133,8 +189,9 @@ impl Checker<'_> {
     Some(crate::overload::Signature {
       parameters,
       returns: procedure.returns.clone(),
-      varargs: procedure.varargs,
+      vararg_slot: signature.vararg_slot,
       polymorphic: false,
+      is_macro: signature.is_macro,
       decl: signature.decl,
       header: signature.header,
       type_id,
@@ -206,9 +263,13 @@ impl Checker<'_> {
 
     let solution = self.solve(signature, arguments, source, header, scopes)?;
 
+    // A macro is expanded into the block it was called from rather than
+    // called, so two sites never share one (**L§7.13**).
+    let expansion = signature.is_macro.then_some(self.call_site).flatten();
     let key: InstanceKey = (
       source,
       header,
+      expansion.map(|site| (site.source, site.node, self.current_instance)),
       solution
         .bindings
         .iter()
@@ -217,6 +278,9 @@ impl Checker<'_> {
     );
     if let Some(existing) = self.instance_cache.get(&key) {
       return Some(*existing);
+    }
+    if signature.is_macro && expansion.is_none() {
+      return None;
     }
 
     let id = InstanceId(self.instances.len() as u32);
@@ -229,6 +293,7 @@ impl Checker<'_> {
       bindings: solution.bindings,
       type_id: TypeId::UNKNOWN,
       parent: self.current_instance,
+      expansion,
     });
     self.instance_cache.insert(key, id);
 
@@ -264,25 +329,9 @@ impl Checker<'_> {
     let mut substitution: HashMap<PolymorphId, TypeId> = HashMap::new();
     let mut solution = Solution::default();
 
-    let count = signature.parameters.len();
-    let vararg_slot = signature.varargs.then(|| count.saturating_sub(1));
-    let mut next = 0usize;
-    for argument in arguments {
-      let index = match argument.name {
-        Some(name) => signature
-          .parameters
-          .iter()
-          .position(|parameter| parameter.name == Some(name))?,
-        None => {
-          let index = next;
-          next += 1;
-          index
-        }
-      };
-      let index = match vararg_slot {
-        Some(slot) if index >= slot => slot,
-        _ => index,
-      };
+    let vararg_slot = signature.vararg_slot;
+    let slots = self.argument_slots(signature, arguments)?;
+    for (argument, index) in arguments.iter().zip(slots) {
       let parameter = signature.parameters.get(index)?;
       // An argument in the varargs slot matches the `[] T`'s element
       // (**L§7.8**): `values: ..$T` takes `T` from the first one. `..xs`

@@ -27,6 +27,8 @@ impl Lowering<'_, '_> {
     self.current = BlockId(0);
     self.local_of_decl.clear();
     self.loops.clear();
+    self.expansions.clear();
+    self.call_sites.clear();
     self.defers.clear();
     self.returns.clear();
     self.return_pointers.clear();
@@ -125,7 +127,10 @@ impl Lowering<'_, '_> {
           };
           self.store(address, value);
           if let Some(Some(id)) = body.parameters.get(declared) {
-            self.local_of_decl.insert(*id, local);
+            {
+              let key = self.local_key(*id);
+              self.local_of_decl.insert(key, local);
+            }
           }
           declared += 1;
         }
@@ -144,7 +149,10 @@ impl Lowering<'_, '_> {
       let local = self.new_local(text, type_id);
       let address = self.local_address(local);
       self.clear(address, type_id);
-      self.local_of_decl.insert(*id, local);
+      {
+        let key = self.local_key(*id);
+        self.local_of_decl.insert(key, local);
+      }
     }
 
     self.defers.push(Vec::new());
@@ -175,7 +183,7 @@ impl Lowering<'_, '_> {
     let mut values = Vec::new();
     for (index, type_id) in returns.iter().enumerate() {
       let named = body.returns.get(index).and_then(|id| *id);
-      let value = match named.and_then(|id| self.local_of_decl.get(&id).copied()) {
+      let value = match named.and_then(|id| self.local_of_decl.get(&self.local_key(id)).copied()) {
         Some(local) => {
           let address = self.local_address(local);
           Val {
@@ -260,9 +268,10 @@ impl Lowering<'_, '_> {
       }
       NodeData::Declaration(_) => self.declaration_statement(node),
       NodeData::CompoundDeclaration(_) => self.compound_declaration(node),
-      NodeData::Return { arguments, .. } => {
+      NodeData::Return { arguments, flags } => {
         let arguments = arguments.clone();
-        self.return_statement(node, &arguments);
+        let backticked = flags.contains(ast::ReturnFlags::IS_BACKTICKED);
+        self.return_statement(node, &arguments, backticked);
       }
       NodeData::If(payload) => {
         let payload = payload.clone();
@@ -338,7 +347,7 @@ impl Lowering<'_, '_> {
     }
   }
 
-  fn run_defers(&mut self, frame: &[(ScopeId, SourceId, NodeId)]) {
+  pub(super) fn run_defers(&mut self, frame: &[(ScopeId, SourceId, NodeId)]) {
     for (scope, source, node) in frame.iter().rev() {
       let (previous_scope, previous_source) = (self.body_scope, self.body_source);
       self.body_scope = *scope;
@@ -385,7 +394,10 @@ impl Lowering<'_, '_> {
       self.text(symbol)
     };
     let local = self.new_local(name, type_id);
-    self.local_of_decl.insert(decl, local);
+    {
+      let key = self.local_key(decl);
+      self.local_of_decl.insert(key, local);
+    }
     let address = self.local_address(local);
 
     if declaration
@@ -443,7 +455,10 @@ impl Lowering<'_, '_> {
         self.text(symbol)
       };
       let local = self.new_local(text, type_id);
-      self.local_of_decl.insert(decl, local);
+      {
+        let key = self.local_key(decl);
+        self.local_of_decl.insert(key, local);
+      }
       let address = self.local_address(local);
       places.push(Some((address, type_id)));
     }
@@ -472,7 +487,13 @@ impl Lowering<'_, '_> {
     }
   }
 
-  fn return_statement(&mut self, node: NodeId, arguments: &[ast::Argument]) {
+  /// `return` inside a macro returns from the macro; `` `return `` returns
+  /// from the procedure it expanded into (**L§7.13**).
+  fn return_statement(&mut self, node: NodeId, arguments: &[ast::Argument], backticked: bool) {
+    if !backticked && !self.expansions.is_empty() {
+      self.macro_return(node, arguments);
+      return;
+    }
     let source = self.body_source;
     let returns = self.returns.clone();
     let mut values = Vec::new();
@@ -494,6 +515,36 @@ impl Lowering<'_, '_> {
     }
     self.run_defers_to(0);
     self.emit_return(values);
+  }
+
+  /// A `return` written in a macro's body: the values go into the storage the
+  /// expansion set aside and control leaves the spliced-in block, not the
+  /// procedure (**L§7.13**).
+  fn macro_return(&mut self, node: NodeId, arguments: &[ast::Argument]) {
+    let source = self.body_source;
+    let Some(frame) = self.expansions.last() else {
+      return;
+    };
+    let (exit, defers) = (frame.exit, frame.defers);
+    let results = frame.results.clone();
+    for (index, argument) in arguments.iter().enumerate() {
+      let Some((address, type_id)) = results.get(index).copied() else {
+        break;
+      };
+      let scope = self
+        .checker
+        .scope_for(source, argument.expression, self.body_scope);
+      let Some(value) = self.expression(scope, source, argument.expression, Some(type_id)) else {
+        continue;
+      };
+      let Some(value) = self.convert(source, argument.expression, value, type_id) else {
+        continue;
+      };
+      self.store(address, value);
+    }
+    let _ = node;
+    self.run_defers_to(defers);
+    self.terminate(Terminator::Jump(exit));
   }
 
   fn if_statement(&mut self, payload: &ast::IfNode) {
@@ -740,7 +791,10 @@ impl Lowering<'_, '_> {
     let (it_decl, index_decl) = self.checker.loop_iterators(source, node);
     let index_local = self.new_local(String::from("it_index"), TypeId::S64);
     if let Some(id) = index_decl {
-      self.local_of_decl.insert(id, index_local);
+      {
+        let key = self.local_key(id);
+        self.local_of_decl.insert(key, index_local);
+      }
     }
 
     match payload.iteration_expression_right {
@@ -789,7 +843,10 @@ impl Lowering<'_, '_> {
 
     let it_local = self.new_local(String::from("it"), it_type);
     if let Some(id) = it_decl {
-      self.local_of_decl.insert(id, it_local);
+      {
+        let key = self.local_key(id);
+        self.local_of_decl.insert(key, it_local);
+      }
     }
     let it_address = self.local_address(it_local);
     self.store(it_address, start);
@@ -944,7 +1001,10 @@ impl Lowering<'_, '_> {
     let it_type = if by_pointer { pointer } else { element };
     let it_local = self.new_local(String::from("it"), it_type);
     if let Some(id) = it_decl {
-      self.local_of_decl.insert(id, it_local);
+      {
+        let key = self.local_key(id);
+        self.local_of_decl.insert(key, it_local);
+      }
     }
 
     let head = self.new_block();
@@ -1095,6 +1155,8 @@ impl Lowering<'_, '_> {
     self.current = BlockId(0);
     self.local_of_decl.clear();
     self.loops.clear();
+    self.expansions.clear();
+    self.call_sites.clear();
     self.defers.clear();
     self.returns.clear();
     self.return_pointers.clear();

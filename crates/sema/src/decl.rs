@@ -228,8 +228,9 @@ impl Checker<'_> {
 
     for (index, parameter) in payload.arguments.iter().enumerate() {
       let (type_id, varargs) = self.parameter_type(source, *parameter, outer);
-      if varargs && index + 1 == payload.arguments.len() {
+      if varargs {
         signature.varargs = true;
+        signature.vararg_index = Some(index as u32);
       }
       // A `$` parameter is baked per call, which makes the procedure a family
       // rather than a value (**L§7.8**).

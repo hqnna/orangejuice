@@ -29,6 +29,7 @@ pub fn undeclared_identifiers(program: &Program<'_>) -> Vec<Undeclared> {
   for reference in program.references() {
     if reference.speculative
       || program.is_macro_injected(reference.name)
+      || program.is_in_macro(reference.scope)
       || tree.lookup(reference.scope, reference.name) != Resolution::Undeclared
     {
       continue;

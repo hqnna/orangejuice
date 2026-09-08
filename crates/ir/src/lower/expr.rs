@@ -373,10 +373,15 @@ impl Lowering<'_, '_> {
         let at = location.expression.unwrap_or(node);
         self.source_location(source, at, info.type_id)
       }
-      NodeData::DirectiveLocation(_) => {
-        self.unsupported(source, node, "'#caller_location'", "M7");
-        None
-      }
+      // `#caller_location` is the site of the call whose arguments are being
+      // evaluated, or of the macro being expanded (**L§7.13**).
+      NodeData::DirectiveLocation(_) => match self.call_sites.last().copied() {
+        Some((at_source, at)) => self.source_location(at_source, at, info.type_id),
+        None => {
+          self.unsupported(source, node, "'#caller_location'", "M7");
+          None
+        }
+      },
       _ => {
         self.unsupported(source, node, "this expression", "M7");
         None
@@ -471,7 +476,7 @@ impl Lowering<'_, '_> {
     decl: DeclId,
     type_id: TypeId,
   ) -> Option<Val> {
-    if let Some(local) = self.local_of_decl.get(&decl).copied() {
+    if let Some(local) = self.local_of_decl.get(&self.local_key(decl)).copied() {
       let address = self.local_address(local);
       let local_type = self.locals[local.0 as usize].type_id;
       return Some(Val {
@@ -1230,6 +1235,14 @@ impl Lowering<'_, '_> {
       return None;
     }
 
+    // A macro is spliced into the block it was called from rather than called
+    // (**L§7.13**).
+    if let Some(instance) = plan.instance
+      && self.checker.instance_info(instance).expansion.is_some()
+    {
+      return self.expand_macro(&plan, instance);
+    }
+
     let (callee, flags) = match (plan.instance, plan.callee) {
       // A polymorphic call names a specialization, not the header it was
       // written as (**L§7.8**).
@@ -1263,6 +1276,9 @@ impl Lowering<'_, '_> {
     let mut arguments = Vec::with_capacity(abi.parameters.len());
     let mut return_places: Vec<Val> = Vec::new();
     let mut given = 0usize;
+    let mut declared = 0usize;
+    // A default written `#caller_location` is this call's site (**L§7.13**).
+    self.call_sites.push((source, node));
 
     for parameter in &abi.parameters {
       match parameter.kind {
@@ -1285,8 +1301,7 @@ impl Lowering<'_, '_> {
           // the call site builds out of whatever was written past the fixed
           // ones (**L§7.3**).
           let value = match &plan.varargs {
-            Some((view, extra)) if given == plan.arguments.len() => {
-              given += 1;
+            Some((slot, view, extra)) if *slot == declared => {
               let extra = extra.clone();
               self.gather_varargs(*view, &extra, plan.varargs_spread)?
             }
@@ -1301,6 +1316,7 @@ impl Lowering<'_, '_> {
               )?
             }
           };
+          declared += 1;
           match parameter.kind {
             ParameterKind::Value => arguments.push(self.scalar(value)),
             _ => arguments.push(self.address_of(value)),
@@ -1308,6 +1324,8 @@ impl Lowering<'_, '_> {
         }
       }
     }
+
+    self.call_sites.pop();
 
     let dest = abi.direct_return.map(|type_id| self.value(type_id));
     self.emit(Inst::Call {
@@ -1327,6 +1345,116 @@ impl Lowering<'_, '_> {
     }
     results.extend(return_places);
     Some(results)
+  }
+
+  /// Splices a macro's body into the procedure being lowered (**L§7.13**). Its
+  /// parameters become locals holding what the call site passed, its `return`s
+  /// jump to a block after the splice, and its value is whatever it left in
+  /// the storage set aside for it.
+  fn expand_macro(&mut self, plan: &CallPlan, instance: InstanceId) -> Option<Vec<Val>> {
+    let previous_instance = self.checker.enter_instance(Some(instance));
+    // The whole expansion — its arguments and its body — is written at the
+    // call site as far as `#caller_location` is concerned (**L§7.13**).
+    let site = self.checker.instance_info(instance).expansion;
+    if let Some(site) = site {
+      self.call_sites.push(site);
+    }
+    let expanded = self.expand_macro_body(plan, instance);
+    if site.is_some() {
+      self.call_sites.pop();
+    }
+    self.checker.enter_instance(previous_instance);
+    expanded
+  }
+
+  fn expand_macro_body(&mut self, plan: &CallPlan, instance: InstanceId) -> Option<Vec<Val>> {
+    let body = self.checker.instance_body(instance)?;
+    let block = body.block?;
+    let signature = self
+      .checker
+      .types()
+      .procedure_of(plan.type_id)
+      .cloned()
+      .unwrap_or_else(|| oj_types::ProcedureType::new(Vec::new(), Vec::new()));
+
+    // The arguments are the caller's expressions, evaluated where they were
+    // written; each parameter becomes a local of the expansion.
+    let mut given = 0usize;
+    for (index, type_id) in signature.arguments.iter().copied().enumerate() {
+      let value = match &plan.varargs {
+        Some((slot, view, extra)) if *slot == index => {
+          let extra = extra.clone();
+          self.gather_varargs(*view, &extra, plan.varargs_spread)?
+        }
+        _ => {
+          let argument = *plan.arguments.get(given)?;
+          given += 1;
+          self.expression(
+            argument.scope,
+            argument.source,
+            argument.node,
+            Some(type_id),
+          )?
+        }
+      };
+      let Some(decl) = body.parameters.get(index).copied().flatten() else {
+        continue;
+      };
+      let name = {
+        let symbol = self.checker.program().tree().decl(decl).name;
+        self.text(symbol)
+      };
+      let local = self.new_local(name, type_id);
+      let address = self.local_address(local);
+      self.store(address, value);
+      let key = self.local_key(decl);
+      self.local_of_decl.insert(key, local);
+    }
+
+    let exit = self.new_block();
+    let mut results: Vec<(ValueId, TypeId)> = Vec::new();
+    for (index, type_id) in signature.returns.iter().copied().enumerate() {
+      let local = self.new_local(String::from("expanded"), type_id);
+      let address = self.local_address(local);
+      self.clear(address, type_id);
+      results.push((address, type_id));
+      // A named return value is a local the macro's body may assign
+      // (**L§7.2**).
+      if let Some(Some(id)) = body.returns.get(index) {
+        let key = self.local_key(*id);
+        self.local_of_decl.insert(key, local);
+      }
+    }
+
+    let previous_source = std::mem::replace(&mut self.body_source, body.source);
+    let previous_scope = std::mem::replace(&mut self.body_scope, body.scope);
+    self.expansions.push(crate::lower::Expansion {
+      exit,
+      results: results.clone(),
+      defers: self.defers.len(),
+    });
+    self.defers.push(Vec::new());
+    self.statement(block);
+    let scope = self.defers.pop().unwrap_or_default();
+    if !self.terminated() {
+      self.run_defers(&scope);
+      self.terminate(Terminator::Jump(exit));
+    }
+    self.expansions.pop();
+    self.body_source = previous_source;
+    self.body_scope = previous_scope;
+    self.current = exit;
+
+    Some(
+      results
+        .into_iter()
+        .map(|(id, type_id)| Val {
+          id,
+          type_id,
+          indirect: true,
+        })
+        .collect(),
+    )
   }
 
   /// Builds the `[] T` a `..T` parameter receives: the extra arguments are

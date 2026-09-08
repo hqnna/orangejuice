@@ -87,7 +87,7 @@ impl Types {
       if index > 0 {
         out.push_str(", ");
       }
-      if signature.varargs && index + 1 == signature.arguments.len() {
+      if signature.vararg_index == Some(index as u32) {
         out.push_str("..");
       }
       self.write_name(*argument, interner, out);

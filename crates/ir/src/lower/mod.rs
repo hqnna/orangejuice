@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use oj_diag::{Diagnostic, SourceId, Span};
 use oj_lexer::Symbol;
 use oj_scope::{AstSource, DeclId, DeclKind, ScopeId};
-use oj_sema::{Checker, Const, Expr, InstanceId, ProcedureBody, Value};
+use oj_sema::{CallPlan, Checker, Const, Expr, InstanceId, ProcedureBody, Value};
 use oj_syntax::ast::{
   self, DeclarationFlags, ForFlags, IfFlags, LiteralValue, LoopControlType, NodeData, NodeId,
   OperatorType,
@@ -37,6 +37,17 @@ struct Loop {
   break_block: BlockId,
   continue_block: BlockId,
   depth: usize,
+}
+
+/// One macro expanded into the procedure being lowered (**L§7.13**): where a
+/// `return` written in its body goes, and what it leaves its value in.
+struct Expansion {
+  exit: BlockId,
+  /// The address and type of each of the macro's return values.
+  results: Vec<(ValueId, TypeId)>,
+  /// How deep the defer stack was when the expansion began, so a `return`
+  /// inside the macro runs the macro's defers and no more.
+  defers: usize,
 }
 
 /// The result of lowering a whole program.
@@ -114,8 +125,18 @@ struct Lowering<'c, 'p> {
   locals: Vec<Local>,
   value_types: Vec<TypeId>,
   current: BlockId,
-  local_of_decl: HashMap<DeclId, LocalId>,
+  /// The local a declaration became. A macro body's declarations are one
+  /// local per expansion, so the instantiation is part of the key
+  /// (**L§7.13**).
+  local_of_decl: HashMap<(Option<InstanceId>, DeclId), LocalId>,
   loops: Vec<Loop>,
+  /// The macros whose bodies are being spliced in right now, innermost last
+  /// (**L§7.13**).
+  expansions: Vec<Expansion>,
+  /// The calls whose arguments are being evaluated, innermost last, and the
+  /// macros whose bodies are being spliced in. `#caller_location` is the top
+  /// of this (**L§7.13**).
+  call_sites: Vec<(SourceId, NodeId)>,
   defers: Vec<Vec<(ScopeId, SourceId, NodeId)>>,
   returns: Vec<TypeId>,
   return_pointers: Vec<ValueId>,
@@ -151,6 +172,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       current: BlockId(0),
       local_of_decl: HashMap::new(),
       loops: Vec::new(),
+      expansions: Vec::new(),
+      call_sites: Vec::new(),
       defers: Vec::new(),
       returns: Vec::new(),
       return_pointers: Vec::new(),
@@ -675,6 +698,13 @@ impl<'c, 'p> Lowering<'c, 'p> {
       self.blocks[self.current.0 as usize].terminator,
       Terminator::Unreachable
     )
+  }
+
+  /// The key a declaration's local is stored under: the same declaration is a
+  /// different local in every expansion of the macro that wrote it
+  /// (**L§7.13**).
+  fn local_key(&self, decl: DeclId) -> (Option<InstanceId>, DeclId) {
+    (self.checker.decl_instance(decl), decl)
   }
 
   fn new_local(&mut self, name: String, type_id: TypeId) -> LocalId {

@@ -44,8 +44,12 @@ pub(crate) struct Parameter {
 pub(crate) struct Signature {
   pub parameters: Vec<Parameter>,
   pub returns: Vec<TypeId>,
-  pub varargs: bool,
+  /// Which parameter is the `..T` one, when there is one (**L§7.3**).
+  pub vararg_slot: Option<usize>,
   pub polymorphic: bool,
+  /// The header was written `#expand`, so a call site expands it rather than
+  /// calling it (**L§7.13**).
+  pub is_macro: bool,
   /// The declaration this candidate came from, so that a resolved call site
   /// can name the procedure it calls. A value of procedure type has none.
   pub decl: Option<DeclId>,
@@ -56,16 +60,6 @@ pub(crate) struct Signature {
   /// The specialization a polymorphic candidate produced for these arguments
   /// (**L§7.8**). A candidate that needed no instantiation has none.
   pub instance: Option<InstanceId>,
-}
-
-impl Signature {
-  fn required(&self) -> usize {
-    self
-      .parameters
-      .iter()
-      .filter(|parameter| !parameter.has_default)
-      .count()
-  }
 }
 
 /// What a call site resolved to.
@@ -85,9 +79,10 @@ impl Checker<'_> {
     candidates: &[DeclId],
     arguments: &[CallArgument],
   ) -> Resolved {
+    let candidates = self.live_candidates(candidates);
     let mut scored: Vec<(u32, Signature)> = Vec::new();
     let mut any_signature = false;
-    for candidate in candidates {
+    for candidate in &candidates {
       let Some(signature) = self.signature_of(*candidate) else {
         // A candidate whose own type is not worked out yet cannot be ruled
         // out, so neither can any of the others.
@@ -126,57 +121,55 @@ impl Checker<'_> {
     signature: Signature,
     arguments: &[CallArgument],
   ) -> Option<(u32, Signature)> {
-    if !signature.polymorphic {
+    if !signature.polymorphic && !signature.is_macro {
       let distance = self.score(&signature, arguments)?;
       return Some((distance, signature));
     }
+    // A macro goes through instantiation whatever its parameters are: the
+    // expansion is what the call site names (**L§7.13**).
+    let penalty = match signature.polymorphic {
+      true => convert::POLYMORPH,
+      false => 0,
+    };
     let specialized = self.specialize(&signature, arguments)?;
     let distance = self.score(&specialized, arguments)?;
-    Some((distance.saturating_add(convert::POLYMORPH), specialized))
+    Some((distance.saturating_add(penalty), specialized))
+  }
+
+  /// Whether a header was written `#expand` (**L§7.13**).
+  pub(crate) fn is_macro_header(&self, source: SourceId, header: NodeId) -> bool {
+    let Some(ast) = self.ast(source) else {
+      return false;
+    };
+    match ast.data(header) {
+      NodeData::ProcedureHeader(payload) => payload
+        .procedure_flags
+        .contains(oj_syntax::ast::ProcedureFlags::MACRO),
+      _ => false,
+    }
   }
 
   /// How far the arguments are from a candidate's parameters, or `None` when
   /// the candidate does not accept them at all.
   fn score(&mut self, signature: &Signature, arguments: &[CallArgument]) -> Option<u32> {
-    let count = signature.parameters.len();
-    let positional = arguments
-      .iter()
-      .take_while(|argument| argument.name.is_none())
-      .count();
-    if !signature.varargs && (arguments.len() > count || positional > count) {
-      return None;
-    }
-    if arguments.len() < signature.required() && !signature.varargs {
-      // A named argument may still fill a required slot further along.
-      if arguments.iter().all(|argument| argument.name.is_none()) {
+    let slots = self.argument_slots(signature, arguments)?;
+    // Every parameter the call left out has to have a value of its own; a
+    // `..T` slot is happy with nothing at all (**L§7.3**, **L§7.4**).
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+      if parameter.has_default || Some(index) == signature.vararg_slot {
+        continue;
+      }
+      if !slots.contains(&index) {
         return None;
       }
     }
 
     let mut total = 0u32;
-    for (index, argument) in arguments.iter().enumerate() {
-      let parameter = match argument.name {
-        Some(name) => signature
-          .parameters
-          .iter()
-          .find(|parameter| parameter.name == Some(name))?,
-        None => match signature.parameters.get(index) {
-          Some(parameter) => parameter,
-          // Past the last declared parameter is the varargs slot, whose
-          // distance is the first member's (**L§7.5**).
-          None if signature.varargs => {
-            total = total.saturating_add(convert::VARARGS);
-            continue;
-          }
-          None => return None,
-        },
-      };
+    for (argument, index) in arguments.iter().zip(slots) {
+      let parameter = signature.parameters.get(index)?;
       // The varargs parameter is a `[] T`; an argument matches its element,
       // unless it was written `..xs`, which hands over the whole array.
-      let target = if signature.varargs
-        && Some(parameter) == signature.parameters.last()
-        && !argument.spread
-      {
+      let target = if Some(index) == signature.vararg_slot && !argument.spread {
         total = total.saturating_add(convert::VARARGS);
         match self.types().array_of(parameter.type_id) {
           Some((element, _)) => element,
@@ -191,6 +184,41 @@ impl Checker<'_> {
       total = total.saturating_add(convert::POLYMORPH);
     }
     Some(total)
+  }
+
+  /// Which parameter each written argument fills (**L§7.3**). Positional
+  /// arguments take the declared parameters in order; once the `..T` slot is
+  /// reached they all go into it, so a parameter written after one can only be
+  /// filled by name.
+  pub(crate) fn argument_slots(
+    &self,
+    signature: &Signature,
+    arguments: &[CallArgument],
+  ) -> Option<Vec<usize>> {
+    let mut slots = Vec::with_capacity(arguments.len());
+    let mut next = 0usize;
+    for argument in arguments {
+      let index = match argument.name {
+        Some(name) => signature
+          .parameters
+          .iter()
+          .position(|parameter| parameter.name == Some(name))?,
+        // `..xs` fills the whole slot in one go, so what follows it is the
+        // next declared parameter rather than another element (**L§7.3**).
+        None if Some(next) == signature.vararg_slot && argument.spread => {
+          next += 1;
+          next - 1
+        }
+        None if Some(next) == signature.vararg_slot => next,
+        None if next < signature.parameters.len() => {
+          next += 1;
+          next - 1
+        }
+        None => signature.vararg_slot?,
+      };
+      slots.push(index);
+    }
+    Some(slots)
   }
 
   /// An argument converts to its parameter the way an assignment does, plus
@@ -238,6 +266,7 @@ impl Checker<'_> {
         .arguments
         .iter()
         .any(|argument| self.is_polymorphic_type(*argument));
+    let is_macro = header.is_some_and(|(source, node)| self.is_macro_header(source, node));
 
     let parameters = match header {
       Some((source, node)) => self.header_parameters(source, node, &signature.arguments),
@@ -256,8 +285,9 @@ impl Checker<'_> {
     Some(Signature {
       parameters,
       returns: signature.returns.clone(),
-      varargs: signature.varargs,
+      vararg_slot: signature.vararg_index.map(|index| index as usize),
       polymorphic,
+      is_macro,
       decl: Some(candidate),
       header,
       type_id: resolved.value,
@@ -281,10 +311,11 @@ impl Checker<'_> {
         })
         .collect(),
       returns: signature.returns.clone(),
-      varargs: signature.varargs,
+      vararg_slot: signature.vararg_index.map(|index| index as usize),
       polymorphic: signature
         .flags
         .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC),
+      is_macro: false,
       decl: None,
       header: None,
       type_id,

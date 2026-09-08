@@ -12,7 +12,8 @@ use oj_syntax::ast::{
 
 use crate::constants::{AstSource, ConstValue, Evaluator};
 use crate::tree::{
-  Decl, DeclId, DeclKind, ImportEdge, PendingProvider, ScopeId, ScopeKind, ScopeTree, Visibility,
+  Branch, Decl, DeclId, DeclKind, ImportEdge, PendingProvider, ScopeId, ScopeKind, ScopeTree,
+  Visibility,
 };
 
 /// The three scopes a procedure header opens (**L§7.8**): the constants block
@@ -172,6 +173,10 @@ pub struct Program<'a> {
   /// inside one of those exists until an instantiation makes it exist, so a
   /// `#run` written there waits for M7 rather than executing (**L§12.1**).
   uninstantiated_scopes: HashSet<ScopeId>,
+  /// The constants scope of every macro. A name that misses inside one of
+  /// these is a wait for the expansion, not an error: the macro's body sees
+  /// the caller's locals (**L§7.13**).
+  macro_scopes: HashSet<ScopeId>,
   builtins: HashMap<DeclId, ConstValue>,
   references: Vec<Reference>,
   /// Names some macro declares with a backtick, which land in whatever block
@@ -189,6 +194,10 @@ pub struct Program<'a> {
   /// Unlike `speculative` this stops at a module boundary: a module is loaded
   /// once however it was reached, so its own declarations are not conditional.
   conditional: u32,
+  /// The branch of an undecidable `#if` whose statements are being admitted
+  /// right now, so that whoever can fold the condition later knows which
+  /// declarations to drop (**L§6.10**).
+  branch: Option<Branch>,
   unshared_instances: u32,
   preload: ScopeId,
   main: ScopeId,
@@ -242,6 +251,7 @@ impl<'a> Program<'a> {
       loop_scopes: HashMap::new(),
       procedure_scopes: HashMap::new(),
       uninstantiated_scopes: HashSet::new(),
+      macro_scopes: HashSet::new(),
       builtins: HashMap::new(),
       references: Vec::new(),
       macro_injected: HashSet::new(),
@@ -249,6 +259,7 @@ impl<'a> Program<'a> {
       pending_ifs: Vec::new(),
       speculative: 0,
       conditional: 0,
+      branch: None,
       unshared_instances: 0,
       preload,
       main,
@@ -337,6 +348,20 @@ impl<'a> Program<'a> {
     false
   }
 
+  /// Whether a scope lies inside a macro's body, where a name the macro does
+  /// not declare may still be one of the caller's (**L§7.13**). A lookup that
+  /// misses there is a wait for the expansion rather than an error.
+  pub fn is_in_macro(&self, scope: ScopeId) -> bool {
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if self.macro_scopes.contains(&id) {
+        return true;
+      }
+      current = self.tree.scope(id).parent;
+    }
+    false
+  }
+
   pub fn aggregate_scopes(&self) -> impl Iterator<Item = (SourceId, NodeId, ScopeId)> + '_ {
     self
       .aggregate_scopes
@@ -382,6 +407,7 @@ impl<'a> Program<'a> {
         span: Span::at(0),
         node: None,
         conditional: false,
+        branch: None,
         overloadable: false,
       })
       .unwrap_or_else(|previous| previous);
@@ -600,6 +626,7 @@ impl<'a> Program<'a> {
           span,
           node: Some(statement),
           conditional,
+          branch: self.branch,
           overloadable: false,
         });
       }
@@ -694,6 +721,7 @@ impl<'a> Program<'a> {
       span,
       node: Some(node),
       conditional: self.is_conditional(target) || backticked,
+      branch: self.branch,
       overloadable,
     });
 
@@ -839,6 +867,7 @@ impl<'a> Program<'a> {
             span,
             node: Some(entry),
             conditional: self.is_conditional(target),
+            branch: self.branch,
             overloadable: false,
           });
           if declared.is_err() {
@@ -1234,6 +1263,7 @@ impl<'a> Program<'a> {
       span,
       node: Some(name),
       conditional: true,
+      branch: None,
       overloadable: false,
     });
   }
@@ -1459,9 +1489,10 @@ impl<'a> Program<'a> {
     let Some(parsed) = self.parsed_of(source) else {
       return;
     };
-    let branches = self.all_branch_statements(&parsed, node);
+    let branches = self.labelled_branches(&parsed, node, source);
     self.speculative += 1;
     self.conditional += 1;
+    let outer = self.branch;
 
     match item {
       PendingIf::Data {
@@ -1471,22 +1502,64 @@ impl<'a> Program<'a> {
           .tree
           .add_pending(target.destination(), PendingProvider::StaticIf);
         target.conditional = true;
-        for statements in branches {
+        for (branch, statements) in branches {
+          self.branch = branch;
           let mut branch_target = target;
           self.data_statements(&parsed, &statements, &mut branch_target, source);
         }
       }
       PendingIf::Imperative { scope, source, .. } => {
         self.tree.add_pending(scope, PendingProvider::StaticIf);
-        for statements in branches {
+        for (branch, statements) in branches {
+          self.branch = branch;
           for statement in statements {
             self.imperative_statement(&parsed, statement, scope, source);
           }
         }
       }
     }
+    self.branch = outer;
     self.speculative -= 1;
     self.conditional -= 1;
+  }
+
+  /// The statements of each branch, each labelled with the branch it is — so
+  /// that a declaration remembers which one admitted it (**L§6.10**). A `#if
+  /// x == { case … }` has no two-way block to name, so its cases go unlabelled
+  /// and stay admitted.
+  fn labelled_branches(
+    &self,
+    parsed: &Parsed,
+    node: NodeId,
+    source: SourceId,
+  ) -> Vec<(Option<Branch>, Vec<NodeId>)> {
+    let NodeData::If(payload) = parsed.ast.data(node) else {
+      return Vec::new();
+    };
+    if payload
+      .if_flags
+      .contains(oj_syntax::ast::IfFlags::IS_SWITCH_STATEMENT)
+    {
+      return self
+        .all_branch_statements(parsed, node)
+        .into_iter()
+        .map(|statements| (None, statements))
+        .collect();
+    }
+    [payload.then_block, payload.else_block]
+      .into_iter()
+      .flatten()
+      .map(|block| {
+        (
+          Some(Branch {
+            source,
+            node,
+            block,
+          }),
+          self.branch_statements(parsed, block),
+        )
+      })
+      .collect()
   }
 
   fn parsed_of(&self, source: SourceId) -> Option<Arc<Parsed>> {
@@ -2001,6 +2074,9 @@ impl Program<'_> {
     if polymorphic {
       self.uninstantiated_scopes.insert(constants);
     }
+    if payload.procedure_flags.contains(ProcedureFlags::MACRO) {
+      self.macro_scopes.insert(constants);
+    }
     self.procedure_scopes.insert(
       (source, header),
       ProcedureScopes {
@@ -2099,6 +2175,7 @@ impl Program<'_> {
         span,
         node: Some(node),
         conditional: true,
+        branch: None,
         overloadable: false,
       });
     }
@@ -2212,6 +2289,7 @@ impl Program<'_> {
         span,
         node,
         conditional: false,
+        branch: None,
         overloadable: false,
       });
     }

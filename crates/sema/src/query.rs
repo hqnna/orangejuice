@@ -45,10 +45,12 @@ pub struct CallPlan {
   pub type_id: TypeId,
   pub returns: Vec<TypeId>,
   pub arguments: Vec<PlannedArgument>,
-  /// The `[] T` a `..T` parameter is, and the arguments that landed in it,
-  /// which the call site gathers into one (**L§7.3**). An argument written
-  /// `..xs` is the whole `[] T` on its own, and is the only one there.
-  pub varargs: Option<(TypeId, Vec<PlannedArgument>)>,
+  /// Which parameter the `..T` one is, the `[] T` it takes, and the arguments
+  /// that landed in it, which the call site gathers into one (**L§7.3**). An
+  /// argument written `..xs` is the whole `[] T` on its own, and is the only
+  /// one there. The other parameters are in `arguments`, in declaration order
+  /// with this slot left out.
+  pub varargs: Option<(usize, TypeId, Vec<PlannedArgument>)>,
   /// Whether the varargs slot was filled by a single `..xs`.
   pub varargs_spread: bool,
 }
@@ -64,6 +66,9 @@ pub struct InstanceInfo {
   pub scope: ScopeId,
   /// The specialized procedure type.
   pub type_id: TypeId,
+  /// Where a macro expands, when the header is one: the call site whose block
+  /// its body is spliced into (**L§7.13**).
+  pub expansion: Option<(SourceId, NodeId)>,
 }
 
 /// The pieces of a procedure declaration a back end needs: where its header
@@ -209,7 +214,17 @@ impl Checker<'_> {
       header: instance.header,
       scope: instance.outer_scope,
       type_id: instance.type_id,
+      expansion: instance
+        .expansion
+        .map(|expansion| (expansion.source, expansion.node)),
     }
+  }
+
+  /// Which instantiation a declaration belongs to, as the active one sees it:
+  /// a local written inside a macro's body is a different local in every
+  /// expansion (**L§7.8**, **L§7.13**).
+  pub fn decl_instance(&self, decl: DeclId) -> Option<InstanceId> {
+    self.decl_key(decl).0
   }
 
   /// How many instantiations the program produced (**L§7.8**). Two call sites
@@ -318,6 +333,17 @@ impl Checker<'_> {
   /// candidate, an argument of unknown type — which is what a back end reports
   /// as work a later milestone has to do.
   pub fn call_plan(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<CallPlan> {
+    self.at_call_site(scope, source, node, |checker| {
+      checker.call_plan_inner(scope, source, node)
+    })
+  }
+
+  fn call_plan_inner(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<CallPlan> {
     let ast = self.ast(source)?;
     let NodeData::ProcedureCall(call) = ast.data(node) else {
       return None;
@@ -360,37 +386,19 @@ impl Checker<'_> {
     signature: crate::overload::Signature,
   ) -> Option<CallPlan> {
     let count = signature.parameters.len();
-    let vararg_slot = signature.varargs.then(|| count.saturating_sub(1));
-    let fixed = vararg_slot.unwrap_or(count);
+    let vararg_slot = signature.vararg_slot;
+    let typed = self.call_arguments(scope, source, written);
+    let mapping = self.argument_slots(&signature, &typed)?;
 
-    let mut slots: Vec<Option<PlannedArgument>> = vec![None; fixed];
+    let mut slots: Vec<Option<PlannedArgument>> = vec![None; count];
     let mut extra: Vec<PlannedArgument> = Vec::new();
-    let mut next = 0usize;
 
-    for argument in written {
-      let name = argument.name.and_then(|node| self.ident_name(source, node));
-      let index = match name {
-        Some(name) => signature
-          .parameters
-          .iter()
-          .position(|parameter| parameter.name == Some(name))?,
-        None => {
-          let index = next;
-          next += 1;
-          index
-        }
-      };
-      // An argument past the last declared parameter, or one that lands in the
-      // varargs slot, matches the `[] T`'s element rather than the `[] T`
-      // (**L§7.9**).
-      let (slot, spreads) = match signature.parameters.get(index) {
-        Some(parameter) if Some(index) != vararg_slot => (parameter, false),
-        Some(parameter) => (parameter, true),
-        None => (signature.parameters.get(vararg_slot?)?, true),
-      };
-      // `..xs` fills the whole slot; anything else fills one element of it.
+    for (argument, index) in written.iter().zip(mapping) {
+      let slot = signature.parameters.get(index)?;
+      // An argument in the varargs slot matches the `[] T`'s element rather
+      // than the `[] T`, unless it was written `..xs` (**L§7.3**).
       let spread = self.is_spread(source, argument.expression);
-      let target = match spreads && !spread {
+      let target = match Some(index) == vararg_slot && !spread {
         true => self
           .types()
           .array_of(slot.type_id)
@@ -403,16 +411,19 @@ impl Checker<'_> {
         node: argument.expression,
         target,
       };
-      match index < fixed {
-        true => slots[index] = Some(planned),
-        false => extra.push(planned),
+      match Some(index) == vararg_slot {
+        true => extra.push(planned),
+        false => slots[index] = Some(planned),
       }
     }
 
     // A parameter the call left out takes its default, evaluated where the
     // header wrote it (**L§7.4**).
-    let mut planned = Vec::with_capacity(fixed);
+    let mut planned = Vec::with_capacity(count);
     for (index, slot) in slots.into_iter().enumerate() {
+      if Some(index) == vararg_slot {
+        continue;
+      }
       match slot {
         Some(argument) => planned.push(argument),
         None => {
@@ -435,7 +446,7 @@ impl Checker<'_> {
         .is_some_and(|argument| self.is_spread(argument.source, argument.node));
     let varargs = vararg_slot.map(|slot| {
       let element = signature.parameters[slot].type_id;
-      (element, extra)
+      (slot, element, extra)
     });
 
     Some(CallPlan {

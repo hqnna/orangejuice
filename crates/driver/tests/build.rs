@@ -897,3 +897,77 @@ fn an_any_vararg_carries_each_arguments_own_type() {
     "2\n",
   );
 }
+
+#[test]
+fn a_macro_sees_the_locals_of_the_block_it_expands_into() {
+  assert_output(
+    "tally :: (value: int) #expand {\n\
+       total += value;\n\
+       count += 1;\n\
+     }\n\
+     main :: () {\n\
+       total := 0;\n\
+       count := 0;\n\
+       tally(5);\n\
+       tally(7);\n\
+       put_number(total);\n\
+       put_number(count);\n\
+     }\n",
+    "12\n2\n",
+  );
+}
+
+#[test]
+fn a_return_inside_a_macro_leaves_the_macro_with_its_value() {
+  assert_output(
+    "maximum :: (a: int, b: int) -> int #expand {\n\
+       if a > b  return a;\n\
+       return b;\n\
+     }\n\
+     main :: () {\n\
+       put_number(maximum(3, 9));\n\
+       put_number(maximum(11, 4) + 1);\n\
+     }\n",
+    "9\n12\n",
+  );
+}
+
+#[test]
+fn a_backticked_return_inside_a_macro_leaves_the_caller() {
+  assert_output(
+    "bail_unless :: (ok: bool) #expand {\n\
+       if !ok  `return;\n\
+     }\n\
+     report :: (ok: bool) {\n\
+       bail_unless(ok);\n\
+       put(\"reached\\n\");\n\
+     }\n\
+     main :: () {\n\
+       report(false);\n\
+       report(true);\n\
+     }\n",
+    "reached\n",
+  );
+}
+
+#[test]
+fn caller_location_names_the_site_the_macro_was_written_at() {
+  let Some(built) = build_and_run(
+    "here :: (loc := #caller_location) -> int { return loc.line_number; }\n\
+     through :: (loc := #caller_location) -> int #expand { return loc.line_number; }\n\
+     main :: () {\n\
+       put_number(here());\n\
+       put_number(through());\n\
+     }\n",
+  ) else {
+    return;
+  };
+  // The prelude is prepended, so what matters is that both name the line the
+  // call was written on, and that they agree.
+  let lines: Vec<&str> = built.output.lines().collect();
+  assert_eq!(lines.len(), 2);
+  assert_eq!(
+    lines[0].parse::<i64>().unwrap() + 1,
+    lines[1].parse::<i64>().unwrap()
+  );
+}

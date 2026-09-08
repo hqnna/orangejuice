@@ -306,6 +306,7 @@ mod tests {
           span: Span::at(0),
           node: None,
           conditional: false,
+          branch: None,
           overloadable: false,
         })
         .unwrap();
@@ -342,6 +343,7 @@ mod tests {
             span: Span::at(0),
             node: Some(statement),
             conditional: false,
+            branch: None,
             overloadable: false,
           })
           .unwrap();

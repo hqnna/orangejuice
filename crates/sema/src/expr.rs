@@ -260,21 +260,89 @@ impl Checker<'_> {
       }
       return Expr::type_expression(self.polymorph_type(source, node, name));
     }
-    let mut scope = self.scope_at(source, node, scope);
+    // `` `x `` names the caller's scope, never the macro's own (**L§7.13**).
+    let start = match flags.contains(IdentFlags::HAS_SCOPE_MODIFIER) {
+      true => match self.caller_scope() {
+        Some(caller) => caller,
+        None => return Expr::UNKNOWN,
+      },
+      false => self.scope_at(source, node, scope),
+    };
+    if let Some(found) = self.lookup_from(start, name) {
+      return found;
+    }
+    // A macro's body sees the caller's locals by name, for names its own
+    // scopes do not hold (**L§7.13**).
+    match self.caller_scope() {
+      Some(caller) => self.lookup_from(caller, name).unwrap_or(Expr::UNKNOWN),
+      None => Expr::UNKNOWN,
+    }
+  }
+
+  /// Resolves `name` on the chain out of `scope`. `None` means it is not there
+  /// at all, which is what lets a macro's body fall back to its caller.
+  fn lookup_from(&mut self, scope: ScopeId, name: Symbol) -> Option<Expr> {
+    let mut scope = scope;
     loop {
       let Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
-        return Expr::UNKNOWN;
+        return None;
       };
       // A local is not in scope in its own initializer, so `type, ok :=
       // get_type(t, type)` reads the outer `type` (**L§6.13**).
       let Some(shadowed) = self.shadowed_declaration(&candidates) else {
-        return self.declarations_type(&candidates);
+        return Some(self.declarations_type(&candidates));
       };
       let owner = self.program().tree().decl(shadowed).scope;
-      match self.program().tree().scope(owner).parent {
-        Some(parent) => scope = parent,
-        None => return Expr::UNKNOWN,
+      scope = self.program().tree().scope(owner).parent?;
+    }
+  }
+
+  /// Drops the candidates the scope tree admitted from a `#if` branch that the
+  /// checker can now decide against (**L§6.10**). The tree folds what it can
+  /// without types; a condition that needed one — a `size_of`, a `#run` — is
+  /// only decidable here.
+  pub(crate) fn live_candidates(&mut self, candidates: &[DeclId]) -> Vec<DeclId> {
+    if !candidates
+      .iter()
+      .any(|id| self.program().tree().decl(*id).branch.is_some())
+    {
+      return candidates.to_vec();
+    }
+    let mut live = Vec::with_capacity(candidates.len());
+    for id in candidates {
+      let decl = self.program().tree().decl(*id).clone();
+      let Some(branch) = decl.branch else {
+        live.push(*id);
+        continue;
+      };
+      match self.taken_branch(branch, decl.scope) {
+        Some(taken) if taken != branch.block => {}
+        _ => live.push(*id),
       }
+    }
+    // A `#if` nobody can decide leaves every branch standing, which is what
+    // the scope tree already did.
+    match live.is_empty() {
+      true => candidates.to_vec(),
+      false => live,
+    }
+  }
+
+  /// Which of a static `#if`'s two blocks its condition selects, or `None`
+  /// when the condition still does not fold.
+  fn taken_branch(&mut self, branch: oj_scope::Branch, scope: ScopeId) -> Option<NodeId> {
+    let NodeData::If(payload) = self.ast(branch.source)?.data(branch.node) else {
+      return None;
+    };
+    let payload = payload.clone();
+    let condition_scope = self.scope_at(branch.source, payload.condition, scope);
+    let truth = self
+      .expression_type(condition_scope, branch.source, payload.condition)
+      .constant
+      .and_then(|value| value.value.truth())?;
+    match truth {
+      true => payload.then_block,
+      false => payload.else_block,
     }
   }
 
@@ -293,9 +361,9 @@ impl Checker<'_> {
   pub(crate) fn declarations_type(&mut self, candidates: &[DeclId]) -> Expr {
     // The same declaration can be reached down two import paths, which is not
     // an overload set (**L§7.5**).
-    let mut real: Vec<DeclId> = candidates
-      .iter()
-      .copied()
+    let mut real: Vec<DeclId> = self
+      .live_candidates(candidates)
+      .into_iter()
       .filter(|id| self.program().tree().decl(*id).kind != DeclKind::Placeholder)
       .collect();
     real.sort_unstable();

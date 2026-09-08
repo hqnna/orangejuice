@@ -114,6 +114,18 @@ impl DeclKind {
   }
 }
 
+/// The branch of an undecidable `#if` a declaration came from (**L§6.10**).
+/// The scope tree admits every branch; whoever can fold the condition later
+/// drops the declarations of the branches it rejects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Branch {
+  pub source: SourceId,
+  /// The `#if` node.
+  pub node: NodeId,
+  /// The block this branch is, which is one of the `#if`'s two.
+  pub block: NodeId,
+}
+
 #[derive(Clone, Debug)]
 pub struct Decl {
   pub name: Symbol,
@@ -127,6 +139,8 @@ pub struct Decl {
   /// Declared inside a `#if` whose condition M3 could not fold, so it neither
   /// collides with nor is collided with by its sibling branch (**L§4.2**).
   pub conditional: bool,
+  /// Which branch of an undecidable `#if` it came from, when it came from one.
+  pub branch: Option<Branch>,
   /// May share its name with other declarations: a procedure, or a constant
   /// that may name one (**L§7.7**). Whether an alias really is a procedure
   /// needs its type, so a constant that could be one is admitted.
@@ -433,6 +447,7 @@ mod tests {
       span: Span::at(0),
       node: None,
       conditional: false,
+      branch: None,
       overloadable: kind == DeclKind::Procedure,
     }
   }
