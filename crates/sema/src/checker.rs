@@ -275,6 +275,10 @@ pub struct Checker<'a> {
   /// Whoever can execute a `#run`, when anything can (**L§12.1**). A dump
   /// stage installs none, and a run whose expression folds needs none.
   pub(crate) compile_time: Option<std::rc::Rc<dyn crate::run::CompileTime>>,
+  /// Where the `Code_*` export writes (**C§5.3**). A compilation with a
+  /// metaprogram behind it shares this with `oj-meta`, so a `Code` value and
+  /// the tree `compiler_get_nodes` answers with are the same storage.
+  pub(crate) nodes: Option<std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>>,
   /// The answer each `#run` gave, so that a run written once executes once.
   pub(crate) runs: HashMap<(SourceId, NodeId), Expr>,
   /// The runs being worked out right now, which is what makes a `#run` that
@@ -379,6 +383,7 @@ impl<'a> Checker<'a> {
     Self {
       program,
       interner,
+      nodes: None,
       types: Types::new(),
       names: Names::new(interner),
       states: HashMap::new(),
@@ -423,6 +428,22 @@ impl<'a> Checker<'a> {
   /// end, and one that does not fold stays `unknown` (`docs/spec.md` §6.5).
   pub fn set_compile_time(&mut self, engine: std::rc::Rc<dyn crate::run::CompileTime>) {
     self.compile_time = Some(engine);
+  }
+
+  /// Installs the storage the `Code_*` export writes into (**C§5.3**).
+  /// Without one a `Code` value has no address to be, which is what a dump
+  /// stage and a test without a driver behind it see.
+  pub fn set_nodes(&mut self, nodes: std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>) {
+    self.nodes = Some(nodes);
+  }
+
+  /// The address a `Code` value has at compile time: the `Code_Node` the
+  /// program was written at, exported on demand (**L§13.1**, **C§5.3**).
+  pub fn code_address(&mut self, source: SourceId, node: NodeId) -> Option<usize> {
+    let nodes = self.nodes.clone()?;
+    let mut nodes = nodes.borrow_mut();
+    let mut exporter = crate::export::Exporter::new(self, &mut nodes);
+    Some(exporter.tree(source, node).root as usize)
   }
 
   pub(crate) fn next_run_index(&mut self) -> usize {

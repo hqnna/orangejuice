@@ -18,18 +18,34 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 
 mod abi;
+mod code;
 mod intrinsics;
 mod message;
 mod state;
 
 pub use abi::{Slice, SourceCodeLocation, Str, VersionInfo};
+pub use code::{
+  Arena, CodeArgument, CodeArrayLiteralInfo, CodeAsm, CodeBinaryOperator, CodeBlock, CodeCase,
+  CodeCast, CodeCommaSeparatedArgument, CodeCommaSeparatedArguments, CodeCompoundDeclaration,
+  CodeDeclaration, CodeDefer, CodeDirectiveAddContext, CodeDirectiveBake, CodeDirectiveBytes,
+  CodeDirectiveCode, CodeDirectiveExists, CodeDirectiveImport, CodeDirectiveInsert,
+  CodeDirectiveLibrary, CodeDirectiveLoad, CodeDirectiveLocation, CodeDirectiveModify,
+  CodeDirectiveModuleParameters, CodeDirectivePlace, CodeDirectivePokeName,
+  CodeDirectiveProcedureName, CodeDirectiveRun, CodeDirectiveScope, CodeDirectiveWildcard,
+  CodeEnum, CodeExpressionQuery, CodeExtract, CodeFor, CodeIdent, CodeIf, CodeLiteral,
+  CodeLiteralValues, CodeLoopControl, CodeMakeVarargs, CodeNode, CodeNote, CodePointerLiteralInfo,
+  CodeProcedureBody, CodeProcedureCall, CodeProcedureHeader, CodePushContext, CodeResolvedOverload,
+  CodeReturn, CodeScopeEntry, CodeStruct, CodeStructLiteralInfo, CodeTypeDefinition,
+  CodeTypeInstantiation, CodeTypeQuery, CodeUnaryOperator, CodeUsing, CodeWhile,
+  ContextModification, Location, MessageTypechecked, Nodes, Tree, Typechecked, literal_type,
+};
 pub use message::{
   ErrorCode, Kind, Message, MessageComplete, MessageFile, MessageImport, MessagePhase, ModuleType,
   Phase, Stored,
 };
 pub use state::{
   BuildOptionsLayout, Compiled, CompiledFile, CompiledModule, Compiler, DuringCompileLayout,
-  Intercept, Meta, Report, ReportMode, Workspace, WorkspaceStatus,
+  Intercept, Meta, Report, ReportMode, TypecheckedBatch, Workspace, WorkspaceStatus,
 };
 
 thread_local! {

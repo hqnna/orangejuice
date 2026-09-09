@@ -98,6 +98,20 @@ pub fn run_input(
   stage: Stage,
   only: Option<&str>,
 ) -> Report {
+  run_workspace(input, options, stage, only, None)
+}
+
+/// Runs the pipeline over a workspace a metaprogram is watching, exporting its
+/// trees into the storage that metaprogram reads (**C§3.2**, **C§5.3**). The
+/// nodes belong to the compilation *above* this one, since that is the one
+/// whose metaprogram keeps the pointers.
+fn run_workspace(
+  input: &Input,
+  options: &BuildOptions,
+  stage: Stage,
+  only: Option<&str>,
+  watching: Option<std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>>,
+) -> Report {
   let root = &input.anchor();
   let sources = SourceMap::new();
   let interner = Interner::new();
@@ -161,6 +175,13 @@ pub fn run_input(
   // `#run`s the checker executes (**C§3.1**). What it asks the compiler for
   // lands in this, and the workspaces it created are built once it is done.
   let mut state = metaprogram_state(&mut checker, options);
+  if let Some(nodes) = &watching {
+    state.nodes = nodes.clone();
+  }
+  // A `Code` value is the address of a node in this storage (**L§13.1**), so
+  // the checker writes into the same arena the metaprogram reads.
+  checker.set_nodes(state.nodes.clone());
+  let nodes = state.nodes.clone();
   // A workspace compiled while its metaprogram watches reports through this,
   // since the compilation that produced the diagnostics is not this one.
   let watched: std::rc::Rc<std::cell::RefCell<Vec<String>>> = std::rc::Rc::default();
@@ -171,10 +192,18 @@ pub fn run_input(
     state.build_options_layout,
     state.during_compile_layout,
     watched.clone(),
+    nodes.clone(),
   ));
   let outer = oj_meta::install(state);
   checker.check();
   let meta = oj_meta::uninstall().unwrap_or_default();
+  // What a watching metaprogram is told about this compilation's program: the
+  // trees, exported once the checker is done with them (**C§3.2**).
+  if watching.is_some() {
+    let mut borrowed = nodes.borrow_mut();
+    let mut exporter = oj_sema::Exporter::new(&mut checker, &mut borrowed);
+    report.compiled.typechecked = vec![exporter.program()];
+  }
   if let Some(outer) = outer {
     oj_meta::install(outer);
   }
@@ -425,12 +454,13 @@ fn workspace_compiler(
   layout: oj_meta::BuildOptionsLayout,
   dc_layout: oj_meta::DuringCompileLayout,
   sink: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+  nodes: std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>,
 ) -> oj_meta::Compiler {
   let outer = outer.to_path_buf();
   let options = options.clone();
   std::rc::Rc::new(move |workspace: &oj_meta::Workspace| {
     let (input, nested) = workspace_input(workspace, &layout, &dc_layout, &outer, &options);
-    let report = run_input(&input, &nested, stage, None);
+    let report = run_workspace(&input, &nested, stage, None, Some(nodes.clone()));
     let mut compiled = report.compiled;
     compiled.errors = report.diagnostics.len();
     compiled.failed |= report.failed;

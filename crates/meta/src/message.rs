@@ -108,6 +108,7 @@ pub struct MessageComplete {
 #[derive(Debug)]
 pub enum Stored {
   Plain(Box<Message>),
+  Typechecked(Box<crate::code::MessageTypechecked>),
   File(Box<MessageFile>),
   Import(Box<MessageImport>),
   Phase(Box<MessagePhase>),
@@ -119,6 +120,7 @@ impl Stored {
   pub fn as_ptr(&self) -> *const Message {
     match self {
       Self::Plain(message) => &raw const **message,
+      Self::Typechecked(message) => (&raw const **message).cast(),
       Self::File(message) => (&raw const **message).cast(),
       Self::Import(message) => (&raw const **message).cast(),
       Self::Phase(message) => (&raw const **message).cast(),
@@ -129,6 +131,7 @@ impl Stored {
   pub fn kind(&self) -> Kind {
     match self {
       Self::Plain(message) => message.kind,
+      Self::Typechecked(message) => message.message.kind,
       Self::File(message) => message.message.kind,
       Self::Import(message) => message.message.kind,
       Self::Phase(message) => message.message.kind,

@@ -386,6 +386,14 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       }
       (Constant::Null, BasicTypeEnum::PointerType(pointer)) => pointer.const_null().into(),
       (Constant::Int(0), BasicTypeEnum::PointerType(pointer)) => pointer.const_null().into(),
+      // A compile-time address: the `Type_Info` a `Type` names, or the
+      // `Code_Node` a `Code` does (**L§3.10**, **L§13.1**).
+      (Constant::Int(number), BasicTypeEnum::PointerType(pointer)) => self
+        .context
+        .i64_type()
+        .const_int(*number as u64, false)
+        .const_to_pointer(pointer)
+        .into(),
       (Constant::Zero, _) => llvm_type.const_zero(),
       _ => return None,
     })

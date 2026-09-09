@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 oj-diag.workspace = true
 oj-lexer.workspace = true
+oj-meta.workspace = true
 oj-scope.workspace = true
 oj-syntax.workspace = true
 oj-types.workspace = true

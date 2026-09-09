@@ -11,7 +11,19 @@ use std::mem::{offset_of, size_of};
 use oj_diag::SourceMap;
 use oj_lexer::Interner;
 use oj_meta::{
-  Message, MessageComplete, MessageFile, MessageImport, MessagePhase, SourceCodeLocation, Str,
+  CodeArgument, CodeArrayLiteralInfo, CodeAsm, CodeBinaryOperator, CodeBlock, CodeCase, CodeCast,
+  CodeCommaSeparatedArgument, CodeCommaSeparatedArguments, CodeCompoundDeclaration,
+  CodeDeclaration, CodeDefer, CodeDirectiveAddContext, CodeDirectiveBake, CodeDirectiveBytes,
+  CodeDirectiveCode, CodeDirectiveExists, CodeDirectiveImport, CodeDirectiveInsert,
+  CodeDirectiveLibrary, CodeDirectiveLoad, CodeDirectiveLocation, CodeDirectiveModify,
+  CodeDirectiveModuleParameters, CodeDirectivePlace, CodeDirectivePokeName,
+  CodeDirectiveProcedureName, CodeDirectiveRun, CodeDirectiveScope, CodeDirectiveWildcard,
+  CodeEnum, CodeExpressionQuery, CodeExtract, CodeFor, CodeIdent, CodeIf, CodeLiteral,
+  CodeLoopControl, CodeMakeVarargs, CodeNode, CodeNote, CodePointerLiteralInfo, CodeProcedureBody,
+  CodeProcedureCall, CodeProcedureHeader, CodePushContext, CodeResolvedOverload, CodeReturn,
+  CodeScopeEntry, CodeStruct, CodeStructLiteralInfo, CodeTypeDefinition, CodeTypeInstantiation,
+  CodeTypeQuery, CodeUnaryOperator, CodeUsing, CodeWhile, Message, MessageComplete, MessageFile,
+  MessageImport, MessagePhase, MessageTypechecked, SourceCodeLocation, Str, Typechecked,
   VersionInfo,
 };
 use oj_scope::{Options, Program};
@@ -52,6 +64,14 @@ impl Layout {
   }
 }
 
+/// A `Typechecked(T)` is polymorphic, so the fixture bakes one down to a name
+/// the checker can be asked for.
+const FIXTURE: &str = "\
+#import \"Compiler\";
+Typechecked_Probe :: struct { using entry: Typechecked(Code_Node); }
+main :: () {}
+";
+
 fn measure(names: &[&str], check: impl FnOnce(&[Layout])) {
   let Some(jai_dir) = oj_testsupport::jai_dir() else {
     eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
@@ -59,7 +79,7 @@ fn measure(names: &[&str], check: impl FnOnce(&[Layout])) {
   };
   let directory = tempfile::tempdir().expect("a temporary directory");
   let root = directory.path().join("main.jai");
-  std::fs::write(&root, "#import \"Compiler\";\nmain :: () {}\n").expect("the fixture is writable");
+  std::fs::write(&root, FIXTURE).expect("the fixture is writable");
 
   let sources = SourceMap::new();
   let interner = Interner::new();
@@ -215,4 +235,332 @@ fn a_jai_string_is_a_count_and_a_pointer() {
   assert_eq!(size_of::<Str>(), 16);
   assert_eq!(offset_of!(Str, count), 0);
   assert_eq!(offset_of!(Str, data), 8);
+}
+
+/// Checks one mirror against the layout the front end measured: the size, and
+/// every member the reference declares, by the name a metaprogram writes.
+macro_rules! check {
+  ($layouts:expr, $index:expr, $mirror:ty $(, $member:literal => $($field:ident).+)* $(,)?) => {{
+    let layout = &$layouts[$index];
+    layout.assert_size(size_of::<$mirror>());
+    $(layout.assert_offset($member, offset_of!($mirror, $($field).+));)*
+  }};
+}
+
+/// The names measured, in the order `the_node_mirrors_match_the_module` reads
+/// them back.
+const NODE_STRUCTS: &[&str] = &[
+  "Code_Node",
+  "Code_Scope_Entry",
+  "Code_Declaration",
+  "Code_Block",
+  "Code_Ident",
+  "Code_Literal",
+  "Code_Struct_Literal_Info",
+  "Code_Array_Literal_Info",
+  "Code_Pointer_Literal_Info",
+  "Code_Type_Instantiation",
+  "Code_Type_Definition",
+  "Code_Enum",
+  "Code_Argument",
+  "Code_Procedure_Call",
+  "Code_Procedure_Header",
+  "Code_Procedure_Body",
+  "Code_Resolved_Overload",
+  "Code_Struct",
+  "Code_Cast",
+  "Code_Type_Query",
+  "Code_Expression_Query",
+  "Code_If",
+  "Code_Case",
+  "Code_While",
+  "Code_For",
+  "Code_Loop_Control",
+  "Code_Return",
+  "Code_Defer",
+  "Code_Using",
+  "Code_Push_Context",
+  "Code_Unary_Operator",
+  "Code_Binary_Operator",
+  "Code_Comma_Separated_Argument",
+  "Code_Comma_Separated_Arguments",
+  "Code_Compound_Declaration",
+  "Code_Extract",
+  "Code_Make_Varargs",
+  "Code_Note",
+  "Code_Asm",
+  "Code_Directive_Run",
+  "Code_Directive_Code",
+  "Code_Directive_Insert",
+  "Code_Directive_Import",
+  "Code_Directive_Load",
+  "Code_Directive_Library",
+  "Code_Directive_Bake",
+  "Code_Directive_Modify",
+  "Code_Directive_Scope",
+  "Code_Directive_Module_Parameters",
+  "Code_Directive_Location",
+  "Code_Directive_Place",
+  "Code_Directive_Poke_Name",
+  "Code_Directive_Add_Context",
+  "Code_Directive_Procedure_Name",
+  "Code_Directive_Exists",
+  "Code_Directive_Wildcard",
+  "Code_Directive_Bytes",
+  "Code_Context",
+  "Code_Placeholder",
+  "Code_Directive_Through",
+  "Code_Directive_Context_Type",
+  "Message_Typechecked",
+];
+
+#[test]
+fn the_node_mirrors_match_the_module() {
+  measure(NODE_STRUCTS, |l| {
+    check!(l, 0, CodeNode,
+      "kind" => kind,
+      "node_flags" => node_flags,
+      "type" => type_info,
+      "enclosing_load" => location.enclosing_load,
+      "l0" => location.l0,
+      "c0" => location.c0,
+      "l1" => location.l1,
+      "c1" => location.c1,
+      "serial" => serial);
+    check!(l, 1, CodeScopeEntry, "name" => name, "import_target" => import_target);
+    check!(l, 2, CodeDeclaration,
+      "type_inst" => type_inst,
+      "expression" => expression,
+      "flags" => flags,
+      "alignment_expression" => alignment_expression,
+      "notes" => notes,
+      "program_export_name" => program_export_name);
+    check!(l, 3, CodeBlock,
+      "parent" => parent,
+      "block_type" => block_type,
+      "block_flags" => block_flags,
+      "belongs_to_struct" => belongs_to_struct,
+      "members" => members,
+      "statements" => statements,
+      "owning_statement" => owning_statement);
+    check!(l, 4, CodeIdent,
+      "name" => name,
+      "resolved_declaration" => resolved_declaration,
+      "flags" => flags);
+    check!(l, 5, CodeLiteral,
+      "value_type" => value_type,
+      "values" => values,
+      "value_flags" => value_flags);
+    check!(l, 6, CodeStructLiteralInfo,
+      "type_expression" => type_expression,
+      "arguments" => arguments);
+    check!(l, 7, CodeArrayLiteralInfo,
+      "element_type" => element_type,
+      "alignment" => alignment,
+      "array_members" => array_members,
+      "array_literal_flags" => array_literal_flags);
+    check!(l, 8, CodePointerLiteralInfo,
+      "global_symbol" => global_symbol,
+      "data_pointer" => data_pointer,
+      "pointer_literal_type" => pointer_literal_type,
+      "offset_from_symbol" => offset_from_symbol);
+    check!(l, 9, CodeTypeInstantiation,
+      "result" => result,
+      "type_valued_expression" => type_valued_expression,
+      "must_implement" => must_implement,
+      "pointer_to" => pointer_to,
+      "type_directive_target" => type_directive_target,
+      "array_element_type" => array_element_type,
+      "array_dimension" => array_dimension,
+      "inst_flags" => inst_flags);
+    check!(l, 10, CodeTypeDefinition, "info" => info);
+    check!(l, 11, CodeEnum,
+      "internal_type_inst" => internal_type_inst,
+      "internal_type" => internal_type,
+      "external_type" => external_type,
+      "block" => block,
+      "notes" => notes,
+      "marked_as_complete" => marked_as_complete,
+      "marked_as_specified" => marked_as_specified,
+      "is_flags" => is_flags);
+    check!(l, 12, CodeArgument, "expression" => expression, "name" => name);
+    check!(l, 13, CodeProcedureCall,
+      "procedure_expression" => procedure_expression,
+      "resolved_procedure_expression" => resolved_procedure_expression,
+      "overloads" => overloads,
+      "arguments_unsorted" => arguments_unsorted,
+      "arguments_sorted" => arguments_sorted,
+      "num_return_values_received" => num_return_values_received,
+      "macro_expansion_block" => macro_expansion_block,
+      "context_modification" => context_modification,
+      "flags" => flags);
+    check!(l, 14, CodeProcedureHeader,
+      "constants_block" => constants_block,
+      "arguments" => arguments,
+      "returns" => returns,
+      "parameter_usings" => parameter_usings,
+      "name" => name,
+      "foreign_function_name" => foreign_function_name,
+      "library_identifier" => library_identifier,
+      "deprecation_string" => deprecation_string,
+      "polymorph_source_header" => polymorph_source_header,
+      "modify_directives" => modify_directives,
+      "body_or_null" => body_or_null,
+      "procedure_flags" => procedure_flags,
+      "notes" => notes);
+    check!(l, 15, CodeProcedureBody,
+      "block" => block,
+      "header" => header,
+      "body_flags" => body_flags);
+    check!(l, 16, CodeResolvedOverload,
+      "result" => result,
+      "source_expression" => source_expression);
+    check!(l, 17, CodeStruct,
+      "modify_directives" => modify_directives,
+      "block" => block,
+      "arguments_block" => arguments_block,
+      "constants_block" => constants_block,
+      "notes" => notes,
+      "textual_flags" => textual_flags,
+      "alignment" => alignment,
+      "defined_type" => defined_type);
+    check!(l, 18, CodeCast,
+      "target_type" => target_type,
+      "expression" => expression,
+      "cast_flags" => cast_flags);
+    check!(l, 19, CodeTypeQuery, "query_kind" => query_kind, "type_to_query" => type_to_query);
+    check!(l, 20, CodeExpressionQuery,
+      "query_kind" => query_kind,
+      "expression_to_query" => expression_to_query);
+    check!(l, 21, CodeIf,
+      "condition" => condition,
+      "then_block" => then_block,
+      "else_block" => else_block,
+      "if_flags" => if_flags,
+      "static_if_flags" => static_if_flags,
+      "static_if_accepted_case" => static_if_accepted_case);
+    check!(l, 22, CodeCase,
+      "condition" => condition,
+      "then_block" => then_block,
+      "owning_if" => owning_if,
+      "marked_as_fallthrough" => marked_as_fallthrough);
+    check!(l, 23, CodeWhile, "condition" => condition, "block" => block);
+    check!(l, 24, CodeFor,
+      "iteration_expression" => iteration_expression,
+      "iteration_expression_right" => iteration_expression_right,
+      "block" => block,
+      "ident_it" => ident_it,
+      "ident_it_index" => ident_it_index,
+      "ident_decl" => ident_decl,
+      "index_decl" => index_decl,
+      "want_replacement_for_expansion" => want_replacement_for_expansion,
+      "want_pointer_expression" => want_pointer_expression,
+      "want_reverse_expression" => want_reverse_expression,
+      "macro_expansion_procedure_call" => macro_expansion_procedure_call,
+      "for_flags" => for_flags);
+    check!(l, 25, CodeLoopControl, "control_type" => control_type, "target_ident" => target_ident);
+    check!(l, 26, CodeReturn,
+      "arguments_unsorted" => arguments_unsorted,
+      "arguments_sorted" => arguments_sorted,
+      "return_flags" => return_flags);
+    check!(l, 27, CodeDefer, "block" => block, "is_backticked" => is_backticked);
+    check!(l, 28, CodeUsing,
+      "expression" => expression,
+      "filter_type" => filter_type,
+      "filter_expression" => filter_expression,
+      "no_parameters" => no_parameters);
+    check!(l, 29, CodePushContext,
+      "to_push" => to_push,
+      "block" => block,
+      "push_context_flags" => push_context_flags);
+    check!(l, 30, CodeUnaryOperator,
+      "operator_type" => operator_type,
+      "subexpression" => subexpression);
+    check!(l, 31, CodeBinaryOperator,
+      "operator_type" => operator_type,
+      "flags" => flags,
+      "left" => left,
+      "right" => right);
+    check!(l, 32, CodeCommaSeparatedArgument, "node" => node, "modifier" => modifier);
+    check!(l, 33, CodeCommaSeparatedArguments, "arguments" => arguments);
+    check!(l, 34, CodeCompoundDeclaration,
+      "comma_separated_assignment" => comma_separated_assignment,
+      "declaration_properties" => declaration_properties,
+      "alignment_expression" => alignment_expression,
+      "notes" => notes,
+      "operator_type" => operator_type);
+    check!(l, 35, CodeExtract, "from" => from, "index" => index);
+    check!(l, 36, CodeMakeVarargs,
+      "element_type" => element_type,
+      "expressions" => expressions,
+      "is_for_non_native_calling_convention" => is_for_non_native_calling_convention);
+    check!(l, 37, CodeNote, "text" => text, "note_flags" => note_flags);
+    check!(l, 38, CodeAsm, "b1" => b1, "b2" => b2, "b3" => b3);
+    check!(l, 39, CodeDirectiveRun,
+      "procedure" => procedure,
+      "flags" => flags,
+      "assertion_string" => assertion_string);
+    check!(l, 40, CodeDirectiveCode, "expression" => expression, "code_flags" => code_flags);
+    check!(l, 41, CodeDirectiveInsert,
+      "expression" => expression,
+      "scope_redirection" => scope_redirection,
+      "break_replacement" => break_replacement,
+      "continue_replacement" => continue_replacement,
+      "remove_replacement" => remove_replacement,
+      "expansion" => expansion,
+      "is_internal" => is_internal);
+    check!(l, 42, CodeDirectiveImport,
+      "name" => name,
+      "flags" => flags,
+      "import_type" => import_type,
+      "module_parameters_call" => module_parameters_call,
+      "program_parameters_call" => program_parameters_call);
+    check!(l, 43, CodeDirectiveLoad,
+      "short_name" => short_name,
+      "fully_pathed_filename" => fully_pathed_filename,
+      "loaded_string" => loaded_string,
+      "load_flags" => load_flags);
+    check!(l, 44, CodeDirectiveLibrary, "name" => name, "library_flags" => library_flags);
+    check!(l, 45, CodeDirectiveBake, "procedure_call" => procedure_call, "bake_type" => bake_type);
+    check!(l, 46, CodeDirectiveModify, "block" => block);
+    check!(l, 47, CodeDirectiveScope, "scope_type" => scope_type);
+    check!(l, 48, CodeDirectiveModuleParameters,
+      "module_parameters" => module_parameters,
+      "program_parameters" => program_parameters,
+      "common_code" => common_code);
+    check!(l, 49, CodeDirectiveLocation,
+      "expression" => expression,
+      "is_caller_location" => is_caller_location);
+    check!(l, 50, CodeDirectivePlace, "ident" => ident);
+    check!(l, 51, CodeDirectivePokeName, "module_struct" => module_struct, "name" => name);
+    check!(l, 52, CodeDirectiveAddContext, "expression" => expression);
+    check!(l, 53, CodeDirectiveProcedureName, "argument" => argument);
+    check!(l, 54, CodeDirectiveExists,
+      "query_expression" => query_expression,
+      "sync_expression" => sync_expression);
+    check!(l, 55, CodeDirectiveWildcard, "index" => index);
+    check!(l, 56, CodeDirectiveBytes, "expression" => expression);
+    // The nodes with nothing of their own are still a `Code_Node`'s worth of
+    // storage, which is what the exporter allocates for them.
+    check!(l, 57, CodeNode);
+    check!(l, 58, CodeNode);
+    check!(l, 59, CodeNode);
+    check!(l, 60, CodeNode);
+    check!(l, 61, MessageTypechecked,
+      "declarations" => declarations,
+      "procedure_headers" => procedure_headers,
+      "procedure_bodies" => procedure_bodies,
+      "structs" => structs,
+      "others" => others,
+      "all" => all);
+  });
+}
+
+#[test]
+fn a_typechecked_entry_is_an_expression_and_its_subexpressions() {
+  measure(&["Typechecked_Probe"], |layouts| {
+    layouts[0].assert_size(size_of::<Typechecked>());
+    layouts[0].assert_offset("expression", offset_of!(Typechecked, expression));
+    layouts[0].assert_offset("subexpressions", offset_of!(Typechecked, subexpressions));
+  });
 }

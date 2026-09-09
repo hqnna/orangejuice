@@ -10,6 +10,7 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 
 use crate::abi::{Slice, SourceCodeLocation, Str, VersionInfo};
+use crate::code::CodeNode;
 use crate::message::Message;
 use crate::state::{Report, ReportMode, WorkspaceStatus};
 use crate::with;
@@ -77,6 +78,12 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
       "compile_time_debug_break",
       compile_time_debug_break as *const () as usize,
     ),
+    (
+      "compiler_get_nodes",
+      compiler_get_nodes as *const () as usize,
+    ),
+    ("compiler_get_code", compiler_get_code as *const () as usize),
+    ("get_root_type", get_root_type as *const () as usize),
     ("write_string", write_string as *const () as usize),
     ("write_strings", write_strings as *const () as usize),
   ]
@@ -98,6 +105,65 @@ unsafe extern "C" fn set_build_options_dc(options: *const u8, w: i64, _context: 
     }
   });
 }
+/// `compiler_get_nodes :: (code: Code) -> (root: *Code_Node, expressions: [] *Code_Node)`
+///
+/// A `Code` is the address of the `Code_Node` the program was written at, so
+/// the root is the argument itself; what the compiler adds is the flattened
+/// list of everything under it (**C§3.3**, **C§5.3**). A pointer this
+/// compilation did not export answers with nothing rather than reading memory
+/// that is not ours.
+unsafe extern "C" fn compiler_get_nodes(
+  code: *const CodeNode,
+  expressions: *mut Slice,
+  _context: *mut c_void,
+) -> *const CodeNode {
+  let tree = with(|meta| meta.nodes.borrow().tree(code)).flatten();
+  if !expressions.is_null() {
+    unsafe { *expressions = tree.map(|tree| tree.expressions).unwrap_or(Slice::EMPTY) };
+  }
+  match tree {
+    Some(tree) => tree.root,
+    None => std::ptr::null(),
+  }
+}
+
+/// `compiler_get_code :: (node: *Code_Node, code_to_copy_scope_from: Code = #code,null) -> Code`
+///
+/// A `Code` and a `*Code_Node` are the same address here, so making one out of
+/// the other is the identity — what the reference copies along with it is the
+/// scope the names resolve in, which orangejuice keeps on the node itself
+/// (`docs/spec.md` §10).
+unsafe extern "C" fn compiler_get_code(
+  node: *const CodeNode,
+  _scope_source: *const CodeNode,
+  _context: *mut c_void,
+) -> *const CodeNode {
+  node
+}
+
+/// `get_root_type :: (code: Code) -> (status: Get_Root_Type_Status, type: Type)`
+///
+/// A node exported by orangejuice carries no `Type_Info` address, because the
+/// table it would point into belongs to the workspace being compiled rather
+/// than to the metaprogram reading it (`docs/spec.md` §10), so a well-formed
+/// `Code` reports `NOT_TYPED` rather than a pointer into the wrong table.
+unsafe extern "C" fn get_root_type(
+  code: *const CodeNode,
+  result: *mut *const c_void,
+  _context: *mut c_void,
+) -> u8 {
+  if !result.is_null() {
+    unsafe { *result = std::ptr::null() };
+  }
+  if code.is_null() {
+    return 2;
+  }
+  match with(|meta| meta.nodes.borrow().tree(code)).flatten() {
+    Some(_) => 4,
+    None => 3,
+  }
+}
+
 /// `write_string :: (s: string, to_standard_error := false) #no_context #compiler`
 /// (Runtime_Support). At compile time the compiler is the one that writes, so
 /// that what a metaprogram prints is interleaved with the compiler's own

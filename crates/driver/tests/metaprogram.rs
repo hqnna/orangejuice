@@ -734,3 +734,125 @@ fn a_program_that_outputs_nothing_needs_no_entry_point() {
   assert!(!report.failed, "{}", report.diagnostics.join(""));
   assert!(!fixture.path("main").exists(), "nothing should be written");
 }
+
+/// The `Code_*` declarations the export tests read the compiler's answers
+/// with, spelled the way `Compiler.jai` spells them (**C§5.3**).
+const NODES: &str = "\
+Code_Node :: struct {
+  kind: enum u8 {
+    UNINITIALIZED :: 0;
+    BLOCK :: 1; LITERAL :: 2; IDENT :: 3; UNARY_OPERATOR :: 4; BINARY_OPERATOR :: 5;
+    PROCEDURE_BODY :: 6; PROCEDURE_CALL :: 7; DECLARATION :: 25; PROCEDURE_HEADER :: 19;
+    STRUCT :: 20;
+  }
+  node_flags: u32;
+  type: *void;
+  enclosing_load: *void;
+  l0, c0, l1, c1: s32;
+  serial: s64;
+}
+
+Code_Scope_Entry :: struct {
+  #as using base: Code_Node;
+  name: string;
+  import_target: *void;
+}
+
+Code_Declaration :: struct {
+  #as using entry: Code_Scope_Entry;
+  type_inst:  *void;
+  expression: *Code_Node;
+  flags: u32;
+  alignment_expression: *void;
+  notes: [] *void;
+  program_export_name: string;
+}
+
+Code_Binary_Operator :: struct {
+  #as using base: Code_Node;
+  operator_type: s32;
+  flags: u16;
+  left:  *Code_Node;
+  right: *Code_Node;
+}
+
+Typechecked :: struct {
+  expression:     *Code_Node;
+  subexpressions: [] *Code_Node;
+}
+
+Message_Typechecked :: struct {
+  #as using m: Message;
+  declarations:      [] Typechecked;
+  procedure_headers: [] Typechecked;
+  procedure_bodies:  [] Typechecked;
+  structs:           [] Typechecked;
+  others:            [] Typechecked;
+  all:               [] Typechecked;
+}
+
+compiler_get_nodes :: (code: Code) -> (root: *Code_Node, expressions: [] *Code_Node) #compiler;
+";
+
+#[test]
+fn compiler_get_nodes_hands_back_the_tree_a_code_names() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{NODES}\n\
+       #run {{\n  \
+         root, expressions := compiler_get_nodes(#code 1 + 2);\n  \
+         if root == null  compiler_report(\"the code has no root\");\n  \
+         if root.kind != .BINARY_OPERATOR  compiler_report(\"the root is not the operator\");\n  \
+         if expressions.count != 3  compiler_report(\"the tree is not three nodes\");\n  \
+         if root.l0 == 0  compiler_report(\"the root has no line\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("main"));
+}
+
+#[test]
+fn a_watching_metaprogram_is_sent_the_declarations_that_typechecked() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n{NODES}\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"typechecked\";\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(\"MARKER :: 42;\\nmain :: () {{ }}\", w);\n  \
+         found := false;\n  \
+         bodies := 0;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .TYPECHECKED {{\n      \
+             batch := cast(*Message_Typechecked) message;\n      \
+             for batch.declarations {{\n        \
+               declaration := cast(*Code_Declaration) it.expression;\n        \
+               if declaration.name == \"MARKER\"  found = true;\n      \
+             }}\n      \
+             bodies += batch.procedure_bodies.count;\n      \
+             if batch.all.count < batch.declarations.count  compiler_report(\"all is short\");\n    \
+             }}\n    \
+           if message.kind == .COMPLETE  break;\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if !found     compiler_report(\"the added declaration was never reported\");\n  \
+         if bodies == 0  compiler_report(\"no procedure bodies were reported\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("typechecked"));
+}

@@ -102,6 +102,24 @@ impl Lowering<'_, '_> {
     if let Value::Type(queried) = constant.value {
       return self.type_info_value(queried, target);
     }
+    // A `Code` is the address of the `Code_Node` the program was written at,
+    // which is what a metaprogram is handed and what `compiler_get_nodes`
+    // answers for (**L§13.1**, **C§5.3**). It means nothing outside compile
+    // time, where the compiler that exported it is still alive.
+    if let Value::Code { source, node, .. } = constant.value
+      && let Some(address) = self.checker.code_address(source, node)
+    {
+      let dest = self.value(target);
+      self.emit(Inst::Const {
+        dest,
+        value: Constant::Int(address as i128),
+      });
+      return Some(Val {
+        id: dest,
+        type_id: target,
+        indirect: false,
+      });
+    }
     None
   }
 

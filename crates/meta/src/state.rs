@@ -1,5 +1,6 @@
 //! What one compilation's metaprogram has asked the compiler for.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -173,8 +174,23 @@ pub struct Compiled {
   pub object_files: Vec<String>,
   pub system_libraries: Vec<String>,
   pub user_libraries: Vec<String>,
+  /// The `TYPECHECKED` batches the compilation produced (**C§3.2**), already
+  /// exported into the nodes a watching metaprogram reads.
+  pub typechecked: Vec<TypecheckedBatch>,
   pub errors: usize,
   pub failed: bool,
+}
+
+/// One `Message_Typechecked`.s worth of exported trees (**C§3.2**). Only
+/// toplevel declarations are sent; headers, bodies and structs are sent
+/// wherever they were written.
+#[derive(Clone, Debug, Default)]
+pub struct TypecheckedBatch {
+  pub declarations: Vec<crate::code::Typechecked>,
+  pub procedure_headers: Vec<crate::code::Typechecked>,
+  pub procedure_bodies: Vec<crate::code::Typechecked>,
+  pub structs: Vec<crate::code::Typechecked>,
+  pub others: Vec<crate::code::Typechecked>,
 }
 
 #[derive(Clone, Debug)]
@@ -235,6 +251,10 @@ pub struct Meta {
   pub compiler: Option<Compiler>,
   /// Directories `compiler_add_library_search_directory` added (**C§3.3**).
   pub library_directories: Vec<PathBuf>,
+  /// The trees a metaprogram has been handed, and the storage they live in
+  /// (**C§5.3**). A metaprogram keeps every pointer it was given, so this
+  /// lasts as long as the compilation does.
+  pub nodes: Rc<RefCell<crate::code::Nodes>>,
   /// Strings and slices handed to compile-time code, which have to outlive the
   /// call that produced them.
   arena: Vec<Box<[u8]>>,
@@ -404,18 +424,56 @@ impl Meta {
       self.push_message(stored);
     }
 
+    let mut by_path = std::collections::HashMap::new();
     for file in &compiled.files {
       let filename = self.intern(file.path.display().to_string().as_bytes());
       let enclosing_import = file
         .module
         .and_then(|index| imports.get(index).copied())
         .unwrap_or(std::ptr::null());
-      self.push_message(Stored::File(Box::new(MessageFile {
+      let stored = Stored::File(Box::new(MessageFile {
         message: head(Kind::File),
         fully_pathed_filename: filename,
         enclosing_import,
         from_a_string: file.from_a_string,
-      })));
+      }));
+      by_path.insert(file.path.clone(), stored.as_ptr().cast::<MessageFile>());
+      self.push_message(stored);
+    }
+    // `Code_Node.enclosing_load` is the `Message_File` of the file the node was
+    // written in, and those messages exist only now (**C§3.2**).
+    self.nodes.borrow_mut().attach_files(&by_path);
+
+    // A batch of things whose typechecking finished, which the reference sends
+    // as they come in and orangejuice sends once the compilation it replays is
+    // over (`docs/spec.md` §10).
+    for batch in &compiled.typechecked {
+      let declarations = self.nodes_slice(&batch.declarations);
+      let procedure_headers = self.nodes_slice(&batch.procedure_headers);
+      let procedure_bodies = self.nodes_slice(&batch.procedure_bodies);
+      let structs = self.nodes_slice(&batch.structs);
+      let others = self.nodes_slice(&batch.others);
+      let everything: Vec<crate::code::Typechecked> = batch
+        .declarations
+        .iter()
+        .chain(&batch.procedure_headers)
+        .chain(&batch.procedure_bodies)
+        .chain(&batch.structs)
+        .chain(&batch.others)
+        .copied()
+        .collect();
+      let all = self.nodes_slice(&everything);
+      self.push_message(Stored::Typechecked(Box::new(
+        crate::code::MessageTypechecked {
+          message: head(Kind::Typechecked),
+          declarations,
+          procedure_headers,
+          procedure_bodies,
+          structs,
+          others,
+          all,
+        },
+      )));
     }
 
     let executable = compiled
@@ -474,6 +532,12 @@ impl Meta {
     if let Some(intercept) = self.intercept.as_mut() {
       intercept.compiled = true;
     }
+  }
+
+  /// Copies exported entries into the node arena, which is where a metaprogram
+  /// reads them from rather than out of a message that has gone away.
+  fn nodes_slice(&mut self, items: &[crate::code::Typechecked]) -> Slice {
+    self.nodes.borrow_mut().arena.alloc_slice(items)
   }
 
   fn push_message(&mut self, message: Stored) {

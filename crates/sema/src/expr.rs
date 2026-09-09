@@ -118,6 +118,20 @@ impl Checker<'_> {
       NodeData::DirectiveCode { flags, .. } if flags.contains(oj_syntax::ast::CodeFlags::NULL) => {
         Expr::constant(Const::new(TypeId::CODE, Value::Null))
       }
+      // Every other `#code` is the piece of the program it was written around,
+      // which is a constant: the node, and the scope its names resolve in
+      // (**L§13.1**).
+      NodeData::DirectiveCode {
+        expression: Some(expression),
+        ..
+      } => Expr::constant(Const::new(
+        TypeId::CODE,
+        Value::Code {
+          source,
+          node: *expression,
+          scope,
+        },
+      )),
       NodeData::DirectiveCode { .. } => Expr::value(TypeId::CODE),
       NodeData::DirectiveRun(_) => self.run_type(scope, source, node),
       // A block in expression position is an `ifx` branch: its value is its

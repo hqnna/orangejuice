@@ -448,6 +448,7 @@ dependencies = [
  "insta",
  "oj-diag",
  "oj-lexer",
+ "oj-meta",
  "oj-scope",
  "oj-syntax",
  "oj-testsupport",
