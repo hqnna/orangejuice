@@ -99,8 +99,16 @@ enum ProcKey {
 /// lowered, which is what keeps a module's unused polymorphic procedures out
 /// of the back end.
 pub fn lower(checker: &mut Checker) -> Lowered {
+  lower_with_roots(checker, &[])
+}
+
+/// The same, with procedures a metaprogram asked to be lowered whether or not
+/// anything calls them (**C§3.3**): each is named by the file it was written
+/// in and the name it was written with.
+pub fn lower_with_roots(checker: &mut Checker, live: &[(String, String)]) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::Executable);
   lowering.run();
+  lowering.make_live(live);
   lowering.finish()
 }
 
@@ -296,6 +304,47 @@ impl<'c, 'p> Lowering<'c, 'p> {
       procedure.flags |= ProcedureFlags::EXPORT;
       procedure.symbol = String::from(name);
     }
+  }
+
+  /// Lowers procedures nothing reachable calls, because a metaprogram said to
+  /// (**C§3.3**). A name that matches nothing is passed over: the metaprogram
+  /// named a procedure this compilation does not have.
+  fn make_live(&mut self, live: &[(String, String)]) {
+    if live.is_empty() {
+      return;
+    }
+    let tree = self.checker.program().tree();
+    let mut roots = Vec::new();
+    for id in (0..tree.declaration_count() as u32).map(DeclId) {
+      let decl = tree.decl(id);
+      if decl.kind != DeclKind::Procedure {
+        continue;
+      }
+      let Some(source) = decl.source else { continue };
+      let path = self
+        .checker
+        .program()
+        .sources()
+        .file(source)
+        .path()
+        .display()
+        .to_string();
+      let name = self
+        .checker
+        .interner()
+        .resolve_lossy(decl.name)
+        .into_owned();
+      if live
+        .iter()
+        .any(|(file, wanted)| *wanted == name && (file.is_empty() || *file == path))
+      {
+        roots.push(id);
+      }
+    }
+    for root in roots {
+      self.procedure_id(root);
+    }
+    self.drain_queue();
   }
 
   fn drain_queue(&mut self) {

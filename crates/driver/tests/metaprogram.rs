@@ -1299,3 +1299,56 @@ fn a_metaprogram_adds_a_string_to_the_scope_a_message_names() {
   };
   assert_built(&report, &fixture.path("scoped"));
 }
+
+#[test]
+fn a_metaprogram_makes_a_procedure_live_that_nothing_calls() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n{NODES}\n\
+       compiler_make_procedure_live :: (w: Workspace, header: *Code_Procedure_Header) #compiler;\n\
+       Code_Procedure_Header :: struct {{\n  \
+         #as using base: Code_Node;\n  \
+         constants_block: *void;\n  \
+         arguments: [] *void;\n  \
+         returns:   [] *void;\n  \
+         parameter_usings: [] *void;\n  \
+         name: string;\n\
+       }}\n\
+       PROGRAM :: #string OJ_DONE\n\
+       nobody_calls_me :: () {{ }}\n\
+       main :: () {{ }}\n\
+       OJ_DONE\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"made_live\";\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(PROGRAM, w);\n  \
+         asked := false;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .TYPECHECKED && !asked {{\n      \
+             batch := cast(*Message_Typechecked) message;\n      \
+             for batch.procedure_headers {{\n        \
+               header := cast(*Code_Procedure_Header) it.expression;\n        \
+               if header.name == \"nobody_calls_me\" {{\n          \
+                 asked = true;\n          \
+                 compiler_make_procedure_live(w, header);\n        \
+               }}\n      \
+             }}\n    \
+           }}\n    \
+           if message.kind == .COMPLETE  break;\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if !asked  compiler_report(\"the header was never reported\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("made_live"));
+}

@@ -19,6 +19,6 @@ pub use ir::{
 };
 pub use lower::{
   Lowered, MODIFY_ACCEPT, MODIFY_REASON, MODIFY_VARIABLE_SIZE, MODIFY_VARIABLES, Modify, Run,
-  lower, lower_library, lower_modify, lower_run, modify_result_size,
+  lower, lower_library, lower_modify, lower_run, lower_with_roots, modify_result_size,
 };
 pub use print::{print_ir, summary};

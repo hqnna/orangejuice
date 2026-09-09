@@ -100,6 +100,9 @@ pub struct BuildOptions {
   /// Strings a metaprogram added to a scope it named with a message
   /// (**C§3.3**).
   pub added_strings: Vec<oj_scope::AddedString>,
+  /// Procedures `compiler_make_procedure_live` asked to be lowered whether or
+  /// not anything calls them (**C§3.3**), by file and name.
+  pub live_procedures: Vec<(String, String)>,
   /// `-version`, which prints the version and stops when no file follows.
   pub print_version: bool,
   /// `-help` / `-?`, which prints the vendored metaprogram's help text.

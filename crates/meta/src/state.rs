@@ -119,6 +119,10 @@ pub struct Workspace {
   /// (**C§3.3**). Like a `provide_import`, they make the workspace compile
   /// again, since the compilation they belong to is already over.
   pub scoped_strings: Vec<ScopedString>,
+  /// Procedures a metaprogram asked to be lowered even though nothing
+  /// reachable calls them (**C§3.3**), by the file they were written in and
+  /// the name they were written with.
+  pub live_procedures: Vec<(String, String)>,
 }
 
 /// One `add_build_string` aimed at a scope a message named (**C§3.3**).
@@ -455,6 +459,7 @@ impl Meta {
       link_command_complete: false,
       provided_imports: Vec::new(),
       scoped_strings: Vec::new(),
+      live_procedures: Vec::new(),
     });
     id
   }
@@ -605,6 +610,25 @@ impl Meta {
         Some(StringScope::Module(name))
       }
       _ => None,
+    }
+  }
+
+  /// Records a procedure a metaprogram wants lowered whether or not anything
+  /// calls it, and asks for the workspace to be compiled again with it among
+  /// the roots (**C§3.3**).
+  pub fn make_procedure_live(&mut self, workspace: i64, file: String, name: String) {
+    if let Some(target) = self.workspace(workspace) {
+      let already = target
+        .live_procedures
+        .iter()
+        .any(|(had_file, had_name)| *had_file == file && *had_name == name);
+      if already {
+        return;
+      }
+      target.live_procedures.push((file, name));
+    }
+    if let Some(intercept) = self.intercept.as_mut() {
+      intercept.recompile = true;
     }
   }
 

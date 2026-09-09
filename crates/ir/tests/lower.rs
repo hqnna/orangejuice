@@ -300,3 +300,42 @@ fn a_body_that_can_reach_its_end_without_returning_is_a_warning() {
   );
   assert!(warnings("f :: () { }\nmain :: () { f(); }\n").is_empty());
 }
+
+#[test]
+fn a_procedure_nothing_calls_is_lowered_only_when_asked_for() {
+  let jai_dir = jai_dir_or_skip!();
+  const SOURCE: &str = "unreachable_one :: () { }\nmain :: () { }\n";
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("input.jai");
+  std::fs::write(&path, SOURCE).expect("the input should be writable");
+
+  let listing = |live: &[(String, String)]| -> String {
+    let sources = SourceMap::new();
+    let interner = Interner::new();
+    let options = oj_scope::Options {
+      jai_dir: Some(jai_dir.clone()),
+      ..oj_scope::Options::default()
+    };
+    let program = oj_scope::Program::build(&sources, &interner, &path, options);
+    let mut checker = oj_sema::Checker::new(&program);
+    checker.check();
+    let lowered = oj_ir::lower_with_roots(&mut checker, live);
+    assert!(
+      !lowered.has_errors(),
+      "the program should lower cleanly: {:#?}",
+      lowered.diagnostics
+    );
+    oj_ir::print_ir(&lowered.program, &interner, None)
+  };
+
+  // IR generation follows calls from the entry point (**L§11.6**), so nothing
+  // reaches this one.
+  assert!(!listing(&[]).contains("procedure unreachable_one"));
+  // `compiler_make_procedure_live` is how a metaprogram says to lower it
+  // anyway (**C§3.3**).
+  let asked = listing(&[(String::new(), String::from("unreachable_one"))]);
+  assert!(
+    asked.contains("procedure unreachable_one"),
+    "the procedure a metaprogram made live is lowered:\n{asked}"
+  );
+}

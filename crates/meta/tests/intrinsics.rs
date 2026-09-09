@@ -115,9 +115,9 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
     .collect();
   unanswered.sort_unstable();
 
-  // `compiler_modify_procedure`/`compiler_make_procedure_live` need the
-  // `Code_*` export read back into the AST, and a body swapped for the one a
-  // metaprogram handed back (`docs/spec.md` §9, the M8 row).
+  // `compiler_modify_procedure` needs the `Code_*` export read back into the
+  // AST, and the body it produces swapped for the one that was parsed
+  // (`docs/spec.md` §9, the M8 row).
   //
   // `get_runtime_info` is here for a different reason: it is declared
   // `#compiler` but *has a body*, which reads `__runtime_info: Runtime_Info
@@ -125,10 +125,6 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
   // instead, as the head of the type table image — so the body is what runs.
   assert_eq!(
     unanswered,
-    [
-      "compiler_make_procedure_live",
-      "compiler_modify_procedure",
-      "get_runtime_info",
-    ]
+    ["compiler_modify_procedure", "get_runtime_info",]
   );
 }

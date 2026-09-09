@@ -334,7 +334,7 @@ fn run_workspace(
     oj_link::OutputType::DynamicLibrary => {
       oj_ir::lower_library(&mut checker, options.runtime_support.defines_init())
     }
-    _ => oj_ir::lower(&mut checker),
+    _ => oj_ir::lower_with_roots(&mut checker, &options.live_procedures),
   };
   keep_compile_time_data(&mut lowered.program, &engine);
   let lowered = lowered;
@@ -679,6 +679,7 @@ fn workspace_input(
       text: added.text.clone(),
     })
     .collect();
+  nested.live_procedures = workspace.live_procedures.clone();
   let input = Input {
     files: workspace.files.clone(),
     strings: workspace

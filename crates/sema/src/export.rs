@@ -554,6 +554,18 @@ impl Exporter<'_, '_> {
           Some(text) => self.text(text),
           None => Str::EMPTY,
         };
+        // The reference puts a procedure's name on its *header*, which is how
+        // a metaprogram reading a `TYPECHECKED` message knows which procedure
+        // it has (**C§5.3**); orangejuice's parser keeps it on the
+        // declaration, so the header takes it from there.
+        if !expression.is_null()
+          && unsafe { (*expression).kind } == oj_syntax::ast::NodeKind::ProcedureHeader as u16 as u8
+        {
+          let header = expression.cast::<CodeProcedureHeader>().cast_mut();
+          if unsafe { (*header).name.count } == 0 {
+            unsafe { (*header).name = name };
+          }
+        }
         unsafe {
           (*address).entry.name = name;
           (*address).type_inst = type_inst.cast();

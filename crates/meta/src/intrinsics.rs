@@ -114,6 +114,10 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
     ("compiler_get_code", compiler_get_code as *const () as usize),
     ("get_root_type", get_root_type as *const () as usize),
     (
+      "compiler_make_procedure_live",
+      compiler_make_procedure_live as *const () as usize,
+    ),
+    (
       "compiler_custom_link_command_is_complete",
       compiler_custom_link_command_is_complete as *const () as usize,
     ),
@@ -195,6 +199,38 @@ unsafe extern "C" fn get_root_type(
     Some(_) => 4,
     None => 3,
   }
+}
+
+/// `compiler_make_procedure_live :: (w: Workspace, header: *Code_Procedure_Header)`
+///
+/// IR generation starts at the entry point and follows calls (**L§11.6**), so
+/// a procedure nothing reachable calls is never lowered; this is how a
+/// metaprogram says to lower one anyway. The header says which: its own name,
+/// and the file its `enclosing_load` names. As with `provide_import`, the
+/// compilation is already over, so the workspace is compiled again with the
+/// procedure among its roots (`docs/spec.md` §10).
+unsafe extern "C" fn compiler_make_procedure_live(
+  w: i64,
+  header: *const crate::code::CodeProcedureHeader,
+  _context: *mut c_void,
+) {
+  if header.is_null() {
+    return;
+  }
+  let header = unsafe { &*header };
+  let name = unsafe { header.name.string_lossy() };
+  if name.is_empty() {
+    return;
+  }
+  let file = match header.base.location.enclosing_load.is_null() {
+    true => String::new(),
+    false => unsafe {
+      (*header.base.location.enclosing_load)
+        .fully_pathed_filename
+        .string_lossy()
+    },
+  };
+  with(|meta| meta.make_procedure_live(w, file, name));
 }
 
 /// `compiler_custom_link_command_is_complete :: (w: Workspace)`
