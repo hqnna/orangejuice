@@ -3250,3 +3250,102 @@ fn a_for_decides_a_computed_modifier_at_compile_time() {
     "1\n2\n3\n3\n2\n1\n",
   );
 }
+
+#[test]
+fn a_modify_decides_the_specialization_a_call_site_gets() {
+  // The header is read again with what `#modify` left, so a parameter written
+  // `$T` takes the type the block chose rather than the one the call solved
+  // (**L§7.8**).
+  assert_output(
+    "proc :: (a: $T)\n\
+     #modify { T = s64; return true; }\n\
+     { put_number(a); }\n\
+     main :: () {\n  \
+       small: s8 = 1;\n  \
+       medium: s16 = 2;\n  \
+       proc(small);\n  \
+       proc(medium);\n  \
+       proc(3);\n\
+     }\n",
+    "1\n2\n3\n",
+  );
+}
+
+#[test]
+fn a_modify_fills_a_variable_only_it_can_reach() {
+  // `$R` lives in the return list, where nothing an argument says reaches it
+  // (**L§7.8**).
+  assert_output(
+    "#import \"Basic\";\n\
+     widen :: (a: $T) -> $R\n\
+     #modify {\n  \
+       R = T;\n  \
+       ti := cast(*Type_Info) T;\n  \
+       if ti.type == .INTEGER {\n    \
+         info := cast(*Type_Info_Integer) T;\n    \
+         if info.runtime_size < 4  R = s32;\n  \
+       }\n  \
+       return true;\n\
+     }\n\
+     { return cast(R) a; }\n\
+     main :: () {\n  \
+       small: u8 = 7;\n  \
+       big: s64 = 9;\n  \
+       put(tprint(\"% %\\n\", type_of(widen(small)), type_of(widen(big))));\n\
+     }\n",
+    "s32 s64\n",
+  );
+}
+
+#[test]
+fn a_polymorphic_struct_runs_its_own_modify() {
+  // `Holder :: struct (N: int) #modify { if N < 8 N = 8; }` decides its own
+  // arguments, and deduplication happens after it (**L§8.5**).
+  assert_output(
+    "Holder :: struct (N: int)\n\
+     #modify { if N < 8 N = 8;  return true; }\n\
+     { values: [N] int; }\n\
+     main :: () {\n  \
+       a: Holder(9);\n  \
+       b: Holder(3);\n  \
+       put_number(a.values.count);\n  \
+       put_number(b.values.count);\n\
+     }\n",
+    "9\n8\n",
+  );
+}
+
+#[test]
+fn a_run_statement_takes_the_whole_statement() {
+  // `#run stmt_or_block;` runs a statement, so the assignment after it is
+  // part of the run rather than something done to what it produced
+  // (**L§6.11**), and it runs once per instantiation (**L§12.1**).
+  assert_output(
+    "#no_reset counter: int;\n\
+     p :: (v: $T) { #run counter += 1; }\n\
+     main :: () {\n  \
+       p(1);\n  \
+       p(\"a\");\n  \
+       p(2.5);\n  \
+       put_number(counter);\n\
+     }\n",
+    "3\n",
+  );
+}
+
+#[test]
+fn a_struct_constant_reaches_its_as_member_through_its_offset() {
+  // The bytes are laid out the way the struct says, so taking the member it
+  // marked `#as` out of them is a conversion (**L§8.4**).
+  assert_output(
+    "V :: struct { x: int; y: int; }\n\
+     Early :: struct { #as using v: V; name: string; }\n\
+     Late :: struct { favorite: int; #as using v: V; }\n\
+     show :: (a: V) { put_number(a.x); put_number(a.y); }\n\
+     main :: () {\n  \
+       show(Early.{x=5});\n  \
+       show(Late.{y=7});\n\
+     }\n",
+    "5\n0\n0\n7\n",
+  );
+}

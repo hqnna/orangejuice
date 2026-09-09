@@ -33,10 +33,21 @@ impl Lowering<'_, '_> {
       // so does one that is being given a count, since the bytes it becomes are
       // the array's rather than the `{count, data}` pair (**L§3.3**).
       let own = self.checker.hardened(info.type_id);
-      let direct = match self.is_any(target) || (self.is_view(target) && !self.is_view(own)) {
-        true => own,
-        false => target,
-      };
+      // A struct constant reaching another type does so through the member it
+      // marked `#as`, which takes bytes out of it rather than reading the same
+      // ones differently (**L§8.4**).
+      let extracted = matches!(constant.value, Value::Bytes(_))
+        && own != target
+        && self
+          .checker
+          .types()
+          .struct_of(self.checker.types().underlying(own))
+          .is_some();
+      let direct =
+        match self.is_any(target) || (self.is_view(target) && !self.is_view(own)) || extracted {
+          true => own,
+          false => target,
+        };
       if let Some(value) = self.constant_value(&constant, direct) {
         return self.convert(source, node, value, target);
       }

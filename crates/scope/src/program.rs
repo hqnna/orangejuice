@@ -369,9 +369,11 @@ pub struct Program<'a> {
   inserted: boxcar::Vec<Insertion>,
   inserted_of_source: RefCell<HashMap<SourceId, usize>>,
   expansions: RefCell<HashMap<(SourceId, NodeId, InsertVariant), Expansion>>,
-  /// The scope each `#code` was written in, which is where the names in it
-  /// resolve when it is spliced back into the program (**L§13.1**).
-  code_scopes: RefCell<HashMap<(SourceId, NodeId), ScopeId>>,
+  /// The scope each `#code` and `#run` was written in. Neither is a lookup any
+  /// scope would otherwise record, and both need to know where they stand: a
+  /// `#code` for the names it quotes (**L§13.1**), a `#run` for the
+  /// instantiation it belongs to (**L§12.1**).
+  directive_scopes: RefCell<HashMap<(SourceId, NodeId), ScopeId>>,
   /// Every module instantiation, in the order it was made, so that a
   /// metaprogram can be told about each one (**C§3.2**).
   module_records: RefCell<Vec<Module>>,
@@ -497,7 +499,7 @@ impl<'a> Program<'a> {
       inserted: boxcar::Vec::new(),
       inserted_of_source: RefCell::default(),
       expansions: RefCell::default(),
-      code_scopes: RefCell::default(),
+      directive_scopes: RefCell::default(),
       pending_inserts: RefCell::default(),
       failed_imports: RefCell::default(),
       provided_texts: RefCell::default(),
@@ -2274,10 +2276,12 @@ impl<'a> Program<'a> {
       .map(|insert| insert.scope)
   }
 
-  /// The scope a `#code` was written in: the names it quotes resolve there
-  /// unless it is handed somewhere else to be inserted (**L§13.1**).
-  pub fn code_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
-    self.code_scopes.borrow().get(&(source, node)).copied()
+  /// The scope a `#code` or a `#run` was written in: the names a `#code`
+  /// quotes resolve there unless it is handed somewhere else to be inserted
+  /// (**L§13.1**), and a `#run` written inside a polymorphic body belongs to
+  /// whichever instantiation that scope is being read under (**L§12.1**).
+  pub fn directive_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
+    self.directive_scopes.borrow().get(&(source, node)).copied()
   }
 
   /// Which expansion of an `#insert` a piece of program came from: zero for a
@@ -2711,6 +2715,10 @@ impl Program<'_> {
       }
       NodeData::DirectiveImport(_) => self.import(parsed, node, scope, None, source),
       NodeData::DirectiveRun(run) => {
+        self
+          .directive_scopes
+          .borrow_mut()
+          .insert((source, node), scope);
         let (procedure, assertion) = (run.procedure, run.assertion_string);
         self.walk_all(
           parsed,
@@ -2725,7 +2733,7 @@ impl Program<'_> {
         // since nothing in it is a lookup this scope will ever record. Both the
         // directive and the program under it are remembered, since a `Code`
         // value may name either.
-        let mut scopes = self.code_scopes.borrow_mut();
+        let mut scopes = self.directive_scopes.borrow_mut();
         scopes.insert((source, node), scope);
         if let Some(expression) = expression {
           scopes.insert((source, *expression), scope);

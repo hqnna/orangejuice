@@ -3704,7 +3704,24 @@ impl Parser<'_> {
     } else if self.at(TokenKind::OPEN_BRACE) {
       self.parse_braced_block(BlockType::Imperative, BlockFlags::empty())?
     } else {
-      let statement = self.parse_expression()?;
+      let mut statement = self.parse_expression()?;
+      // `#run stmt_or_block;` takes a whole *statement* (**L§6.11**), so an
+      // assignment written after it is part of the run rather than something
+      // done to what the run produced: `#run counter += 1;` counts at compile
+      // time. Nothing else can follow an expression with one of these.
+      if !is_assertion && let Some(operator) = self.assignment_operator() {
+        self.bump();
+        let value = self.parse_assignment_value(block_start)?;
+        statement = self.push(
+          self.span_from(block_start),
+          NodeData::BinaryOperator {
+            operator,
+            flags: BinaryFlags::empty(),
+            left: statement,
+            right: value,
+          },
+        );
+      }
       self.push(
         self.span_from(block_start),
         NodeData::Block(Block {

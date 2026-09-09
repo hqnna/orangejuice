@@ -7,7 +7,7 @@
 //! `#modify` into the same constants share one instantiation.
 
 use oj_diag::{SourceId, Span};
-use oj_scope::{DeclId, ProcedureScopes, ScopeId};
+use oj_scope::{DeclId, ScopeId};
 use oj_syntax::ast::{NodeData, NodeId};
 use oj_types::TypeId;
 
@@ -104,7 +104,8 @@ impl Checker<'_> {
     &mut self,
     source: SourceId,
     header: NodeId,
-    scopes: ProcedureScopes,
+    constants: ScopeId,
+    arguments: ScopeId,
     outer_scope: ScopeId,
     bindings: Vec<(DeclId, Const)>,
   ) -> Option<Vec<(DeclId, Const)>> {
@@ -125,13 +126,13 @@ impl Checker<'_> {
         .collect();
       // The block reads the variables as values, so the instantiation it runs
       // under binds nothing and only says what their types are.
-      let instance = self.value_instance(source, header, scopes, outer_scope, &variables);
+      let instance = self.value_instance(source, header, constants, outer_scope, &variables);
       if !self.modify_in_flight.insert(instance) {
         return Some(bindings);
       }
       let request = ModifyRequest {
         source,
-        scope: scopes.arguments,
+        scope: arguments,
         block,
         instance,
         variables,
@@ -160,15 +161,18 @@ impl Checker<'_> {
     Some(bindings)
   }
 
-  fn modify_blocks(&self, source: SourceId, header: NodeId) -> Vec<NodeId> {
+  pub(crate) fn modify_blocks(&self, source: SourceId, header: NodeId) -> Vec<NodeId> {
     let Some(ast) = self.ast(source) else {
       return Vec::new();
     };
-    let NodeData::ProcedureHeader(payload) = ast.data(header) else {
-      return Vec::new();
+    // A polymorphic struct carries them too: `Holder :: struct (N: int)
+    // #modify { if N < 8 N = 8; }` decides its own arguments (**L§8.5**).
+    let directives = match ast.data(header) {
+      NodeData::ProcedureHeader(payload) => &payload.modify_directives,
+      NodeData::Struct(payload) => &payload.modify_directives,
+      _ => return Vec::new(),
     };
-    payload
-      .modify_directives
+    directives
       .iter()
       .filter_map(|directive| match ast.data(*directive) {
         NodeData::DirectiveModify { block } => Some(*block),
@@ -183,7 +187,7 @@ impl Checker<'_> {
     &mut self,
     source: SourceId,
     header: NodeId,
-    scopes: ProcedureScopes,
+    constants: ScopeId,
     outer_scope: ScopeId,
     variables: &[ModifyVariable],
   ) -> InstanceId {
@@ -192,7 +196,7 @@ impl Checker<'_> {
       decl: None,
       source,
       header,
-      root: scopes.constants,
+      root: constants,
       outer_scope,
       bindings: Vec::new(),
       overrides: variables

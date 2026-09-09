@@ -114,7 +114,7 @@ impl Checker<'_> {
 
     let solution = crate::poly::Solution {
       bindings,
-      overrides: Vec::new(),
+      ..Default::default()
     };
     let instance = self.finish_instantiation(
       &signature,

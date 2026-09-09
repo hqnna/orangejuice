@@ -151,7 +151,7 @@ impl Checker<'_> {
             true => target,
             false => self
               .program()
-              .code_scope(code_source, code)
+              .directive_scope(code_source, code)
               .unwrap_or(code_scope),
           },
         })

@@ -85,7 +85,14 @@ impl Checker<'_> {
     // A `#run` written inside a polymorphic body is a different run in every
     // instantiation, since what it computes is whatever the constants make it
     // (**L§12.1**).
-    let key = (self.instance_of_scope(scope), source, node);
+    // The scope a `#run` stands in is the one the walker recorded: nothing in
+    // it is a lookup, so a caller holding a fallback scope cannot say which
+    // instantiation it belongs to (**L§12.1**).
+    let written = self
+      .program()
+      .directive_scope(source, node)
+      .unwrap_or(scope);
+    let key = (self.instance_of_scope(written), source, node);
     if let Some(cached) = self.runs.get(&key) {
       return cached.clone();
     }
@@ -97,7 +104,7 @@ impl Checker<'_> {
     }
     // A `#run` in a polymorphic body runs once per instantiation (**L§12.1**),
     // so there is nothing to run until there is one.
-    if self.program().is_uninstantiated(scope) && key.0.is_none() {
+    if self.program().is_uninstantiated(written) && key.0.is_none() {
       return Expr::UNKNOWN;
     }
     if !self.runs_in_flight.insert(key) {

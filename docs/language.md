@@ -858,7 +858,7 @@ x := #ifx K > 2 then "Hello" else 42.0;     // both branches required; types may
 
 ### 6.11 `#run` and `#assert` statements
 
-`#run stmt_or_block;` inside a procedure body executes at compile time when the body is typechecked (once per polymorph instantiation). `#assert cond;`, `#assert cond "message";`, `#assert(cond)`, `#assert,stallable cond;` check a constant condition at compile time (only when the enclosing body is live) and cannot depend on non-constants (a `#assert` on a non-constant fails even in a dead runtime branch; guard with `#if is_constant(x)`). See section 12.
+`#run stmt_or_block;` inside a procedure body executes at compile time when the body is typechecked (once per polymorph instantiation). In statement position the run takes the whole *statement*, so the assignment in `#run counter += 1;` is part of what runs rather than something done to what it produced; as an operand — `x := 1 - #run f();` — it takes one expression. `#assert cond;`, `#assert cond "message";`, `#assert(cond)`, `#assert,stallable cond;` check a constant condition at compile time (only when the enclosing body is live) and cannot depend on non-constants (a `#assert` on a non-constant fails even in a dead runtime branch; guard with `#if is_constant(x)`). See section 12.
 
 ### 6.12 `#insert`, `#asm`, `#bytes`
 

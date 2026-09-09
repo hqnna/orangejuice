@@ -126,7 +126,10 @@ impl Checker<'_> {
         ..
       } => {
         let expression = *expression;
-        let scope = self.program().code_scope(source, node).unwrap_or(scope);
+        let scope = self
+          .program()
+          .directive_scope(source, node)
+          .unwrap_or(scope);
         Expr::constant(Const::new(
           TypeId::CODE,
           Value::Code {

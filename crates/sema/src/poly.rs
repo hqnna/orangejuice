@@ -113,6 +113,11 @@ impl Instance {
 pub(crate) struct Solution {
   pub bindings: Vec<(DeclId, Const)>,
   pub overrides: Vec<(DeclId, TypeId)>,
+  /// What unification decided each variable is. A parameter whose type is a
+  /// variable no constants block declares — a quick lambda's, which are all
+  /// `$`-inferred (**L§7.9**) — takes its type from here, once `#modify` has
+  /// had its say about the ones that are declared.
+  pub substitution: HashMap<PolymorphId, TypeId>,
 }
 
 impl Checker<'_> {
@@ -343,6 +348,16 @@ impl Checker<'_> {
     // `Thing(T=string, x="Hello")` (**L§8.5**).
     let order = self.program().tree().declarations(arguments_scope);
     bindings.sort_by_key(|(id, _)| order.iter().position(|declared| declared == id));
+    // A struct's `#modify` may change what its arguments are, and
+    // deduplication happens after it, the way a procedure's does (**L§8.5**).
+    let bindings = self.run_modify(
+      body_source,
+      body,
+      arguments_scope,
+      arguments_scope,
+      outer_scope,
+      bindings,
+    )?;
 
     let key: InstanceKey = (
       body_source,
@@ -614,14 +629,42 @@ impl Checker<'_> {
     let bindings = self.run_modify(
       source,
       header,
-      scopes,
+      scopes.constants,
+      scopes.arguments,
       outer_scope,
       solution.bindings.clone(),
     )?;
-    let solution = Solution {
+    let mut solution = Solution {
       bindings,
       ..solution
     };
+    // A parameter whose type mentions a variable is that variable's type,
+    // read after `#modify` has said what the variable is: `proc :: (a: $T)
+    // #modify { T = s64; }` takes an `s64` however it was called (**L§7.8**).
+    for (id, value) in &solution.bindings {
+      let decl = self.program().tree().decl(*id);
+      let (Some(node), Some(bound)) = (decl.node, value.as_type()) else {
+        continue;
+      };
+      let Some(variable) = self.aggregate_type(decl.source.unwrap_or(source), node) else {
+        continue;
+      };
+      if let TypeKind::Polymorph(definition) = *self.types().kind(variable) {
+        solution.substitution.insert(definition, bound);
+      }
+    }
+    let substitution = solution.substitution.clone();
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+      let solved = self.substitute(parameter.type_id, &substitution);
+      if solved == parameter.type_id {
+        continue;
+      }
+      if let Some(decl) = self.header_parameter_decl(source, signature, index)
+        && !solution.overrides.iter().any(|(bound, _)| *bound == decl)
+      {
+        solution.overrides.push((decl, solved));
+      }
+    }
 
     // A macro is expanded into the block it was called from rather than
     // called, so two sites never share one (**L§7.13**).
@@ -689,6 +732,19 @@ impl Checker<'_> {
   ) -> Option<Solution> {
     let mut substitution: HashMap<PolymorphId, TypeId> = HashMap::new();
     let mut solution = Solution::default();
+    // A header with a `#modify` may decide a variable the call site said
+    // nothing about — one declared in the return list, or one whose argument
+    // was written `xx` and so has no type of its own (**L§7.8**).
+    // Until it runs, the variable is whatever the block will say: `void` while
+    // there is an engine to run it, and the unknown that is never reported
+    // when there is none, since nothing will ever fill it in.
+    let modified = match self.modify_blocks(source, header).is_empty() {
+      true => None,
+      false => Some(match self.compile_time.is_some() {
+        true => TypeId::VOID,
+        false => TypeId::UNKNOWN,
+      }),
+    };
 
     let vararg_slot = signature.vararg_slot;
     let slots = self.argument_slots(signature, arguments)?;
@@ -753,7 +809,9 @@ impl Checker<'_> {
         if !matched {
           return None;
         }
-      } else if !self.unify_polymorph(target, &argument.value, &mut substitution) {
+      } else if !self.unify_polymorph(target, &argument.value, &mut substitution)
+        && !(modified.is_some() && argument.value.autocast)
+      {
         return None;
       }
       // A `$x` parameter is a constant of the instantiation, so the argument
@@ -811,7 +869,14 @@ impl Checker<'_> {
       let TypeKind::Polymorph(definition) = *self.types().kind(variable) else {
         continue;
       };
-      let bound = substitution.get(&definition).copied()?;
+      let bound = match substitution.get(&definition).copied() {
+        Some(bound) => bound,
+        // A `#modify` fills what the call site could not: `sum :: (a: [] $T)
+        // -> $R` declares `R` in its return list, where nothing an argument
+        // says can reach it (**L§7.8**).
+        None if modified.is_some() => modified?,
+        None => return None,
+      };
       solution
         .bindings
         .push((id, Const::new(TypeId::TYPE, Value::Type(bound))));
@@ -868,22 +933,8 @@ impl Checker<'_> {
       }
     }
 
-    // A parameter whose type mentions a variable that no constants block
-    // declares — a quick lambda's, which are all `$`-inferred (**L§7.9**) —
-    // takes the solved type directly.
-    for (index, parameter) in signature.parameters.iter().enumerate() {
-      let solved = self.substitute(parameter.type_id, &substitution);
-      if solved == parameter.type_id {
-        continue;
-      }
-      if let Some(decl) = self.header_parameter_decl(source, signature, index)
-        && !solution.overrides.iter().any(|(bound, _)| *bound == decl)
-      {
-        solution.overrides.push((decl, solved));
-      }
-    }
-
     let _ = header;
+    solution.substitution = substitution;
     solution.bindings.sort_by_key(|(id, _)| *id);
     Some(solution)
   }
