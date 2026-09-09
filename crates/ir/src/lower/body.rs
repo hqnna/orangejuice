@@ -50,10 +50,14 @@ impl Lowering<'_, '_> {
     // header's (**L§7.8**).
     let entered = match key {
       ProcKey::Instance(instance) => Some(self.checker.enter_instance(Some(instance))),
+      // A procedure written inside a polymorphic body is lowered under that
+      // body's instantiation, so the constants it can see are that
+      // specialization's (**L§7.8**).
+      ProcKey::Decl(Some(instance), _) => Some(self.checker.enter_instance(Some(instance))),
       _ => None,
     };
     let body = match key {
-      ProcKey::Decl(decl) => self.checker.procedure_body(decl),
+      ProcKey::Decl(_, decl) => self.checker.procedure_body(decl),
       ProcKey::Node(source, header) => {
         let scope = self.checker.scope_for(source, header, self.body_scope);
         self.checker.procedure_body_at(source, header, scope)
@@ -183,7 +187,7 @@ impl Lowering<'_, '_> {
       // unreachable, so it is the graph that says whether it can be got to.
       if !signature.returns.is_empty() && self.reaches(end) {
         let span = match key {
-          ProcKey::Decl(decl) => self.checker.program().tree().decl(decl).span,
+          ProcKey::Decl(_, decl) => self.checker.program().tree().decl(decl).span,
           _ => self.span_of(body.source, body.header),
         };
         self.warn(body.source, span, "Not all control paths return a value.");

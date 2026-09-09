@@ -51,6 +51,16 @@ impl Checker<'_> {
       };
     }
 
+    // Two types compare by identity, which is what makes `#if T == string` a
+    // constant inside an instantiation (**L§3.10**, **L§7.8**).
+    if let (Value::Type(a), Value::Type(b)) = (&left.value, &right.value) {
+      return match operator {
+        OperatorType::IS_EQUAL => Some(Const::bool(a == b)),
+        OperatorType::IS_NOT_EQUAL => Some(Const::bool(a != b)),
+        _ => None,
+      };
+    }
+
     if matches!(
       operator,
       OperatorType::LOGICAL_AND | OperatorType::LOGICAL_OR

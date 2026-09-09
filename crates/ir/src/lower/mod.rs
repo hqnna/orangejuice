@@ -108,7 +108,10 @@ enum Mode {
 /// declaration, so a node identifies it instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ProcKey {
-  Decl(DeclId),
+  /// A procedure written at a declaration, keyed by the instantiation it was
+  /// resolved in: one nested inside a polymorphic body sees that body's
+  /// constants, so there is one of it per specialization (**L§7.8**).
+  Decl(Option<InstanceId>, DeclId),
   Node(SourceId, NodeId),
   /// `initializer_of(T)`: the procedure that writes a `T`'s default value
   /// through a pointer (**L§17**). The compiler generates it, so it has no
@@ -598,11 +601,12 @@ impl<'c, 'p> Lowering<'c, 'p> {
   }
 
   fn procedure_id(&mut self, decl: DeclId) -> ProcId {
-    if let Some(id) = self.procedure_ids.get(&ProcKey::Decl(decl)) {
+    let key = ProcKey::Decl(self.checker.decl_instance(decl), decl);
+    if let Some(id) = self.procedure_ids.get(&key) {
       return *id;
     }
     let type_id = self.checker.decl_type(decl).value;
-    self.declare_procedure(ProcKey::Decl(decl), Some(decl), type_id, None)
+    self.declare_procedure(key, Some(decl), type_id, None)
   }
 
   /// The procedure `initializer_of(T)` names, written out once per type

@@ -2600,3 +2600,55 @@ fn a_parameter_takes_its_type_from_another_parameters_instantiation() {
     "9\n5\n",
   );
 }
+
+#[test]
+fn procedure_of_call_is_the_specialization_the_call_would_reach() {
+  // `#procedure_of_call f(x)` names the procedure rather than calling it, and
+  // two calls that solve the same constants name one (**L§7.10**).
+  assert_output(
+    "square :: (x: $T) -> T { return x * x; }\n\
+     main :: () {\n  \
+       a: u8 = 5;\n  \
+       b: u8 = 11;\n  \
+       p1 :: #procedure_of_call square(a);\n  \
+       p2 :: #procedure_of_call square(b);\n  \
+       #assert p1 == p2;\n  \
+       put_number(cast(int) p1(6));\n\
+     }\n",
+    "36\n",
+  );
+}
+
+#[test]
+fn a_static_if_over_a_type_variable_picks_one_branch_per_specialization() {
+  // Two types compare by identity, so `#if T == string` folds inside the
+  // instantiation and the branch it rejects is never lowered (**L§7.8**).
+  assert_output(
+    "kind :: (element: $T) -> int {\n  \
+       #if T == string  return element.count;\n  \
+       else             return cast(int)(element * element);\n\
+     }\n\
+     main :: () {\n  \
+       put_number(kind(\"abcd\"));\n  \
+       put_number(kind(5));\n\
+     }\n",
+    "4\n25\n",
+  );
+}
+
+#[test]
+fn a_procedure_nested_in_a_polymorphic_body_sees_that_specialization() {
+  // There is one of it per instantiation, since the constants it can see are
+  // that specialization's (**L§7.8**).
+  assert_output(
+    "outer :: (element: $T) -> int {\n  \
+       inner :: () -> int { #if T == string  return 1; return 2; }\n  \
+       return inner();\n\
+     }\n\
+     main :: () {\n  \
+       put_number(outer(\"x\"));\n  \
+       put_number(outer(7));\n\
+     }\n",
+    "1\n2\n",
+  );
+}

@@ -1879,6 +1879,32 @@ impl Lowering<'_, '_> {
     info: &Expr,
   ) -> Option<Val> {
     let _ = info;
+    // `#procedure_of_call f(x)` is the procedure the call would reach rather
+    // than the call itself: nothing is called, and the value is its address
+    // (**L§7.10**).
+    if matches!(
+      self.checker.tree_of(source).map(|ast| ast.data(node)),
+      Some(NodeData::ProcedureCall(call))
+        if call.flags.contains(ast::CallFlags::RETURNS_PROCEDURE_POINTER_ONLY)
+    ) {
+      let plan = self.checker.call_plan(scope, source, node)?;
+      let id = match (plan.instance, plan.callee) {
+        (Some(instance), _) => self.instance_id(instance),
+        (None, Some(decl)) => self.procedure_id(decl),
+        (None, None) => return None,
+      };
+      let procedure_type = self.procedures[id.0 as usize].type_id;
+      let dest = self.value(procedure_type);
+      self.emit(Inst::ProcedureAddress {
+        dest,
+        procedure: id,
+      });
+      return Some(Val {
+        id: dest,
+        type_id: procedure_type,
+        indirect: false,
+      });
+    }
     let mut results = self.emit_call(scope, source, node, &[])?;
     if results.is_empty() {
       return Some(Val {
