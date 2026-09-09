@@ -235,7 +235,7 @@ impl Checker<'_> {
     }
     let members = self.struct_scope(definition)?;
     let arguments_scope = self.program().tree().parent(members)?;
-    let parameters = self.program().tree().declarations(arguments_scope);
+    let parameters = self.struct_parameters(arguments_scope);
     // Struct arguments may be given by name, in any order, and two
     // instantiations that agree on them are one type (**L§8.5**).
     let mut given: Vec<Option<NodeId>> = vec![None; parameters.len()];
@@ -300,7 +300,7 @@ impl Checker<'_> {
 
     // Every argument has to be a constant, since the members are laid out
     // against them (**L§8.5**).
-    let parameters = self.program().tree().declarations(arguments_scope);
+    let parameters = self.struct_parameters(arguments_scope);
     let given = given.iter().copied();
     let mut bindings = Vec::with_capacity(parameters.len());
     for (parameter, expression) in parameters.iter().zip(given) {
@@ -316,6 +316,33 @@ impl Checker<'_> {
       };
       bindings.push((*parameter, value));
     }
+    // `Thing :: struct (x: $T)` declares `T` beside `x`; the argument's own
+    // type is what it bakes to (**L§8.5**).
+    let mut variables = Vec::new();
+    for (parameter, value) in &bindings {
+      let declared = self.decl_type(*parameter).value;
+      if !matches!(self.types().kind(declared), TypeKind::Polymorph(_)) {
+        continue;
+      }
+      let Some(decl) = self.arguments_variable(arguments_scope, source, declared) else {
+        continue;
+      };
+      if bindings
+        .iter()
+        .chain(variables.iter())
+        .any(|(bound, _)| *bound == decl)
+      {
+        continue;
+      }
+      let bound = self.harden(value.type_id);
+      variables.push((decl, Const::new(TypeId::TYPE, Value::Type(bound))));
+    }
+    bindings.extend(variables);
+    // The reference names an instantiation in declaration order, which puts a
+    // variable before the parameter whose type slot declared it:
+    // `Thing(T=string, x="Hello")` (**L§8.5**).
+    let order = self.program().tree().declarations(arguments_scope);
+    bindings.sort_by_key(|(id, _)| order.iter().position(|declared| declared == id));
 
     let key: InstanceKey = (
       body_source,
@@ -695,9 +722,25 @@ impl Checker<'_> {
           .map_or(parameter.type_id, |(element, _)| element),
         false => parameter.type_id,
       };
+      // A parameter written as an *instantiation over variables* —
+      // `holder: Holder($T, $N)` — matches the arguments of whichever
+      // instantiation the call passed, one by one (**L§7.8**, **L§8.5**).
+      let matched = self.instantiation_arguments(
+        target,
+        argument.value.type_id,
+        scopes,
+        source,
+        &mut substitution,
+        &mut solution,
+      );
+      if let Some(matched) = matched {
+        if !matched {
+          return None;
+        }
+      }
       // A parameter written as a bare polymorphic struct takes whichever
       // instantiation the call passed (**L§7.8**).
-      if let Some(concrete) = self.instantiation_passed(target, argument.value.type_id)
+      else if let Some(concrete) = self.instantiation_passed(target, argument.value.type_id)
         && let Some(decl) = self.header_parameter_decl(source, signature, index)
       {
         solution.overrides.push((decl, concrete));
@@ -866,31 +909,189 @@ impl Checker<'_> {
     Some((self.decl_at(source, parameter)?, required))
   }
 
+  /// A parameter written `Holder($T, $N)` matches an argument that is an
+  /// instantiation of the same family, and binds each variable to what that
+  /// instantiation bound in the same slot (**L§8.5**). `None` when the
+  /// parameter is not an instantiation over variables at all.
+  #[allow(clippy::too_many_arguments)]
+  fn instantiation_arguments(
+    &mut self,
+    pattern: TypeId,
+    actual: TypeId,
+    scopes: ProcedureScopes,
+    source: SourceId,
+    substitution: &mut HashMap<PolymorphId, TypeId>,
+    solution: &mut Solution,
+  ) -> Option<bool> {
+    let (pattern, actual) = match self.types().pointee(pattern) {
+      Some(inner) => (inner, self.types().pointee(actual)?),
+      None => (pattern, actual),
+    };
+    let wanted = self.types().struct_of(self.types().underlying(pattern))?;
+    let family = self.types().struct_info(wanted).polymorph_source?;
+    let bindings = self
+      .struct_instance(wanted)
+      .map(|instance| self.instance(instance).bindings.clone())?;
+    // Only a pattern that mentions a variable is one; `Holder(float, 5)` in a
+    // header is an ordinary type.
+    if !bindings.iter().any(|(_, value)| {
+      value
+        .as_type()
+        .is_some_and(|type_id| matches!(self.types().kind(type_id), TypeKind::Polymorph(_)))
+    }) {
+      return None;
+    }
+
+    let Some(given) = self.types().struct_of(self.types().underlying(actual)) else {
+      return Some(false);
+    };
+    if self.types().struct_info(given).polymorph_source != Some(family) {
+      return Some(false);
+    }
+    let Some(passed) = self
+      .struct_instance(given)
+      .map(|instance| self.instance(instance).bindings.clone())
+    else {
+      return Some(false);
+    };
+    if bindings.len() != passed.len() {
+      return Some(false);
+    }
+
+    for ((_, want), (_, got)) in bindings.iter().zip(&passed) {
+      let Some(variable) = want.as_type() else {
+        if const_key(want) != const_key(got) {
+          return Some(false);
+        }
+        continue;
+      };
+      let TypeKind::Polymorph(definition) = *self.types().kind(variable) else {
+        match got.as_type() {
+          Some(given) if given == variable => continue,
+          _ => return Some(false),
+        }
+      };
+      match got.as_type() {
+        // `$T` takes the type that slot was baked with.
+        Some(given) => {
+          substitution.entry(definition).or_insert(given);
+        }
+        // `$N` takes the *value*, which is a constant of the specialization
+        // rather than one of its types.
+        None => {
+          let decl = self.constants_variable(scopes, source, variable)?;
+          if !solution.bindings.iter().any(|(bound, _)| *bound == decl) {
+            solution.bindings.push((decl, got.clone()));
+          }
+        }
+      }
+    }
+    Some(true)
+  }
+
+  /// The written parameters of a polymorphic struct. A `$T` in a parameter's
+  /// type slot is declared beside them, so the arguments scope holds more
+  /// names than the argument list does (**L§8.5**).
+  fn struct_parameters(&self, arguments: ScopeId) -> Vec<DeclId> {
+    self
+      .program()
+      .tree()
+      .declarations(arguments)
+      .iter()
+      .copied()
+      .filter(|id| self.program().tree().decl(*id).kind == oj_scope::DeclKind::Parameter)
+      .collect()
+  }
+
+  /// The declaration in a struct's argument list that declared the polymorph
+  /// variable `variable` in a parameter's type slot.
+  fn arguments_variable(
+    &mut self,
+    arguments: ScopeId,
+    source: SourceId,
+    variable: TypeId,
+  ) -> Option<DeclId> {
+    for id in self.program().tree().declarations(arguments) {
+      let decl = self.program().tree().decl(id);
+      let Some(node) = decl.node else { continue };
+      if self.aggregate_type(decl.source.unwrap_or(source), node) == Some(variable) {
+        return Some(id);
+      }
+    }
+    None
+  }
+
+  /// The declaration in a header's constants block that declared the polymorph
+  /// variable `variable`.
+  fn constants_variable(
+    &mut self,
+    scopes: ProcedureScopes,
+    source: SourceId,
+    variable: TypeId,
+  ) -> Option<DeclId> {
+    for id in self.program().tree().declarations(scopes.constants) {
+      let decl = self.program().tree().decl(id);
+      let Some(node) = decl.node else { continue };
+      if self.aggregate_type(decl.source.unwrap_or(source), node) == Some(variable) {
+        return Some(id);
+      }
+    }
+    None
+  }
+
   /// Whether `actual` is an instantiation of the polymorphic struct `pattern`
   /// names, in which case the parameter is of *that* type (**L§7.8**). A
   /// pointer to one counts, at the same level of indirection.
   fn instantiation_passed(&self, pattern: TypeId, actual: TypeId) -> Option<TypeId> {
-    let (family, concrete, pointer) = match self.types().pointee(pattern) {
-      Some(family) => (family, self.types().pointee(actual)?, true),
-      None => (pattern, actual, false),
-    };
-    let family = self.types().struct_of(self.types().underlying(family))?;
-    if !self
-      .types()
-      .struct_info(family)
-      .nontextual_flags
-      .contains(oj_types::StructNontextualFlags::POLYMORPHIC)
-    {
-      return None;
+    (self.mentions_family(pattern) && self.family_matches(pattern, actual)).then_some(actual)
+  }
+
+  /// Whether a type slot names a polymorphic struct family anywhere inside it:
+  /// `Holder`, `*Holder`, `*[..] *Holder` (**L§8.5**).
+  fn mentions_family(&self, pattern: TypeId) -> bool {
+    match self.types().kind(pattern) {
+      TypeKind::Pointer(pointee) => self.mentions_family(*pointee),
+      TypeKind::Array { element, .. } => self.mentions_family(*element),
+      _ => self.is_polymorph_family(pattern),
     }
-    let baked = self.types().struct_of(self.types().underlying(concrete))?;
-    if self.types().struct_info(baked).polymorph_source != Some(family) {
-      return None;
+  }
+
+  /// Whether `actual` has the same shape as `pattern` with every family in it
+  /// replaced by one of its instantiations (**L§8.5**).
+  fn family_matches(&self, pattern: TypeId, actual: TypeId) -> bool {
+    if pattern == actual {
+      return true;
     }
-    Some(match pointer {
-      true => actual,
-      false => concrete,
-    })
+    match (
+      self.types().kind(pattern).clone(),
+      self.types().kind(actual).clone(),
+    ) {
+      (TypeKind::Pointer(pattern), TypeKind::Pointer(actual)) => {
+        self.family_matches(pattern, actual)
+      }
+      (
+        TypeKind::Array {
+          element: pattern,
+          kind: want,
+        },
+        TypeKind::Array {
+          element: actual,
+          kind: got,
+        },
+      ) => (want == got || want == ArrayKind::View) && self.family_matches(pattern, actual),
+      _ => {
+        let Some(family) = self.types().struct_of(self.types().underlying(pattern)) else {
+          return false;
+        };
+        if !self.is_polymorph_family(pattern) {
+          return false;
+        }
+        self
+          .types()
+          .struct_of(self.types().underlying(actual))
+          .is_some_and(|baked| self.types().struct_info(baked).polymorph_source == Some(family))
+      }
+    }
   }
 
   /// The declaration one parameter of a header introduced.

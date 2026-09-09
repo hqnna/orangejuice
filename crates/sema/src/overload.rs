@@ -522,8 +522,30 @@ impl Checker<'_> {
       // one of its instantiations — `tc: Typechecked` where `Typechecked ::
       // struct (T: Type)` — takes whichever instantiation the call passes,
       // which is what makes the header polymorphic (**L§7.8**, **L§8.5**).
-      _ => self.is_polymorph_family(type_id),
+      // So does one written as an instantiation over variables,
+      // `holder: Holder($T, $N)`.
+      _ => self.is_polymorph_family(type_id) || self.is_polymorph_instantiation(type_id),
     }
+  }
+
+  /// Whether `type_id` is a baked polymorphic struct one of whose arguments is
+  /// a polymorph variable — `Holder($T, $N)` — which makes it a pattern rather
+  /// than a type (**L§8.5**).
+  pub(crate) fn is_polymorph_instantiation(&self, type_id: TypeId) -> bool {
+    let Some(definition) = self.types().struct_of(self.types().underlying(type_id)) else {
+      return false;
+    };
+    let Some(instance) = self.struct_instance(definition) else {
+      return false;
+    };
+    self.instance(instance).bindings.iter().any(|(_, value)| {
+      value.as_type().is_some_and(|bound| {
+        matches!(
+          self.types().kind(bound),
+          oj_types::TypeKind::Polymorph(_) | oj_types::TypeKind::Unknown
+        )
+      })
+    })
   }
 
   /// Whether `type_id` is a polymorphic struct that nothing has baked yet.

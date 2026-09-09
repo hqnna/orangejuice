@@ -2696,3 +2696,45 @@ fn a_struct_body_defaults_a_member_a_using_brought_in() {
     "7\n0\n",
   );
 }
+
+#[test]
+fn a_parameter_written_as_an_instantiation_over_variables_solves_them() {
+  // `holder: Holder($T, $N)` matches whichever instantiation the call passed,
+  // argument by argument — a type into a type variable, a value into a value
+  // one (**L§8.5**).
+  assert_output(
+    "Holder :: struct ($T: Type, $N: s64) { array: [N] T; }\n\
+     total :: (holder: Holder($T, $N)) -> int {\n  \
+       sum := 0;\n  \
+       for 0..N-1  sum += cast(int) holder.array[it];\n  \
+       return sum;\n\
+     }\n\
+     deep :: (p: *[..] *Holder) -> int { return p.count; }\n\
+     main :: () {\n  \
+       ints: Holder(int, 3);\n  \
+       ints.array[0] = 1;\n  \
+       ints.array[2] = 41;\n  \
+       put_number(total(ints));\n  \
+       list: [..] *Holder(int, 3);\n  \
+       put_number(deep(*list));\n\
+     }\n",
+    "42\n0\n",
+  );
+}
+
+#[test]
+fn a_struct_parameters_type_slot_may_declare_a_variable() {
+  // `Thing :: struct (x: $T)` declares `T` beside `x`, and the argument's own
+  // type is what it bakes to (**L§8.5**).
+  assert_output(
+    "#import \"Basic\";\n\
+     Thing :: struct (x: $T) { y := x; }\n\
+     main :: () {\n  \
+       t: Thing(\"Hello\");\n  \
+       put(t.y);\n  \
+       put(\"\\n\");\n  \
+       put(tprint(\"%\\n\", type_of(t)));\n\
+     }\n",
+    "Hello\nThing(T=string, x=\"Hello\")\n",
+  );
+}

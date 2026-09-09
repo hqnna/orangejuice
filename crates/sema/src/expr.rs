@@ -358,12 +358,15 @@ impl Checker<'_> {
       // Inside an instantiation the `$T` that declares the variable is the
       // type it was bound to, which is what turns the header into a concrete
       // signature (**L§7.8**).
-      if let Some(bound) = self
+      if let Some(value) = self
         .decl_at(source, node)
         .and_then(|decl| self.bound_constant(decl))
-        .and_then(|value| value.as_type())
       {
-        return Expr::type_expression(bound);
+        // A `$N` bound to a *value* stands for that value, not for a type.
+        return match value.as_type() {
+          Some(bound) => Expr::type_expression(bound),
+          None => Expr::constant(value),
+        };
       }
       return Expr::type_expression(self.polymorph_type(source, node, name));
     }
