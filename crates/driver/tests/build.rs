@@ -2904,3 +2904,49 @@ fn an_added_context_member_takes_the_default_it_was_declared_with() {
     "42\n",
   );
 }
+
+#[test]
+fn a_named_for_expansion_is_an_ordinary_name_in_the_loops_scope() {
+  // `for :every_other s` names the macro itself, which applies whatever the
+  // container is; a macro that declares `` `it `` and assigns to it later
+  // still exports the loop's own (**L§7.14**).
+  assert_output(
+    "every_other :: (s: string, body: Code, flags: For_Flags) #expand {\n  \
+       `it: u8;\n  \
+       `it_index: s64;\n  \
+       i := 0;\n  \
+       while i < s.count {\n    \
+         `it = s[i];\n    \
+         `it_index = i;\n    \
+         #insert body;\n    \
+         i += 2;\n  \
+       }\n\
+     }\n\
+     main :: () {\n  \
+       for :every_other \"abcdef\"  { put_number(it_index); put_number(cast(int) it); }\n\
+     }\n",
+    "0\n97\n2\n99\n4\n101\n",
+  );
+}
+
+#[test]
+fn a_return_may_name_the_values_it_gives() {
+  // `return second = "Dolly";` fills the slot it names; the ones it does not
+  // name take the header's defaults (**L§7.2**).
+  assert_output(
+    "fun :: (x: int) -> first: int = 1, second: int = 2 {\n  \
+       if x == 0  return;\n  \
+       if x == 1  return 10;\n  \
+       if x == 2  return second = 20, first = 30;\n  \
+       return second = 40;\n\
+     }\n\
+     main :: () {\n  \
+       for 0..3 {\n    \
+         a, b := fun(it);\n    \
+         put_number(a);\n    \
+         put_number(b);\n  \
+       }\n\
+     }\n",
+    "1\n2\n10\n2\n30\n20\n1\n40\n",
+  );
+}

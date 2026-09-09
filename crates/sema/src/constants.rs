@@ -157,6 +157,14 @@ impl Const {
   /// reference does for an explicit cast. Returns `None` when the conversion
   /// is not a constant one.
   pub fn convert(&self, types: &Types, target: TypeId) -> Option<Self> {
+    // `= .FIRST` is a name until something says which enum it belongs to, and
+    // the target is what says (**L§5.12**).
+    if let Value::EnumName(name) = &self.value {
+      let value = types
+        .enum_of(types.underlying(target))
+        .and_then(|definition| types.enum_info(definition).value_of(*name))?;
+      return Some(Self::new(target, Value::Int(i128::from(value))));
+    }
     if let Some(kind) = types.integer_kind(target) {
       let value = match &self.value {
         Value::Int(value) => *value,

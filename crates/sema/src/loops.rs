@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use oj_diag::SourceId;
+use oj_lexer::Symbol;
 use oj_scope::{DeclId, ScopeId};
 use oj_syntax::ast::{DeclarationFlags, ForFlags, ForNode, NodeData, NodeId};
 use oj_types::TypeId;
@@ -68,26 +69,38 @@ impl Checker<'_> {
     }
     let scope = self.scope_at(source, payload.iteration_expression, scope);
     let subject = self.expression_type(scope, source, payload.iteration_expression);
-    if self.types().array_of(subject.type_id).is_some()
-      || self.types().underlying(subject.type_id) == TypeId::STRING
-    {
-      return None;
-    }
-    // A `for` over a pointer to the container works too (**L§7.14**).
-    let container = self
-      .types()
-      .pointee(subject.type_id)
-      .unwrap_or(subject.type_id);
-    let definition = self.types().struct_of(self.types().underlying(container))?;
-    let members = self.struct_scope(definition)?;
 
-    let name = match payload.want_replacement_for_expansion {
-      Some(node) => self.ident_name(source, node)?,
-      None => self.interned().intern(b"for_expansion"),
-    };
-    let oj_scope::Resolution::Found(candidates) = self.program().tree().lookup(members, name)
-    else {
-      return None;
+    // `for :utf8_iter s` names the macro itself, which is an ordinary name in
+    // the loop's own scope and applies whatever the container is (**L§7.14**);
+    // a bare `for` over a range or an array iterates on its own (**L§6.6**).
+    let candidates = match payload.want_replacement_for_expansion {
+      Some(node) => {
+        let name = self.ident_name(source, node)?;
+        let where_written = self.scope_at(source, node, scope);
+        match self.program().tree().lookup(where_written, name) {
+          oj_scope::Resolution::Found(candidates) => candidates,
+          _ => return None,
+        }
+      }
+      None => {
+        if self.types().array_of(subject.type_id).is_some()
+          || self.types().underlying(subject.type_id) == TypeId::STRING
+        {
+          return None;
+        }
+        // A `for` over a pointer to the container works too (**L§7.14**).
+        let container = self
+          .types()
+          .pointee(subject.type_id)
+          .unwrap_or(subject.type_id);
+        let definition = self.types().struct_of(self.types().underlying(container))?;
+        let members = self.struct_scope(definition)?;
+        let name = self.interned().intern(b"for_expansion");
+        match self.program().tree().lookup(members, name) {
+          oj_scope::Resolution::Found(candidates) => candidates,
+          _ => return None,
+        }
+      }
     };
 
     let header = candidates
@@ -179,8 +192,30 @@ impl Checker<'_> {
     ]
   }
 
-  /// A name the macro exported with a backtick (**L§7.13**), found anywhere in
-  /// its body.
+  /// A name the *active* macro declared with a backtick of its own. Nothing
+  /// records a scope for a backticked identifier — it is meant to resolve in
+  /// the caller — so the instantiation's own body is searched by name
+  /// (**L§7.13**).
+  pub(crate) fn backticked_declaration(&self, name: Symbol) -> Option<DeclId> {
+    let mut current = self.current_instance;
+    while let Some(id) = current {
+      let root = self.instance(id).body_root();
+      let mut pending = vec![root];
+      while let Some(scope) = pending.pop() {
+        let tree = self.program().tree();
+        for declared in &tree.declarations(scope) {
+          let decl = tree.decl(*declared);
+          if decl.name == name && decl.flags.contains(DeclarationFlags::HAS_SCOPE_MODIFIER) {
+            return Some(*declared);
+          }
+        }
+        pending.extend(tree.children(scope).iter().copied());
+      }
+      current = self.instance(id).parent;
+    }
+    None
+  }
+
   fn exported_declaration(&self, instance: InstanceId, name: &[u8]) -> Option<DeclId> {
     let name = self.interned().intern(name);
     let root = self.instance(instance).body_root();

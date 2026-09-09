@@ -685,24 +685,54 @@ impl Lowering<'_, '_> {
     }
     let source = self.body_source;
     let returns = self.returns.clone();
-    let mut values = Vec::new();
-    for (index, argument) in arguments.iter().enumerate() {
-      let target = returns.get(index).copied();
-      let scope = self
-        .checker
-        .scope_for(source, argument.expression, self.body_scope);
-      match self.expression(scope, source, argument.expression, target) {
-        Some(value) => values.push(value),
-        None => return,
+    // `return second = "Dolly";` fills the slot it names; the ones it does not
+    // name take the defaults the header gave them (**L§7.2**).
+    let mut written: Vec<Option<NodeId>> = vec![None; returns.len().max(arguments.len())];
+    let claimed: Vec<usize> = arguments
+      .iter()
+      .filter_map(|argument| argument.name)
+      .filter_map(|name| self.return_slot(source, name))
+      .collect();
+    let mut next = 0usize;
+    for argument in arguments {
+      while argument.name.is_none() && claimed.contains(&next) {
+        next += 1;
+      }
+      let index = match argument.name {
+        Some(name) => match self.return_slot(source, name) {
+          Some(index) => index,
+          None => continue,
+        },
+        None => {
+          next += 1;
+          next - 1
+        }
+      };
+      if let Some(slot) = written.get_mut(index) {
+        *slot = Some(argument.expression);
       }
     }
-    // A named return the `return` left out takes the default the header gave
-    // it (**L§7.2**).
-    while values.len() < returns.len() {
-      let index = values.len();
-      let Some(value) = self.default_return(index) else {
-        self.unsupported(source, node, "a return that names its values", "M7");
-        return;
+
+    let mut values = Vec::new();
+    for index in 0..returns.len().max(arguments.len()) {
+      let target = returns.get(index).copied();
+      let value = match written.get(index).copied().flatten() {
+        Some(expression) => {
+          let scope = self.checker.scope_for(source, expression, self.body_scope);
+          match self.expression(scope, source, expression, target) {
+            Some(value) => value,
+            None => return,
+          }
+        }
+        // A named return the `return` left out takes the default the header
+        // gave it (**L§7.2**).
+        None => match self.default_return(index) {
+          Some(value) => value,
+          None => {
+            self.unsupported(source, node, "a return that names its values", "M7");
+            return;
+          }
+        },
       };
       values.push(value);
     }
@@ -710,6 +740,14 @@ impl Lowering<'_, '_> {
     // (**L§6.6**).
     self.run_defers_to(0);
     self.emit_return(values);
+  }
+
+  /// Which return value a `return name = value;` names (**L§7.2**).
+  fn return_slot(&mut self, source: SourceId, name: NodeId) -> Option<usize> {
+    let name = self.checker.name_at(source, name)?;
+    self.return_decls.iter().position(|declared| {
+      declared.is_some_and(|id| self.checker.program().tree().decl(id).name == name)
+    })
   }
 
   /// A `return` written in a macro's body: the values go into the storage the

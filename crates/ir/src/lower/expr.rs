@@ -230,7 +230,13 @@ impl Lowering<'_, '_> {
     let span = self.checker.tree_of(source)?.node(at).span;
     let file = self.checker.program().sources().file(source);
     let position = file.location(span.start);
-    let path = file.path().to_string_lossy().into_owned();
+    // `Source_Code_Location.fully_pathed_filename` is what its name says: the
+    // reference reports an absolute path however the file was named on the
+    // command line (**L§5.14**).
+    let path = std::path::absolute(file.path())
+      .unwrap_or_else(|_| file.path().to_path_buf())
+      .to_string_lossy()
+      .into_owned();
 
     let definition = {
       let underlying = self.checker.types().underlying(type_id);

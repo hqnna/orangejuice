@@ -396,6 +396,26 @@ impl Checker<'_> {
       },
       false => self.scope_at(source, node, scope),
     };
+    // A backticked name the caller's scope cannot answer for may be one the
+    // macro declared with a backtick of its own — `` `it: u8; `` in a
+    // `for_expansion`, whose type is what the loop's own `it` takes, so asking
+    // the loop for it while the macro is being typed goes in a circle
+    // (**L§7.13**, **L§7.14**).
+    if flags.contains(IdentFlags::HAS_SCOPE_MODIFIER) {
+      let caller = self.lookup_from(start, name);
+      if let Some(found) = caller.clone().filter(|found| !found.is_unknown()) {
+        return found;
+      }
+      if let Some(declared) = self.backticked_declaration(name) {
+        let found = self.declarations_type(&[declared]);
+        if !found.is_unknown() {
+          return found;
+        }
+      }
+      if let Some(found) = caller {
+        return found;
+      }
+    }
     if let Some(found) = self.lookup_from(start, name) {
       return found;
     }
