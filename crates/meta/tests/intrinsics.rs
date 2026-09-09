@@ -115,16 +115,10 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
     .collect();
   unanswered.sort_unstable();
 
-  // `compiler_modify_procedure` needs the `Code_*` export read back into the
-  // AST, and the body it produces swapped for the one that was parsed
-  // (`docs/spec.md` §9, the M8 row).
-  //
-  // `get_runtime_info` is here for a different reason: it is declared
-  // `#compiler` but *has a body*, which reads `__runtime_info: Runtime_Info
-  // #elsewhere`. Nothing binds that symbol — the compiler defines the data
-  // instead, as the head of the type table image — so the body is what runs.
-  assert_eq!(
-    unanswered,
-    ["compiler_modify_procedure", "get_runtime_info",]
-  );
+  // `get_runtime_info` is the one symbol left, and it needs no answer: it is
+  // declared `#compiler` but *has a body*, which reads `__runtime_info:
+  // Runtime_Info #elsewhere`. Nothing binds that symbol — the compiler defines
+  // the data instead, as the head of the type table image — so the body is
+  // what runs.
+  assert_eq!(unanswered, ["get_runtime_info"]);
 }

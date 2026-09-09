@@ -118,6 +118,10 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
       compiler_make_procedure_live as *const () as usize,
     ),
     (
+      "compiler_modify_procedure",
+      compiler_modify_procedure as *const () as usize,
+    ),
+    (
       "compiler_custom_link_command_is_complete",
       compiler_custom_link_command_is_complete as *const () as usize,
     ),
@@ -231,6 +235,63 @@ unsafe extern "C" fn compiler_make_procedure_live(
     },
   };
   with(|meta| meta.make_procedure_live(w, file, name));
+}
+
+/// `compiler_modify_procedure :: (w: Workspace, body: *Code_Procedure_Body)`
+///
+/// The metaprogram has edited the tree it was handed and gives it back to be
+/// compiled instead of what was written (**C§3.3**). orangejuice replays a
+/// watched workspace rather than stalling it (`docs/spec.md` §6.5), so the new
+/// body is printed as source here and the workspace is compiled again with it
+/// spliced over the old one; everything the metaprogram left alone prints as
+/// the text it was written as, so only what it made itself is reconstructed.
+unsafe extern "C" fn compiler_modify_procedure(
+  w: i64,
+  body: *const crate::code::CodeProcedureBody,
+  _context: *mut c_void,
+) {
+  if body.is_null() {
+    return;
+  }
+  let body = unsafe { &*body };
+  if body.header.is_null() {
+    return;
+  }
+  let name = unsafe { (*body.header).name.string_lossy() };
+  if name.is_empty() {
+    return;
+  }
+  let file = match body.base.location.enclosing_load.is_null() {
+    true => String::new(),
+    false => unsafe {
+      (*body.base.location.enclosing_load)
+        .fully_pathed_filename
+        .string_lossy()
+    },
+  };
+  let printed = with(|meta| {
+    let nodes = meta.nodes.borrow();
+    crate::rewrite::Rewriter::new(&nodes).body(body.block)
+  });
+  match printed {
+    Some(Ok(text)) => {
+      with(|meta| meta.modify_procedure(w, file, name, text));
+    }
+    Some(Err(kind)) => {
+      with(|meta| {
+        meta.report(Report {
+          message: format!(
+            "compiler_modify_procedure was given a node of kind {kind} that this compiler cannot compile back to source."
+          ),
+          filename: file,
+          line: body.base.location.l0 as i64,
+          character: body.base.location.c0 as i64,
+          mode: ReportMode::Error,
+        })
+      });
+    }
+    None => {}
+  }
 }
 
 /// `compiler_custom_link_command_is_complete :: (w: Workspace)`

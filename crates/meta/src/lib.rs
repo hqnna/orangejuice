@@ -21,6 +21,7 @@ mod abi;
 mod code;
 mod intrinsics;
 mod message;
+mod rewrite;
 mod state;
 
 pub use abi::{Slice, SourceCodeLocation, Str, VersionInfo};

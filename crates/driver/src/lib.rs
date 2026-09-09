@@ -180,6 +180,7 @@ fn run_workspace(
   scope_options.import_remaps = options.import_remaps.clone();
   scope_options.provided_imports = options.provided_imports.clone();
   scope_options.added_strings = options.added_strings.clone();
+  scope_options.modified_bodies = options.modified_bodies.clone();
 
   let program = oj_scope::Program::build_input(
     &sources,
@@ -680,6 +681,15 @@ fn workspace_input(
     })
     .collect();
   nested.live_procedures = workspace.live_procedures.clone();
+  nested.modified_bodies = workspace
+    .modified_bodies
+    .iter()
+    .map(|modified| oj_scope::ModifiedBody {
+      path: PathBuf::from(&modified.file),
+      name: modified.name.clone(),
+      text: modified.text.clone(),
+    })
+    .collect();
   let input = Input {
     files: workspace.files.clone(),
     strings: workspace

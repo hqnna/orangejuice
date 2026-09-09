@@ -747,7 +747,7 @@ Code_Node :: struct {
   kind: enum u8 {
     UNINITIALIZED :: 0;
     BLOCK :: 1; LITERAL :: 2; IDENT :: 3; UNARY_OPERATOR :: 4; BINARY_OPERATOR :: 5;
-    PROCEDURE_BODY :: 6; PROCEDURE_CALL :: 7; DECLARATION :: 25; PROCEDURE_HEADER :: 19;
+    PROCEDURE_BODY :: 6; PROCEDURE_CALL :: 7; RETURN :: 14; DECLARATION :: 25; PROCEDURE_HEADER :: 19;
     STRUCT :: 20;
   }
   node_flags: u32;
@@ -1351,4 +1351,153 @@ fn a_metaprogram_makes_a_procedure_live_that_nothing_calls() {
     return;
   };
   assert_built(&report, &fixture.path("made_live"));
+}
+
+/// The `Code_*` declarations `compiler_modify_procedure` needs, laid out the
+/// way `oj-meta`'s mirrors are (**C§5.3**).
+const BODIES: &str = "\
+Code_Block :: struct {
+  #as using base: Code_Node;
+  parent: *void;
+  block_type: s32;
+  block_flags: u32;
+  belongs_to_struct: *void;
+  members:    [] *void;
+  statements: [] *Code_Node;
+  owning_statement: *void;
+}
+
+Code_Procedure_Header :: struct {
+  #as using base: Code_Node;
+  constants_block: *void;
+  arguments: [] *void;
+  returns:   [] *void;
+  parameter_usings: [] *void;
+  name: string;
+}
+
+Code_Procedure_Body :: struct {
+  #as using base: Code_Node;
+  block:  *Code_Block;
+  header: *Code_Procedure_Header;
+  body_flags: u32;
+}
+
+compiler_modify_procedure :: (w: Workspace, body: *Code_Procedure_Body) #compiler;
+";
+
+#[test]
+fn a_metaprogram_modifies_a_procedure_body_and_the_program_changes() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n{NODES}\n{BODIES}\n\
+       PROGRAM :: #string OJ_DONE\n\
+       #import \"Basic\";\n\
+       main :: () {{\n    \
+         print(\"first\\n\");\n    \
+         print(\"second\\n\");\n\
+       }}\n\
+       OJ_DONE\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"modified\";\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(PROGRAM, w);\n  \
+         asked := false;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .TYPECHECKED && !asked {{\n      \
+             batch := cast(*Message_Typechecked) message;\n      \
+             for batch.procedure_bodies {{\n        \
+               body := cast(*Code_Procedure_Body) it.expression;\n        \
+               if body.header.name == \"main\" {{\n          \
+                 asked = true;\n          \
+                 body.block.statements.count -= 1;\n          \
+                 compiler_modify_procedure(w, body);\n        \
+               }}\n      \
+             }}\n    \
+           }}\n    \
+           if message.kind == .COMPLETE  break;\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if !asked  compiler_report(\"the body was never reported\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  let executable = fixture.path("modified");
+  assert_built(&report, &executable);
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the modified program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "first\n");
+}
+
+#[test]
+fn a_statement_a_metaprogram_made_itself_is_compiled_back_to_source() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n{NODES}\n{BODIES}\n\
+       Code_Return :: struct {{\n  \
+         #as using base: Code_Node;\n  \
+         arguments_unsorted: [] *void;\n  \
+         arguments_sorted:   [] *Code_Node;\n  \
+         return_flags: u32;\n\
+       }}\n\
+       PROGRAM :: #string OJ_DONE\n\
+       #import \"Basic\";\n\
+       main :: () {{\n    \
+         print(\"unreachable\\n\");\n\
+       }}\n\
+       OJ_DONE\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"rebuilt\";\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(PROGRAM, w);\n  \
+         made: Code_Return;\n  \
+         statements: [1] *Code_Node;\n  \
+         asked := false;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .TYPECHECKED && !asked {{\n      \
+             batch := cast(*Message_Typechecked) message;\n      \
+             for batch.procedure_bodies {{\n        \
+               body := cast(*Code_Procedure_Body) it.expression;\n        \
+               if body.header.name == \"main\" {{\n          \
+                 asked = true;\n          \
+                 made.kind = .RETURN;\n          \
+                 statements[0] = cast(*Code_Node) *made;\n          \
+                 body.block.statements.data  = *statements[0];\n          \
+                 body.block.statements.count = 1;\n          \
+                 compiler_modify_procedure(w, body);\n        \
+               }}\n      \
+             }}\n    \
+           }}\n    \
+           if message.kind == .COMPLETE  break;\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if !asked  compiler_report(\"the body was never reported\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  let executable = fixture.path("rebuilt");
+  assert_built(&report, &executable);
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the rebuilt program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "");
 }

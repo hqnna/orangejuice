@@ -123,6 +123,20 @@ pub struct Workspace {
   /// reachable calls them (**C§3.3**), by the file they were written in and
   /// the name they were written with.
   pub live_procedures: Vec<(String, String)>,
+  /// Procedure bodies a metaprogram edited and handed back with
+  /// `compiler_modify_procedure` (**C§3.3**), printed as the source the next
+  /// compilation of this workspace parses in place of what was written.
+  pub modified_bodies: Vec<ModifiedBody>,
+}
+
+/// One `compiler_modify_procedure` (**C§3.3**): the procedure named by the file
+/// it was written in and the name it was written with, and the text of the
+/// block that replaces its body.
+#[derive(Clone, Debug)]
+pub struct ModifiedBody {
+  pub file: String,
+  pub name: String,
+  pub text: String,
 }
 
 /// One `add_build_string` aimed at a scope a message named (**C§3.3**).
@@ -460,6 +474,7 @@ impl Meta {
       provided_imports: Vec::new(),
       scoped_strings: Vec::new(),
       live_procedures: Vec::new(),
+      modified_bodies: Vec::new(),
     });
     id
   }
@@ -632,6 +647,33 @@ impl Meta {
     }
   }
 
+  /// Records a procedure body a metaprogram edited and handed back, and asks
+  /// for the workspace to be compiled again with it in place (**C§3.3**). The
+  /// body arrives as the text it now prints as, since the compilation that
+  /// produced the nodes is over (`docs/spec.md` §6.5).
+  ///
+  /// A procedure is modified once. The reference marks the body it takes back
+  /// `ALREADY_MODIFIED` so that a metaprogram can see it has been here before;
+  /// stopping at the first modification is what also keeps one that does not
+  /// look from asking for the workspace to be compiled forever.
+  pub fn modify_procedure(&mut self, workspace: i64, file: String, name: String, text: String) {
+    if let Some(target) = self.workspace(workspace) {
+      if target
+        .modified_bodies
+        .iter()
+        .any(|had| had.file == file && had.name == name)
+      {
+        return;
+      }
+      target
+        .modified_bodies
+        .push(ModifiedBody { file, name, text });
+    }
+    if let Some(intercept) = self.intercept.as_mut() {
+      intercept.recompile = true;
+    }
+  }
+
   /// Records a string a metaprogram added to a scope a message named, and asks
   /// for the workspace to be compiled again with it in place (**C§3.3**).
   pub fn add_scoped_string(&mut self, workspace: i64, message: usize, text: String) {
@@ -753,6 +795,9 @@ impl Meta {
     // `Code_Node.enclosing_load` is the `Message_File` of the file the node was
     // written in, and those messages exist only now (**C§3.2**).
     self.nodes.borrow_mut().attach_files(&by_path);
+    // Every node is now as the compiler made it, so what a metaprogram writes
+    // to one from here on is visible as a change to it (**C§3.3**).
+    self.nodes.borrow_mut().freeze();
 
     // An import that did not happen is one the metaprogram may still answer,
     // so it is told before anything else can depend on it (**C§3.2**).

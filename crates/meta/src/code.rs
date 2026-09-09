@@ -761,6 +761,17 @@ pub struct Nodes {
   trees: HashMap<usize, Tree>,
   placed: HashMap<Key, *mut CodeNode>,
   paths: HashMap<(u32, u32), std::path::PathBuf>,
+  /// Which node an exported address came from, and how many bytes of it there
+  /// are, so that what a metaprogram hands back can be recognised.
+  origin: HashMap<usize, (Key, usize)>,
+  /// The byte range each exported node was written at, and the text of the
+  /// file it was written in. A node a metaprogram handed back unchanged prints
+  /// as the text it was written as rather than as a reconstruction of it.
+  spans: HashMap<Key, (u32, u32)>,
+  texts: HashMap<(u32, u32), std::sync::Arc<[u8]>>,
+  /// The bytes each exported node had when the compilation handed it over,
+  /// which is what says whether the metaprogram has since written to it.
+  shadow: HashMap<usize, Vec<u8>>,
   generation: u32,
   serial: i64,
 }
@@ -805,7 +816,72 @@ impl Nodes {
   pub fn place<T: Copy>(&mut self, key: Key) -> *mut T {
     let address = self.arena.alloc_zeroed::<T>();
     self.placed.insert(key, address.cast());
+    self.origin.insert(address as usize, (key, size_of::<T>()));
     address
+  }
+
+  /// Records where a node was written and the text of the file it was written
+  /// in, which together are what it prints as.
+  pub fn record_span(&mut self, key: Key, span: (u32, u32), text: &[u8]) {
+    self.spans.insert(key, span);
+    self
+      .texts
+      .entry((key.0, key.1))
+      .or_insert_with(|| std::sync::Arc::from(text));
+  }
+
+  /// Takes the picture of every exported node that later tells whether a
+  /// metaprogram has written to it. Nothing the compiler fills in itself may
+  /// happen after this.
+  pub fn freeze(&mut self) {
+    for (address, (_, size)) in &self.origin {
+      let bytes = unsafe { std::slice::from_raw_parts(*address as *const u8, *size) };
+      self.shadow.insert(*address, bytes.to_vec());
+    }
+  }
+
+  /// Whether `node` is one this compiler exported and still holds the bytes it
+  /// was exported with. A node the metaprogram made itself, and one it has
+  /// written to, are both `false`.
+  pub fn unchanged(&self, node: *const CodeNode) -> bool {
+    let Some((_, size)) = self.origin.get(&(node as usize)) else {
+      return false;
+    };
+    let Some(shadow) = self.shadow.get(&(node as usize)) else {
+      return false;
+    };
+    let bytes = unsafe { std::slice::from_raw_parts(node.cast::<u8>(), *size) };
+    bytes == shadow.as_slice()
+  }
+
+  /// Where every node a metaprogram has written to was written. A node whose
+  /// own text encloses one of these has to be printed rather than quoted, since
+  /// the change is somewhere inside it.
+  pub fn changed_spans(&self) -> Vec<(Key, (u32, u32))> {
+    let mut changed = Vec::new();
+    for (address, (key, _)) in &self.origin {
+      if self.unchanged(*address as *const CodeNode) {
+        continue;
+      }
+      if let Some(span) = self.spans.get(key) {
+        changed.push((*key, *span));
+      }
+    }
+    changed
+  }
+
+  /// Which node `node` was exported from and where it was written.
+  pub fn span_of(&self, node: *const CodeNode) -> Option<(Key, (u32, u32))> {
+    let (key, _) = self.origin.get(&(node as usize))?;
+    Some((*key, *self.spans.get(key)?))
+  }
+
+  /// The text `node` was written as, when it is one of the program's own.
+  pub fn source_text(&self, node: *const CodeNode) -> Option<&[u8]> {
+    let (key, _) = self.origin.get(&(node as usize))?;
+    let (start, end) = *self.spans.get(key)?;
+    let text = self.texts.get(&(key.0, key.1))?;
+    text.get(start as usize..end as usize)
   }
 
   /// `Code_Node.serial`, which numbers the nodes in the order the compiler

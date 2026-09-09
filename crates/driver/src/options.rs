@@ -103,6 +103,9 @@ pub struct BuildOptions {
   /// Procedures `compiler_make_procedure_live` asked to be lowered whether or
   /// not anything calls them (**C§3.3**), by file and name.
   pub live_procedures: Vec<(String, String)>,
+  /// Procedure bodies `compiler_modify_procedure` handed back, as the source
+  /// they now read as (**C§3.3**).
+  pub modified_bodies: Vec<oj_scope::ModifiedBody>,
   /// `-version`, which prints the version and stops when no file follows.
   pub print_version: bool,
   /// `-help` / `-?`, which prints the vendored metaprogram's help text.

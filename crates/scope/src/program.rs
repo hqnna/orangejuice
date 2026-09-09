@@ -69,6 +69,19 @@ pub struct Options {
   /// Strings a metaprogram added to a scope it named with a message
   /// (**C§3.3**), applied once everything they name has been loaded.
   pub added_strings: Vec<AddedString>,
+  /// Procedure bodies a metaprogram edited and handed back with
+  /// `compiler_modify_procedure` (**C§3.3**), applied to a file before it is
+  /// parsed.
+  pub modified_bodies: Vec<ModifiedBody>,
+}
+
+/// One `compiler_modify_procedure`, as the text the block of the named
+/// procedure now reads as (**C§3.3**).
+#[derive(Clone, Debug)]
+pub struct ModifiedBody {
+  pub path: PathBuf,
+  pub name: String,
+  pub text: String,
 }
 
 /// Which scope a string a metaprogram added belongs in (**C§3.3**). A
@@ -172,6 +185,7 @@ impl Default for Options {
       import_remaps: Vec::new(),
       provided_imports: Vec::new(),
       added_strings: Vec::new(),
+      modified_bodies: Vec::new(),
     }
   }
 }
@@ -769,9 +783,80 @@ impl<'a> Program<'a> {
     self.admit_file(module, source, path);
   }
 
+  /// Puts the bodies a metaprogram resubmitted with
+  /// `compiler_modify_procedure` in place of the ones the file was written
+  /// with (**C§3.3**), handing back a source of the rewritten text. A file no
+  /// metaprogram touched is handed straight back.
+  ///
+  /// The procedure is found by parsing the file as it stands: a modification
+  /// names a procedure, and what it replaces is the block that procedure's
+  /// body was written as.
+  fn modified_source(&self, source: SourceId, path: &Path) -> SourceId {
+    let wanted: Vec<&ModifiedBody> = self
+      .options
+      .modified_bodies
+      .iter()
+      .filter(|modified| modified.path == path)
+      .collect();
+    if wanted.is_empty() {
+      return source;
+    }
+    let file = self.sources.file(source);
+    let bytes = file.bytes().to_vec();
+    let parsed = oj_syntax::parse(&bytes, source, self.interner);
+    let mut edits: Vec<(u32, u32, &str)> = Vec::new();
+    for id in 0..parsed.ast.len() {
+      let id = NodeId(id as u32);
+      let NodeData::Declaration(declaration) = parsed.ast.data(id) else {
+        continue;
+      };
+      let (Some(name), Some(expression)) = (declaration.name, declaration.expression) else {
+        continue;
+      };
+      let NodeData::Ident(ident) = parsed.ast.data(name) else {
+        continue;
+      };
+      // A procedure declaration's expression is its *header*; the body hangs
+      // off the header, the way the reference's tree has it (**C§5.3**).
+      let NodeData::ProcedureHeader(header) = parsed.ast.data(expression) else {
+        continue;
+      };
+      let Some(body) = header.body_or_null else {
+        continue;
+      };
+      let NodeData::ProcedureBody { block, .. } = parsed.ast.data(body) else {
+        continue;
+      };
+      let written = self.interner.resolve_lossy(ident.name).into_owned();
+      let Some(modified) = wanted.iter().find(|modified| modified.name == written) else {
+        continue;
+      };
+      let span = parsed.ast.node(*block).span;
+      edits.push((span.start, span.end, &modified.text));
+    }
+    if edits.is_empty() {
+      return source;
+    }
+    edits.sort_by_key(|(start, _, _)| *start);
+    let mut rewritten = Vec::with_capacity(bytes.len());
+    let mut at = 0usize;
+    for (start, end, text) in edits {
+      let (start, end) = (start as usize, end as usize);
+      if start < at || end > bytes.len() {
+        continue;
+      }
+      rewritten.extend_from_slice(&bytes[at..start]);
+      rewritten.extend_from_slice(text.as_bytes());
+      at = end;
+    }
+    rewritten.extend_from_slice(&bytes[at..]);
+    self.sources.add_bytes(path, rewritten)
+  }
+
   /// Parses one already-loaded source as a file scope under `module` and walks
   /// it.
   fn admit_file(&self, module: ScopeId, source: SourceId, path: &Path) {
+    let source = self.modified_source(source, path);
     let file = self.sources.file(source);
     let parsed = Arc::new(oj_syntax::parse(file.bytes(), source, self.interner));
     self

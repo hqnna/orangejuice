@@ -154,7 +154,11 @@ impl<'c, 'p> Exporter<'c, 'p> {
     self
       .nodes
       .record_path((self.generation, source.0), file.path().to_path_buf());
-    let _ = id;
+    self.nodes.record_span(
+      (self.generation, source.0, id.0),
+      (node.span.start, node.span.end),
+      file.bytes(),
+    );
     CodeNode {
       // A kind of orangejuice's own is not one the reference names, so it
       // travels as `UNINITIALIZED` rather than as a number a metaprogram would
