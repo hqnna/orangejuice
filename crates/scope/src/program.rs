@@ -66,6 +66,27 @@ pub struct Options {
   /// import was blocked or could not be found, since that is when the
   /// reference asks.
   pub provided_imports: Vec<ProvidedImport>,
+  /// Strings a metaprogram added to a scope it named with a message
+  /// (**C§3.3**), applied once everything they name has been loaded.
+  pub added_strings: Vec<AddedString>,
+}
+
+/// Which scope a string a metaprogram added belongs in (**C§3.3**). A
+/// `Message_File` names a file, a `Message_Import` names a module, and no
+/// message at all means the main program.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringTarget {
+  MainProgram,
+  File(PathBuf),
+  Module(String),
+}
+
+/// One `add_build_string` aimed at a scope (**C§3.3**).
+#[derive(Clone, Debug)]
+pub struct AddedString {
+  pub target: StringTarget,
+  pub path: PathBuf,
+  pub text: String,
 }
 
 /// How a `provide_import` names the replacement (**C§3.3**).
@@ -150,6 +171,7 @@ impl Default for Options {
       load_preload: true,
       import_remaps: Vec::new(),
       provided_imports: Vec::new(),
+      added_strings: Vec::new(),
     }
   }
 }
@@ -467,6 +489,9 @@ impl<'a> Program<'a> {
     for (path, text) in strings {
       program.load_text_into(main, path, text);
     }
+    // A string a metaprogram aimed at a file or a module can only be admitted
+    // once that file or module exists (**C§3.3**).
+    program.apply_added_strings();
     program.settle_pending_ifs();
     program
   }
@@ -1510,6 +1535,35 @@ impl<'a> Program<'a> {
     });
   }
 
+  /// Admits the strings a metaprogram added to a named scope (**C§3.3**). A
+  /// file's own scope is where a `Message_File` points, so its declarations
+  /// join that file's; a module's is a file of that module, the way any of its
+  /// own files are. A target nothing loaded is passed over, since the
+  /// metaprogram named a scope this compilation does not have.
+  fn apply_added_strings(&self) {
+    for added in &self.options.added_strings {
+      let scope = match &added.target {
+        StringTarget::MainProgram => Some(self.main),
+        StringTarget::File(path) => self
+          .units
+          .iter()
+          .find(|(_, unit)| unit.path == *path)
+          .map(|(_, unit)| unit.scope),
+        StringTarget::Module(name) => self
+          .module_records
+          .borrow()
+          .iter()
+          .find(|record| record.name == *name)
+          .map(|record| record.scope),
+      };
+      let Some(scope) = scope else { continue };
+      match &added.target {
+        StringTarget::File(_) => self.add_string_into(scope, added.path.clone(), &added.text),
+        _ => self.load_text_into(scope, &added.path, &added.text),
+      }
+    }
+  }
+
   /// The imports that did not happen and that a metaprogram may answer
   /// (**C§3.2**).
   pub fn failed_imports(&self) -> Vec<FailedImport> {
@@ -2005,11 +2059,41 @@ impl<'a> Program<'a> {
     at: (SourceId, NodeId),
     text: &[u8],
   ) -> Option<Expansion> {
-    if let Some(existing) = self.expansion_of(at.0, at.1) {
+    self.splice(scope, kind, Some(at), self.path_of(at.0), text)
+  }
+
+  /// Admits a string a metaprogram added into a scope that already exists
+  /// (**C§3.3**): `add_build_string` with a `Message_File` puts its
+  /// declarations in that file's own scope, where the file's own
+  /// `#scope_file` names are.
+  pub fn add_string_into(&self, scope: ScopeId, path: PathBuf, text: &str) {
+    self.splice(
+      scope,
+      InsertKind::Data(Visibility::Export),
+      None,
+      path,
+      text.as_bytes(),
+    );
+  }
+
+  /// The body both of those share: parse the text and admit what it declares
+  /// into `scope`. An `#insert` has a node to be keyed by, so that expanding
+  /// it twice is not possible; a string a metaprogram added has none, and
+  /// adding the same text twice adds it twice.
+  fn splice(
+    &self,
+    scope: ScopeId,
+    kind: InsertKind,
+    at: Option<(SourceId, NodeId)>,
+    path: PathBuf,
+    text: &[u8],
+  ) -> Option<Expansion> {
+    if let Some(at) = at
+      && let Some(existing) = self.expansion_of(at.0, at.1)
+    {
       return Some(existing);
     }
 
-    let path = self.path_of(at.0);
     let source = self.sources.add_bytes(path.clone(), text.to_vec());
     let file = self.sources.file(source);
     let parsed = Arc::new(oj_syntax::parse(file.bytes(), source, self.interner));
@@ -2033,7 +2117,9 @@ impl<'a> Program<'a> {
       root: parsed.root,
       scope,
     };
-    self.expansions.borrow_mut().insert(at, expansion);
+    if let Some(at) = at {
+      self.expansions.borrow_mut().insert(at, expansion);
+    }
 
     let NodeData::Block(block) = parsed.ast.data(parsed.root) else {
       return Some(expansion);
@@ -2059,7 +2145,11 @@ impl<'a> Program<'a> {
         }
       }
       InsertKind::Expression => {
-        if statements.len() != 1 {
+        // Only an `#insert` is ever in expression position, and it has a node
+        // to complain about; a string a metaprogram added never is.
+        if statements.len() != 1
+          && let Some(at) = at
+        {
           self.error(
             at.0,
             self.span_of(at.0, at.1),

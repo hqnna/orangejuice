@@ -97,6 +97,9 @@ pub struct BuildOptions {
   /// `provide_import` answers a metaprogram gave for imports that failed
   /// (**C§3.3**).
   pub provided_imports: Vec<oj_scope::ProvidedImport>,
+  /// Strings a metaprogram added to a scope it named with a message
+  /// (**C§3.3**).
+  pub added_strings: Vec<oj_scope::AddedString>,
   /// `-version`, which prints the version and stops when no file follows.
   pub print_version: bool,
   /// `-help` / `-?`, which prints the vendored metaprogram's help text.

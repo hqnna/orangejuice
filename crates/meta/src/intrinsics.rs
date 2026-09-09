@@ -50,6 +50,10 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
     ("add_build_file", add_build_file as *const () as usize),
     ("add_build_string", add_build_string as *const () as usize),
     (
+      "add_build_string_scoped_by_message",
+      add_build_string_scoped_by_message as *const () as usize,
+    ),
+    (
       "compiler_add_library_search_directory",
       compiler_add_library_search_directory as *const () as usize,
     ),
@@ -647,6 +651,25 @@ unsafe extern "C" fn add_build_string(
       workspace.started = true;
     }
   });
+}
+
+/// `add_build_string :: (data: string, w: Workspace, message: *Message, loc := #caller_location)`,
+/// whose own symbol is `add_build_string_scoped_by_message` (**C§3.3**).
+///
+/// The message says which scope the string joins: a `Message_File` its file's,
+/// a `Message_Import` that import's module, and a null message the main
+/// program's. The compilation it belongs to is already over by the time a
+/// metaprogram reads a message, so — as with `provide_import` — the workspace
+/// is compiled again with the string in place (`docs/spec.md` §10).
+unsafe extern "C" fn add_build_string_scoped_by_message(
+  data: *const Str,
+  w: i64,
+  message: *const Message,
+  _location: *const SourceCodeLocation,
+  _context: *mut c_void,
+) {
+  let text = unsafe { read_str(data) };
+  with(|meta| meta.add_scoped_string(w, message as usize, text));
 }
 
 /// `compiler_add_library_search_directory :: (path: string)`

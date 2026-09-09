@@ -115,6 +115,26 @@ pub struct Workspace {
   /// `provide_import` answers a metaprogram gave after it was told an import
   /// failed (**C§3.3**). The workspace is compiled again with them in place.
   pub provided_imports: Vec<ProvidedImport>,
+  /// Strings a metaprogram added to a scope it named with a message
+  /// (**C§3.3**). Like a `provide_import`, they make the workspace compile
+  /// again, since the compilation they belong to is already over.
+  pub scoped_strings: Vec<ScopedString>,
+}
+
+/// One `add_build_string` aimed at a scope a message named (**C§3.3**).
+#[derive(Clone, Debug)]
+pub struct ScopedString {
+  pub target: StringScope,
+  pub text: String,
+}
+
+/// The scope a `Message` names: a file, a module, or — for a null message —
+/// the main program (**C§3.3**).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringScope {
+  MainProgram,
+  File(PathBuf),
+  Module(String),
 }
 
 /// One `add_global_data` (**C§3.3**): the bytes, where they sit in the
@@ -434,6 +454,7 @@ impl Meta {
       intercepted: false,
       link_command_complete: false,
       provided_imports: Vec::new(),
+      scoped_strings: Vec::new(),
     });
     id
   }
@@ -560,6 +581,48 @@ impl Meta {
       let end = data.address.checked_add(data.bytes.len())?;
       (address >= data.address && address < end).then(|| (data, (address - data.address) as u64))
     })
+  }
+
+  /// The scope a message names, for `add_build_string_scoped_by_message`
+  /// (**C§3.3**): a `Message_File` names that file, a `Message_Import` names
+  /// that import's module, and a null message names the main program. Any
+  /// other message is an error the reference reports; here it is passed over.
+  pub fn scope_of_message(&self, message: usize) -> Option<StringScope> {
+    if message == 0 {
+      return Some(StringScope::MainProgram);
+    }
+    let stored = self
+      .messages
+      .iter()
+      .find(|stored| stored.as_ptr() as usize == message)?;
+    match stored {
+      Stored::File(file) => {
+        let path = unsafe { file.fully_pathed_filename.string_lossy() };
+        Some(StringScope::File(PathBuf::from(path)))
+      }
+      Stored::Import(import) => {
+        let name = unsafe { import.module_name.string_lossy() };
+        Some(StringScope::Module(name))
+      }
+      _ => None,
+    }
+  }
+
+  /// Records a string a metaprogram added to a scope a message named, and asks
+  /// for the workspace to be compiled again with it in place (**C§3.3**).
+  pub fn add_scoped_string(&mut self, workspace: i64, message: usize, text: String) {
+    let Some(target) = self.scope_of_message(message) else {
+      return;
+    };
+    if let Some(target_workspace) = self.workspace(workspace) {
+      target_workspace
+        .scoped_strings
+        .push(ScopedString { target, text });
+      target_workspace.started = true;
+    }
+    if let Some(intercept) = self.intercept.as_mut() {
+      intercept.recompile = true;
+    }
   }
 
   /// Records what a metaprogram answered a failed import with, and asks for

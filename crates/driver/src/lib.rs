@@ -179,6 +179,7 @@ fn run_workspace(
   scope_options.import_dirs = options.import_dirs.clone();
   scope_options.import_remaps = options.import_remaps.clone();
   scope_options.provided_imports = options.provided_imports.clone();
+  scope_options.added_strings = options.added_strings.clone();
 
   let program = oj_scope::Program::build_input(
     &sources,
@@ -662,6 +663,20 @@ fn workspace_input(
       import: provided.import.clone(),
       kind: oj_scope::ProvidedImportKind::from_value(provided.kind),
       value: provided.value.clone(),
+    })
+    .collect();
+  nested.added_strings = workspace
+    .scoped_strings
+    .iter()
+    .enumerate()
+    .map(|(index, added)| oj_scope::AddedString {
+      target: match &added.target {
+        oj_meta::StringScope::MainProgram => oj_scope::StringTarget::MainProgram,
+        oj_meta::StringScope::File(path) => oj_scope::StringTarget::File(path.clone()),
+        oj_meta::StringScope::Module(name) => oj_scope::StringTarget::Module(name.clone()),
+      },
+      path: directory.join(format!(".scoped_string_w{}_{index}.jai", workspace.id)),
+      text: added.text.clone(),
     })
     .collect();
   let input = Input {

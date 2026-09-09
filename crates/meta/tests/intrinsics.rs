@@ -115,10 +115,9 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
     .collect();
   unanswered.sort_unstable();
 
-  // `add_build_string_scoped_by_message` splices into a scope a `Code` names,
-  // which needs a `#run` that can stall, and
   // `compiler_modify_procedure`/`compiler_make_procedure_live` need the
-  // `Code_*` export read back into the AST (`docs/spec.md` §9, the M8 row).
+  // `Code_*` export read back into the AST, and a body swapped for the one a
+  // metaprogram handed back (`docs/spec.md` §9, the M8 row).
   //
   // `get_runtime_info` is here for a different reason: it is declared
   // `#compiler` but *has a body*, which reads `__runtime_info: Runtime_Info
@@ -127,7 +126,6 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
   assert_eq!(
     unanswered,
     [
-      "add_build_string_scoped_by_message",
       "compiler_make_procedure_live",
       "compiler_modify_procedure",
       "get_runtime_info",

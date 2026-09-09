@@ -1256,3 +1256,46 @@ fn compiler_get_struct_location_names_where_the_struct_was_written() {
   };
   assert_built(&report, &fixture.path("main"));
 }
+
+#[test]
+fn a_metaprogram_adds_a_string_to_the_scope_a_message_names() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n\
+       add_build_string_by_message :: (data: string, w: Workspace, message: *Message, loc := #caller_location) #compiler \"add_build_string_scoped_by_message\";\n\
+       PROGRAM :: #string OJ_DONE\n\
+       main :: () {{ if ADDED != 7  bad(); }}\n\
+       bad :: () {{ }}\n\
+       OJ_DONE\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"scoped\";\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(PROGRAM, w);\n  \
+         added := false;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .FILE && !added {{\n      \
+             added = true;\n      \
+             add_build_string_by_message(\"ADDED :: 7;\", w, message);\n    \
+           }}\n    \
+           if message.kind == .COMPLETE {{\n      \
+             complete := cast(*Message_Complete) message;\n      \
+             if complete.error_code != .NONE  compiler_report(\"the string never reached the file's scope\");\n      \
+             break;\n    \
+           }}\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if !added  compiler_report(\"no file was reported to add to\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("scoped"));
+}
