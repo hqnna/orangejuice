@@ -394,13 +394,23 @@ impl Lowering<'_, '_> {
     let mut bytes = source.data.to_vec();
     let mut links = Vec::with_capacity(source.links.len());
     for link in &source.links {
-      // Every pointee starts on a pointer boundary, so that anything with an
-      // alignment of its own still lands somewhere it can be read.
-      let padding = bytes.len().next_multiple_of(POINTER_ALIGNMENT) - bytes.len();
-      bytes.extend(std::iter::repeat_n(0u8, padding));
-      let at = bytes.len() as u64;
-      bytes.extend_from_slice(&link.data);
-      links.push((link.at, at + link.offset));
+      match &link.target {
+        // A procedure is generated like any other and its address written in
+        // by the module that has it (**L§5.11**).
+        oj_sema::RunTarget::Procedure(decl) => {
+          let id = self.procedure_id(*decl);
+          links.push((link.at, crate::ir::ConstLink::Procedure(id)));
+        }
+        oj_sema::RunTarget::Data(data) => {
+          // Every pointee starts on a pointer boundary, so that anything with
+          // an alignment of its own still lands somewhere it can be read.
+          let padding = bytes.len().next_multiple_of(POINTER_ALIGNMENT) - bytes.len();
+          bytes.extend(std::iter::repeat_n(0u8, padding));
+          let at = bytes.len() as u64;
+          bytes.extend_from_slice(data);
+          links.push((link.at, crate::ir::ConstLink::Offset(at + link.offset)));
+        }
+      }
     }
     let pointer = self.pointer_to(type_id);
     let dest = self.value(pointer);

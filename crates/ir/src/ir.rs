@@ -44,11 +44,19 @@ pub enum Constant {
   /// `add_global_data` produced into the executable (**C§3.3**).
   Bytes {
     bytes: Box<[u8]>,
-    links: Box<[(u64, u64)]>,
+    links: Box<[(u64, ConstLink)]>,
   },
   /// All-zero storage of the value's type, which is what an aggregate starts
   /// out as (**L§4.6**).
   Zero,
+}
+
+/// What one of those pointers points at: somewhere inside the same data, or a
+/// procedure whose address only the generated module has (**L§5.11**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstLink {
+  Offset(u64),
+  Procedure(ProcId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -33,7 +33,7 @@ mod typeexpr;
 mod used;
 
 pub use checker::{Checker, DeclType, Expr};
-pub use constants::{Const, RunBytes, RunLink, Value};
+pub use constants::{Const, RunBytes, RunLink, RunTarget, Value};
 pub use dump::{print_types, summary};
 pub use export::Exporter;
 pub use loops::LoopExpansion;

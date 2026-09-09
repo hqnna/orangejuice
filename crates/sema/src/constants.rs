@@ -66,8 +66,17 @@ impl RunBytes {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunLink {
   pub at: u64,
-  pub data: Box<[u8]>,
+  pub target: RunTarget,
   pub offset: u64,
+}
+
+/// What a pointer among a run's bytes names: storage the compiler owns, whose
+/// bytes travel with it (**L§12.1**), or a procedure, whose address only the
+/// back end that generates it can supply (**L§5.11**).
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunTarget {
+  Data(Box<[u8]>),
+  Procedure(oj_scope::DeclId),
 }
 
 impl Value {

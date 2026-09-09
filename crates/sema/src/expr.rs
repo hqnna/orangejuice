@@ -354,7 +354,12 @@ impl Checker<'_> {
     let mut bytes = vec![0u8; stride * members.len()];
     let mut links = Vec::new();
     for (index, member) in members.iter().enumerate() {
-      let value = self.const_value(scope, source, *member)?;
+      // A procedure name is a constant like any other declared with `::`, so a
+      // literal made of them is data the back end fills the addresses into
+      // (**L§5.11**).
+      let written = self.expression_type(scope, source, *member);
+      let named = self.named_procedure(&written);
+      let value = written.constant.or(named)?;
       let start = index * stride;
       // A string is a `{count, data}` pair whose bytes go beside the array,
       // with the pointer linked to them (**L§3.4**, **L§12.1**).
@@ -365,7 +370,17 @@ impl Checker<'_> {
         bytes[start..start + 8].copy_from_slice(&count);
         links.push(crate::constants::RunLink {
           at: (start + 8) as u64,
-          data: text.clone(),
+          target: crate::constants::RunTarget::Data(text.clone()),
+          offset: 0,
+        });
+        continue;
+      }
+      // A procedure is an address the back end supplies, so the slot is left
+      // empty and linked to it (**L§5.11**).
+      if let Value::Procedure(decl) = value.value {
+        links.push(crate::constants::RunLink {
+          at: start as u64,
+          target: crate::constants::RunTarget::Procedure(decl),
           offset: 0,
         });
         continue;

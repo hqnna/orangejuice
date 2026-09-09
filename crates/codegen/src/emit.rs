@@ -19,8 +19,8 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use oj_ir::{
-  BinaryOp, Callee, Constant, ConvertKind, GlobalInit, Inst, ParameterKind, ProcId, Procedure,
-  ProcedureFlags, Program, Terminator, UnaryOp,
+  BinaryOp, Callee, ConstLink, Constant, ConvertKind, GlobalInit, Inst, ParameterKind, ProcId,
+  Procedure, ProcedureFlags, Program, Terminator, UnaryOp,
 };
 use oj_types::{Classification, Eightbyte, FloatKind, TypeId, TypeKind, Types};
 
@@ -219,7 +219,11 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       // The type table points at itself, so it has to exist before its own
       // initializer can be written (**L§17**).
       if let GlobalInit::Image { bytes, relocations } = &global.init {
-        let value = self.image_global(&global.symbol, global.alignment as u32, bytes, relocations);
+        let relocations: Vec<(u64, ConstLink)> = relocations
+          .iter()
+          .map(|(at, target)| (*at, ConstLink::Offset(*target)))
+          .collect();
+        let value = self.image_global(&global.symbol, global.alignment as u32, bytes, &relocations);
         self.globals.push(value);
         continue;
       }
@@ -432,9 +436,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     symbol: &str,
     alignment: u32,
     bytes: &[u8],
-    relocations: &[(u64, u64)],
+    relocations: &[(u64, ConstLink)],
   ) -> GlobalValue<'ctx> {
-    let mut sorted: Vec<(u64, u64)> = relocations.to_vec();
+    let mut sorted: Vec<(u64, ConstLink)> = relocations.to_vec();
     sorted.sort_unstable_by_key(|(at, _)| *at);
 
     let i8_type = self.context.i8_type();
@@ -470,8 +474,16 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       if at > cursor {
         values.push(self.context.const_string(&bytes[cursor..at], false).into());
       }
-      let target = i64_type.const_int(*target, false);
-      values.push(unsafe { base.const_gep(i8_type, &[target]) }.into());
+      values.push(match target {
+        ConstLink::Offset(offset) => {
+          let offset = i64_type.const_int(*offset, false);
+          unsafe { base.const_gep(i8_type, &[offset]) }.into()
+        }
+        ConstLink::Procedure(id) => self.functions[id.0 as usize]
+          .as_global_value()
+          .as_pointer_value()
+          .into(),
+      });
       cursor = at + POINTER_SIZE;
     }
     if cursor < bytes.len() {
@@ -486,7 +498,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   fn bytes_data(
     &mut self,
     bytes: &[u8],
-    links: &[(u64, u64)],
+    links: &[(u64, ConstLink)],
     alignment: u32,
   ) -> PointerValue<'ctx> {
     // A pointer among the bytes points somewhere else inside them, which is

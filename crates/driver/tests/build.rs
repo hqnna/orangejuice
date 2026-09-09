@@ -3524,3 +3524,23 @@ fn a_fixed_array_parameter_binds_its_dimension() {
     "19\n63\n200\n",
   );
 }
+
+#[test]
+fn a_constant_array_of_procedures_is_data_the_back_end_fills_in() {
+  // A procedure name is a constant, so a literal made of them is data whose
+  // addresses the module that generates them writes (**L§5.11**).
+  assert_output(
+    "Simple :: #type () -> ();\n\
+     one :: () { put(\"one\\n\"); }\n\
+     two :: () { put(\"two\\n\"); }\n\
+     Bling :: struct (x: [$N] $T) { y := x; }\n\
+     main :: () {\n  \
+       procs :: Simple.[one, two];\n  \
+       for procs  it();\n  \
+       b: Bling(Simple.[two, one]);\n  \
+       put_number(b.N);\n  \
+       for b.y  it();\n\
+     }\n",
+    "one\ntwo\n2\ntwo\none\n",
+  );
+}

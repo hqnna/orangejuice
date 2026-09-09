@@ -355,6 +355,35 @@ impl Checker<'_> {
       let bound = self.harden(value.type_id);
       variables.push((decl, Const::new(TypeId::TYPE, Value::Type(bound))));
     }
+    // A parameter written `[$N] $T` binds both from the array the call passed
+    // (**L§8.5**), the way a procedure's does (**L§7.8**).
+    for (parameter, value) in &bindings {
+      let declared = self.decl_type(*parameter).value;
+      if !self.types().is_unknown(declared) {
+        continue;
+      }
+      let Some((element, ArrayKind::Fixed(count))) = self.types().array_of(value.type_id) else {
+        continue;
+      };
+      let Some((dimension, written_element)) = self.array_slot_variables(*parameter) else {
+        continue;
+      };
+      for (decl, bound) in [
+        dimension.map(|decl| (decl, Const::new(TypeId::S64, Value::Int(i128::from(count))))),
+        written_element.map(|decl| (decl, Const::new(TypeId::TYPE, Value::Type(element)))),
+      ]
+      .into_iter()
+      .flatten()
+      {
+        if !bindings
+          .iter()
+          .chain(variables.iter())
+          .any(|(bound, _)| *bound == decl)
+        {
+          variables.push((decl, bound));
+        }
+      }
+    }
     bindings.extend(variables);
     // The reference names an instantiation in declaration order, which puts a
     // variable before the parameter whose type slot declared it:
@@ -1014,6 +1043,42 @@ impl Checker<'_> {
         .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC)
     });
     concrete.then(|| Const::new(type_id, Value::Procedure(only)))
+  }
+
+  /// The variables a parameter written `[$N] $T` declares in its type slot: the
+  /// dimension and the element, either of which may be written concretely
+  /// (**L§7.8**, **L§8.5**).
+  fn array_slot_variables(
+    &mut self,
+    parameter: DeclId,
+  ) -> Option<(Option<DeclId>, Option<DeclId>)> {
+    let info = self.program().tree().decl(parameter);
+    let (source, node) = (info.source?, info.node?);
+    let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
+      return None;
+    };
+    let NodeData::TypeInstantiation(inst) = self.ast(source)?.data(declaration.type_inst?) else {
+      return None;
+    };
+    let (dimension, element) = (inst.array_dimension, inst.array_element_type);
+    let variable = |checker: &mut Self, node: Option<NodeId>| {
+      let node = node?;
+      let node = match checker.ast(source)?.data(node) {
+        NodeData::TypeInstantiation(inner) => inner.type_valued_expression?,
+        _ => node,
+      };
+      let NodeData::Ident(ident) = checker.ast(source)?.data(node) else {
+        return None;
+      };
+      ident
+        .flags
+        .contains(oj_syntax::ast::IdentFlags::DEFINES_POLYMORPH_VARIABLE)
+        .then(|| checker.decl_at(source, node))
+        .flatten()
+    };
+    let dimension = variable(self, dimension);
+    let element = variable(self, element);
+    (dimension.is_some() || element.is_some()).then_some((dimension, element))
   }
 
   /// The `$N` a parameter written `[$N] T` declares, and the length the call

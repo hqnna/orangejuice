@@ -573,7 +573,7 @@ fn compile_time_links(bytes: &[u8]) -> Box<[oj_sema::RunLink]> {
     if let Some((data, offset)) = found {
       links.push(oj_sema::RunLink {
         at: at as u64,
-        data: data.into_boxed_slice(),
+        target: oj_sema::RunTarget::Data(data.into_boxed_slice()),
         offset,
       });
     }
