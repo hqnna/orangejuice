@@ -140,7 +140,9 @@ impl Checker<'_> {
           }
         }
       }
-      // A constant a `using` member imported is only in the flattened list.
+      // A constant a `using` member imported is only in the flattened list; its
+      // *value* lives in the struct it came from, which is where
+      // `context.default_allocator` is (**L§8.4**).
       self.complete_type(underlying);
       let member = self
         .types()
@@ -149,6 +151,20 @@ impl Checker<'_> {
         .cloned()
         .filter(|member| member.flags.contains(MemberFlags::CONSTANT));
       if let Some(member) = member {
+        if let Some(through) = member.imported_through
+          && let Some(base) = self
+            .types()
+            .struct_info(definition)
+            .members
+            .get(through)
+            .map(|member| member.type_id)
+        {
+          let base = self.types().pointee(base).unwrap_or(base);
+          let found = self.member_of_type(base, name);
+          if !found.is_unknown() {
+            return found;
+          }
+        }
         return Expr::value(member.type_id);
       }
     }

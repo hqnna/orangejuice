@@ -2792,3 +2792,42 @@ fn a_non_varargs_overload_wins_over_a_varargs_one() {
     "1\n2\n",
   );
 }
+
+#[test]
+fn a_double_comma_call_runs_with_a_copy_of_the_context() {
+  // `f(a,, allocator = x)` sets the named members for the duration of the
+  // call, and the caller's own context is untouched (**L§10.1**).
+  assert_output(
+    "#import \"Basic\";\n\
+     counted := 0;\n\
+     counting :: (mode: Allocator_Mode, requested: s64, old: s64, memory: *void, data: *void) -> *void {\n  \
+       if mode == .ALLOCATE  counted += 1;\n  \
+       return context.default_allocator.proc(mode, requested, old, memory, data);\n\
+     }\n\
+     take :: () -> int { p := alloc(8); free(p); return counted; }\n\
+     main :: () {\n  \
+       mine: Allocator;\n  \
+       mine.proc = counting;\n  \
+       put_number(take());\n  \
+       put_number(take(,, allocator = mine));\n  \
+       put_number(take());\n\
+     }\n",
+    "0\n1\n1\n",
+  );
+}
+
+#[test]
+fn a_constant_a_using_member_imported_is_the_value_it_was_declared_with() {
+  // `context.default_allocator` is a constant of `Context_Base`, reached
+  // through the `#as using base` that `#Context` is built from (**L§8.4**).
+  assert_output(
+    "Base :: struct { x: int; K :: 7; }\n\
+     Outer :: struct { #as using base: Base; y: int; }\n\
+     main :: () {\n  \
+       o: Outer;\n  \
+       put_number(o.K);\n  \
+       put_number(Outer.K);\n\
+     }\n",
+    "7\n7\n",
+  );
+}

@@ -2143,6 +2143,10 @@ impl Lowering<'_, '_> {
     let mut return_places: Vec<Val> = Vec::new();
     let mut given = 0usize;
     let mut declared = 0usize;
+    // `f(a,, allocator = temp)` runs the call with a *copy* of the context,
+    // which is what keeps `Pool`'s own `alloc(…,, allocator=block_allocator)`
+    // out of the pool it is refilling (**L§10.1**).
+    let pushed = self.context_modification(scope, source, node);
     // A default written `#caller_location` is this call's site (**L§7.13**).
     self.call_sites.push((source, node));
 
@@ -2159,7 +2163,10 @@ impl Lowering<'_, '_> {
           });
         }
         ParameterKind::Context => {
-          let context = self.context_pointer(source, node)?;
+          let context = match pushed {
+            Some(pushed) => pushed,
+            None => self.context_pointer(source, node)?,
+          };
           arguments.push(context);
         }
         ParameterKind::Value | ParameterKind::Pointer => {
@@ -2217,6 +2224,67 @@ impl Lowering<'_, '_> {
     }
     results.extend(return_places);
     Some(results)
+  }
+
+  /// `f(a,, allocator = temp)`: a copy of the context with the named members
+  /// set, which the callee gets instead of this procedure's own (**L§10.1**).
+  /// An unnamed entry means `allocator = expression`.
+  fn context_modification(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<ValueId> {
+    let NodeData::ProcedureCall(call) = self.checker.tree_of(source)?.data(node).clone() else {
+      return None;
+    };
+    let entries = call
+      .context_modification
+      .filter(|entries| !entries.is_empty())?;
+
+    let context_type = self.context_type;
+    let definition = self
+      .checker
+      .types()
+      .struct_of(self.checker.types().underlying(context_type))?;
+    let local = self.new_local(String::from("pushed_context"), context_type);
+    let address = self.local_address(local);
+    let current = self.context_pointer(source, node)?;
+    let copy = Val {
+      id: current,
+      type_id: context_type,
+      indirect: true,
+    };
+    self.store(address, copy);
+
+    for entry in entries {
+      let (written, value_node) = match self.checker.tree_of(source)?.data(entry).clone() {
+        NodeData::BinaryOperator {
+          operator: OperatorType::ASSIGN,
+          left,
+          right,
+          ..
+        } => (Some(left), right),
+        _ => (None, entry),
+      };
+      let name = match written {
+        Some(left) => self.checker.name_at(source, left)?,
+        None => self.checker.interner().intern(b"allocator"),
+      };
+      let member = self
+        .checker
+        .types()
+        .struct_info(definition)
+        .member(name)?
+        .clone();
+      let slot = self.offset(address, member.offset, member.type_id);
+      let written_scope = self.checker.scope_for(source, value_node, scope);
+      if let Some(value) = self.expression(written_scope, source, value_node, Some(member.type_id))
+      {
+        self.store(slot, value);
+      }
+    }
+    Some(address)
   }
 
   /// Whether a declaration is the `#intrinsic` of that name: an operation the
