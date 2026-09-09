@@ -662,6 +662,19 @@ impl Checker<'_> {
     }
   }
 
+  /// Records a `compiler_set_type_info_flags` (**C§3.3**). The flags are only
+  /// ever or-ed in: the reference says whatever is set here joins whatever the
+  /// struct was declared with, and nothing clears them.
+  pub fn add_type_info_flags(&mut self, type_id: TypeId, flags: u32) {
+    *self.type_info_flags.entry(type_id).or_default() |= flags;
+  }
+
+  /// What a metaprogram asked to be left out of a type's record, as
+  /// `Type_Info_Flags` numbers it (**C§3.3**).
+  pub fn type_info_flags_of(&self, type_id: TypeId) -> u32 {
+    self.type_info_flags.get(&type_id).copied().unwrap_or(0)
+  }
+
   /// Where a struct was written: the file, the line and the character
   /// (**C§3.3**). This is what `compiler_get_struct_location` answers, and it
   /// is the declaration's own place rather than any use of it.

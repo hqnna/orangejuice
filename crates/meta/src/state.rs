@@ -319,10 +319,10 @@ pub struct Meta {
   pub compiler: Option<Compiler>,
   /// Directories `compiler_add_library_search_directory` added (**C§3.3**).
   pub library_directories: Vec<PathBuf>,
-  /// `compiler_set_type_info_flags` calls: the `Type` and the flags
-  /// (**C§3.3**). Recorded rather than acted on — what they leave out of the
-  /// type table is an optimization (`docs/spec.md` §10).
-  pub type_info_flags: Vec<(usize, u32)>,
+  /// `compiler_set_type_info_flags` calls, by the type they name and the flags
+  /// they set (**C§3.3**). Flags only ever accumulate: the reference says they
+  /// are or-ed with whatever the struct was declared with.
+  pub type_info_flags: Vec<(u32, u32)>,
   /// The blobs `add_global_data` put into the compilation, by where they live
   /// in the compiler's own memory (**C§3.3**). A pointer among a `#run`'s
   /// bytes that lands in one of these names data the executable has to carry.
@@ -335,6 +335,9 @@ pub struct Meta {
   /// `Type_Info_Struct`. Whoever runs the code installs this, since only that
   /// side knows where the image was placed.
   struct_locations: std::collections::HashMap<usize, (String, i64, i64)>,
+  /// Which type each record of that image belongs to, by its address: a
+  /// `Type` at compile time is that address (**L§3.10**).
+  types_at: std::collections::HashMap<usize, u32>,
   /// The trees a metaprogram has been handed, and the storage they live in
   /// (**C§5.3**). A metaprogram keeps every pointer it was given, so this
   /// lasts as long as the compilation does.
@@ -530,6 +533,18 @@ impl Meta {
   /// Where the struct a `*Type_Info_Struct` belongs to was written.
   pub fn struct_location(&self, address: usize) -> Option<(String, i64, i64)> {
     self.struct_locations.get(&address).cloned()
+  }
+
+  /// Says which type each record of the image the code about to run reads
+  /// belongs to. A `Type` at compile time is that record's address, so this is
+  /// what turns one back into the type the compiler knows (**L§3.10**).
+  pub fn set_types_at(&mut self, types: std::collections::HashMap<usize, u32>) {
+    self.types_at = types;
+  }
+
+  /// The type a compile-time `Type` value names.
+  pub fn type_at(&self, address: usize) -> Option<u32> {
+    self.types_at.get(&address).copied()
   }
 
   /// The blobs `add_global_data` put into this compilation: where each one

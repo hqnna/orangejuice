@@ -311,6 +311,12 @@ fn run_workspace(
   }
   let options = &effective;
 
+  // What a metaprogram asked to be left out of a type's record is decided
+  // before the executable's own type table is laid out (**C§3.3**).
+  for (type_id, flags) in &meta.type_info_flags {
+    checker.add_type_info_flags(oj_types::TypeId(*type_id), *flags);
+  }
+
   // Whatever compile time wrote into an ordinary global is thrown away before
   // the executable is written; `#no_reset` is what survives (**L§12.3**).
   engine.reset_globals();

@@ -189,7 +189,7 @@ impl TypeTable {
         let flags = procedure_flags(signature.flags);
         self.write_field_u32(checker, record, at, "procedure_flags", flags);
       }
-      TypeKind::Struct(definition) => self.fill_struct(checker, record, at, definition),
+      TypeKind::Struct(definition) => self.fill_struct(checker, record, at, type_id, definition),
       TypeKind::Enum(definition) => self.fill_enum(checker, record, at, definition),
       TypeKind::Variant(definition) => self.fill_variant(checker, record, at, definition),
       _ => {}
@@ -216,7 +216,14 @@ impl TypeTable {
     self.write_field_i64(checker, record, at, "array_count", count);
   }
 
-  fn fill_struct(&mut self, checker: &mut Checker, record: Record, at: u64, definition: StructId) {
+  fn fill_struct(
+    &mut self,
+    checker: &mut Checker,
+    record: Record,
+    at: u64,
+    type_id: TypeId,
+    definition: StructId,
+  ) {
     let info = checker.types().struct_info(definition).clone();
     let name = info
       .name
@@ -242,15 +249,41 @@ impl TypeTable {
     let status = u32::from(!info.complete);
     self.write_field_u32(checker, record, at, "status_flags", status);
 
-    let members = self.member_array(checker, &info.members);
+    // What a `compiler_set_type_info_flags` asked for joins what the struct
+    // was declared with; nothing ever clears either (**C§3.3**).
+    let set = checker.type_info_flags_of(type_id);
+    let none = info
+      .textual_flags
+      .contains(oj_types::StructTextualFlags::TYPE_INFO_NONE)
+      || set & TYPE_INFO_NONE != 0;
+    // `#type_info_none` makes the struct look empty at runtime, which is what
+    // keeps a big one out of the executable (**L§8.7**); `print` reads the
+    // same members, so it shows nothing either.
+    if none {
+      self.write_field_view(checker, record, at, "members", (0, 0));
+      return;
+    }
+    // `#type_info_procedures_are_void_pointers` keeps the names and the
+    // offsets but not the signatures, which is what a struct of 800 procedure
+    // declarations wants (**L§8.7**).
+    let erase = info
+      .textual_flags
+      .contains(oj_types::StructTextualFlags::TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS)
+      || set & TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS != 0;
+    let members = self.member_array(checker, &info.members, erase);
     self.write_field_view(checker, record, at, "members", members);
   }
 
   /// The `Type_Info_Struct_Member` array a struct's `members` view points at.
+  ///
+  /// `erase` is `#type_info_procedures_are_void_pointers`: a member of
+  /// procedure type is described as a `*void` instead, so its signature never
+  /// reaches the executable (**L§8.7**).
   fn member_array(
     &mut self,
     checker: &mut Checker,
     members: &[oj_types::StructMember],
+    erase: bool,
   ) -> (u64, u64) {
     let Some(record) = self.records(checker).member else {
       return (0, 0);
@@ -265,7 +298,11 @@ impl TypeTable {
       .iter()
       .map(|member| {
         let name = checker.interner().resolve_lossy(member.name).into_owned();
-        let type_offset = self.offset_of(checker, member.type_id);
+        let described = match erase && is_procedure(checker, member.type_id) {
+          true => TypeId::VOID_POINTER,
+          false => member.type_id,
+        };
+        let type_offset = self.offset_of(checker, described);
         (name, type_offset, member.offset, member.flags.bits())
       })
       .collect();
@@ -628,3 +665,16 @@ fn tag_name(kind: &TypeKind) -> &'static str {
 fn procedure_flags(flags: ProcedureFlags) -> u32 {
   flags.bits()
 }
+
+/// Whether a member is a procedure, which is what
+/// `#type_info_procedures_are_void_pointers` describes as a `*void` instead
+/// (**L§8.7**).
+fn is_procedure(checker: &mut Checker, type_id: TypeId) -> bool {
+  let underlying = checker.types().underlying(type_id);
+  matches!(checker.types().kind(underlying), TypeKind::Procedure(_))
+}
+
+/// `Type_Info_Flags` as the distribution numbers it (**C§3.3**). These are not
+/// `Struct_Textual_Flags`' bits, which is why they are named apart.
+const TYPE_INFO_NONE: u32 = 0x1;
+const TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS: u32 = 0x2;

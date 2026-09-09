@@ -555,29 +555,40 @@ fn compile_time_links(bytes: &[u8]) -> Box<[oj_sema::RunLink]> {
   links.into_boxed_slice()
 }
 
-/// Says where each struct in a run's type table image was written, but only
-/// when the run actually asks (**C§3.3**): working it out costs a lookup per
-/// type, and almost no `#run` calls `compiler_get_struct_location`.
+/// Tells the compile-time code what the addresses in its own type table image
+/// mean, but only when it asks (**C§3.3**): a `Type` value *is* one of those
+/// addresses, and a `*Type_Info_Struct` names a struct written somewhere.
+/// Working either out costs a lookup per type, and almost no `#run` asks.
 fn install_struct_locations(
   checker: &mut Checker,
   program: &Program,
   base: u64,
   image: &oj_ir::TypeTableImage,
 ) {
-  const SYMBOL: &str = "compiler_get_struct_location";
-  let asked = program
-    .procedures
-    .iter()
-    .any(|procedure| procedure.symbol == SYMBOL);
-  if !asked {
+  let binds = |symbol: &str| {
+    program
+      .procedures
+      .iter()
+      .any(|procedure| procedure.symbol == symbol)
+  };
+  let wants_locations = binds("compiler_get_struct_location");
+  let wants_types = binds("compiler_set_type_info_flags");
+  if !wants_locations && !wants_types {
     return;
   }
   let mut locations = HashMap::new();
+  let mut types = HashMap::new();
   for (type_id, offset) in &image.offsets {
-    let Some(location) = checker.struct_location(*type_id) else {
-      continue;
-    };
-    locations.insert((base + offset) as usize, location);
+    let address = (base + offset) as usize;
+    if wants_types {
+      types.insert(address, type_id.0);
+    }
+    if wants_locations && let Some(location) = checker.struct_location(*type_id) {
+      locations.insert(address, location);
+    }
   }
-  oj_meta::with(|meta| meta.set_struct_locations(locations));
+  oj_meta::with(|meta| {
+    meta.set_struct_locations(locations);
+    meta.set_types_at(types);
+  });
 }

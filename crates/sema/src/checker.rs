@@ -279,6 +279,9 @@ pub struct Checker<'a> {
   /// metaprogram behind it shares this with `oj-meta`, so a `Code` value and
   /// the tree `compiler_get_nodes` answers with are the same storage.
   pub(crate) nodes: Option<std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>>,
+  /// What a metaprogram asked to be left out of a type's record, as
+  /// `Type_Info_Flags` numbers it (**C§3.3**).
+  pub(crate) type_info_flags: HashMap<TypeId, u32>,
   /// Which compilation this one is, as far as that storage is concerned.
   pub(crate) nodes_generation: u32,
   /// The answer each `#run` gave, so that a run written once executes once.
@@ -387,6 +390,7 @@ impl<'a> Checker<'a> {
       interner,
       nodes: None,
       nodes_generation: 0,
+      type_info_flags: HashMap::new(),
       types: Types::new(),
       names: Names::new(interner),
       states: HashMap::new(),

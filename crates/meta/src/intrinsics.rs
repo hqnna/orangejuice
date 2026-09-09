@@ -307,15 +307,21 @@ unsafe extern "C" fn compiler_get_struct_location(
 
 /// `compiler_set_type_info_flags :: (type: Type, flags: Type_Info_Flags)`
 ///
-/// Recorded rather than acted on: what the flags leave out of the type table
-/// is an optimization, and orangejuice lays every type it was asked about into
-/// the image (**L§17**, `docs/spec.md` §10).
+/// The flags are or-ed into whatever the struct was declared with, and the
+/// type table leaves out what they say to leave out (**L§8.7**, **L§17**).
 unsafe extern "C" fn compiler_set_type_info_flags(
   type_info: *const c_void,
   flags: u32,
   _context: *mut c_void,
 ) {
-  with(|meta| meta.type_info_flags.push((type_info as usize, flags)));
+  with(|meta| {
+    // A `Type` at compile time is the address of its record in the image the
+    // running code reads, so the type it names is looked up there
+    // (**L§3.10**).
+    if let Some(type_id) = meta.type_at(type_info as usize) {
+      meta.type_info_flags.push((type_id, flags));
+    }
+  });
 }
 
 /// `compiler_report_errors_for_unresolved_identifiers :: (filename: string, w: Workspace = -1)`
