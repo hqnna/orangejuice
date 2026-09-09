@@ -405,18 +405,25 @@ impl Lowering<'_, '_> {
         left,
         right,
         ..
-      } => self.binary_value(scope, source, node, operator, left, right, info),
+      } => self.binary_value(scope, source, node, operator, left, right, info, want),
       NodeData::Cast(cast) => {
-        let value = self.expression(scope, source, cast.expression, None)?;
         // `xx e` is a cast to whatever asked for the value (**L§5.6**).
         let target = match cast.target_type {
-          Some(_) => info.type_id,
-          None => match want {
-            Some(target) => target,
-            None => return Some(value),
-          },
+          Some(_) => Some(info.type_id),
+          None => want,
         };
-        self.convert(source, node, value, target)
+        // `cast(Stuff) .THIRD` casts something that has no type of its own:
+        // the target is what says which enum the name belongs to (**L§5.12**).
+        let operand = self
+          .checker
+          .expression(scope, source, cast.expression)
+          .type_id;
+        let hint = target.filter(|_| self.checker.types().is_untyped(operand));
+        let value = self.expression(scope, source, cast.expression, hint)?;
+        match target {
+          Some(target) => self.convert(source, node, value, target),
+          None => Some(value),
+        }
       }
       NodeData::ProcedureCall(_) => self.call_value(scope, source, node, info),
       NodeData::Context => {
@@ -975,6 +982,7 @@ impl Lowering<'_, '_> {
     left: NodeId,
     right: NodeId,
     info: &Expr,
+    want: Option<TypeId>,
   ) -> Option<Val> {
     if operator == OperatorType::DOT {
       return self.member_value(scope, source, node, left, right, info);
@@ -1000,8 +1008,13 @@ impl Lowering<'_, '_> {
     let left_type = self.checker.expression(scope, source, left).type_id;
     let right_type = self.checker.expression(scope, source, right).type_id;
     // A shift keeps the left operand's type, which for a literal is what it
-    // defaults to: `1 << n` is an `s64` (**L§5.2**, **L§5.10**).
-    let result = self.checker.hardened(info.type_id);
+    // defaults to: `1 << n` is an `s64` (**L§5.2**, **L§5.10**). When neither
+    // operand has a type of its own — `.WEST | .EAST` — what asked for the
+    // value is what says which enum they belong to (**L§5.12**).
+    let result = match self.checker.types().is_untyped(info.type_id) {
+      true => want.unwrap_or_else(|| self.checker.hardened(info.type_id)),
+      false => self.checker.hardened(info.type_id),
+    };
     let operand = if binary.is_comparison() {
       self.comparison_type(left_type, right_type)
     } else {
@@ -1429,8 +1442,9 @@ impl Lowering<'_, '_> {
     }
   }
 
-  /// `.count` and `.data`, which every array kind has and `string` shares
-  /// (**L§3.3**, **L§3.4**).
+  /// `.count` and `.data`, which every array kind has and `string` shares,
+  /// plus the `.allocated` and `.allocator` a `[..]` array keeps after them
+  /// (**L§3.3**, **L§3.4**, `Resizable_Array` in Preload).
   fn array_field(
     &mut self,
     source: SourceId,
@@ -1479,6 +1493,29 @@ impl Lowering<'_, '_> {
           })
         }
       };
+    }
+    if kind == ArrayKind::Resizable {
+      let allocated = self.checker.interner().intern(b"allocated");
+      let allocator = self.checker.interner().intern(b"allocator");
+      if name == allocated {
+        let address = self.address_of(base);
+        let slot = self.offset(address, 16, TypeId::S64);
+        return Some(Val {
+          id: slot,
+          type_id: TypeId::S64,
+          indirect: true,
+        });
+      }
+      if name == allocator {
+        let type_id = self.checker.preload_named_type("Allocator");
+        let address = self.address_of(base);
+        let slot = self.offset(address, 24, type_id);
+        return Some(Val {
+          id: slot,
+          type_id,
+          indirect: true,
+        });
+      }
     }
     self.unsupported(source, node, "this array field", "M7");
     None

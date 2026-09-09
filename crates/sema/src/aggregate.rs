@@ -3,13 +3,13 @@ use std::collections::HashSet;
 use oj_diag::SourceId;
 use oj_lexer::Symbol;
 use oj_scope::{DeclId, ScopeId};
-use oj_syntax::ast::{DeclarationFlags, NodeData, NodeId, StructFlags};
+use oj_syntax::ast::{DeclarationFlags, NodeData, NodeId, OperatorType, StructFlags};
 use oj_types::{
   EnumInfo, EnumMember, EnumTypeFlags, IntKind, Layout, LayoutBuilder, MemberFlags, StructId,
   StructInfo, StructMember, StructNontextualFlags, StructTextualFlags, TypeId,
 };
 
-use crate::checker::{Checker, DeclType};
+use crate::checker::{Checker, DeclType, MemberDefault};
 use crate::constants::{Const, Value};
 
 /// `Build_Options.context_size_max`'s default, which is what `size_of(#Context)`
@@ -29,7 +29,7 @@ struct Members {
   /// The default value each member was declared with, by member index
   /// (**L§8.1**): a variable of the struct starts out zeroed and then takes
   /// these (**L§4.6**).
-  defaults: Vec<(usize, SourceId, NodeId)>,
+  defaults: Vec<MemberDefault>,
   scope: ScopeId,
   source: SourceId,
 }
@@ -271,6 +271,18 @@ impl Checker<'_> {
         }
       }
       NodeData::Block(_) => self.struct_statements(state, statement),
+      // `member.field = value;` after the member's declaration sets a default
+      // one level down, which is how `Print_Style` gives its pointer format a
+      // base of 16 (**L§8.1**).
+      NodeData::BinaryOperator {
+        operator: OperatorType::ASSIGN,
+        left,
+        right,
+        ..
+      } => {
+        let (left, right) = (*left, *right);
+        self.struct_path_default(state, left, right);
+      }
       // An `#insert` in a struct body generates members (**L§13.2**); they are
       // laid out where the directive stands.
       NodeData::DirectiveInsert(_) => {
@@ -283,6 +295,45 @@ impl Checker<'_> {
         state.source = previous;
       }
       _ => {}
+    }
+  }
+
+  /// Records `a.b.c = value;` against the member `a`, keeping `b.c` as the
+  /// path into it. A left side that is not a dotted chain of names, or that
+  /// starts at a member this body has not declared yet, is not a default.
+  fn struct_path_default(&mut self, state: &mut Members, left: NodeId, right: NodeId) {
+    let Some(mut path) = self.member_path(state.source, left) else {
+      return;
+    };
+    if path.len() < 2 {
+      return;
+    }
+    let root = path.remove(0);
+    let Some(member) = state.members.iter().position(|member| member.name == root) else {
+      return;
+    };
+    state.defaults.push(MemberDefault {
+      member,
+      path,
+      source: state.source,
+      node: right,
+    });
+  }
+
+  fn member_path(&self, source: SourceId, node: NodeId) -> Option<Vec<Symbol>> {
+    match self.ast(source)?.data(node) {
+      NodeData::Ident(_) => Some(vec![self.ident_name(source, node)?]),
+      NodeData::BinaryOperator {
+        operator: OperatorType::DOT,
+        left,
+        right,
+        ..
+      } => {
+        let mut path = self.member_path(source, *left)?;
+        path.push(self.ident_name(source, *right)?);
+        Some(path)
+      }
+      _ => None,
     }
   }
 
@@ -365,7 +416,12 @@ impl Checker<'_> {
       .contains(DeclarationFlags::IS_UNINITIALIZED)
       && let Some(expression) = declaration.expression
     {
-      state.defaults.push((index, source, expression));
+      state.defaults.push(MemberDefault {
+        member: index,
+        path: Vec::new(),
+        source,
+        node: expression,
+      });
     }
 
     if flags.contains(MemberFlags::USING) {

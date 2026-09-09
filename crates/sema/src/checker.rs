@@ -122,6 +122,20 @@ impl Expr {
   }
 }
 
+/// One default a struct body wrote for one of its members (**L§8.1**): either
+/// the `= expression` on the member's own declaration, or a later
+/// `member.field = expression;` statement, which reaches a member of a member.
+#[derive(Clone, Debug)]
+pub(crate) struct MemberDefault {
+  /// The index of the member the path starts at.
+  pub member: usize,
+  /// The names after that member, empty for a default written on the
+  /// declaration itself.
+  pub path: Vec<Symbol>,
+  pub source: SourceId,
+  pub node: NodeId,
+}
+
 /// A struct body whose members nobody has resolved yet.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PendingBody {
@@ -267,7 +281,7 @@ pub struct Checker<'a> {
   aggregate_types: HashMap<(Option<InstanceId>, SourceId, NodeId), TypeId>,
   /// The default value of each struct member that was declared with one, by
   /// member index (**L§8.1**).
-  member_defaults: HashMap<StructId, Vec<(usize, SourceId, NodeId)>>,
+  member_defaults: HashMap<StructId, Vec<MemberDefault>>,
   stack: Vec<DeclId>,
   /// Every declaration by the node it was written at, built on first use: a
   /// back end walking a body finds the local a statement introduced this way.
@@ -852,12 +866,12 @@ impl<'a> Checker<'a> {
   pub(crate) fn record_member_defaults(
     &mut self,
     definition: StructId,
-    defaults: Vec<(usize, SourceId, NodeId)>,
+    defaults: Vec<MemberDefault>,
   ) {
     self.member_defaults.insert(definition, defaults);
   }
 
-  pub(crate) fn member_defaults_of(&self, definition: StructId) -> &[(usize, SourceId, NodeId)] {
+  pub(crate) fn member_defaults_of(&self, definition: StructId) -> &[MemberDefault] {
     self
       .member_defaults
       .get(&definition)

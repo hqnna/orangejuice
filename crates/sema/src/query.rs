@@ -146,13 +146,51 @@ impl Checker<'_> {
     &mut self,
     definition: oj_types::StructId,
   ) -> Vec<(u64, TypeId, SourceId, NodeId)> {
+    self.resolved_member_defaults(definition, false)
+  }
+
+  /// The defaults a struct body wrote as `member.field = value;` rather than on
+  /// a declaration (**L§8.1**). They are applied *after* the members they reach
+  /// into have taken their own type's defaults, which is the order the body
+  /// wrote them in.
+  pub fn member_path_defaults(
+    &mut self,
+    definition: oj_types::StructId,
+  ) -> Vec<(u64, TypeId, SourceId, NodeId)> {
+    self.resolved_member_defaults(definition, true)
+  }
+
+  fn resolved_member_defaults(
+    &mut self,
+    definition: oj_types::StructId,
+    paths: bool,
+  ) -> Vec<(u64, TypeId, SourceId, NodeId)> {
     self.complete_struct(definition);
     let defaults = self.member_defaults_of(definition).to_vec();
     defaults
       .into_iter()
-      .filter_map(|(index, source, node)| {
-        let member = self.types().struct_info(definition).members.get(index)?;
-        Some((member.offset, member.type_id, source, node))
+      .filter(|default| default.path.is_empty() != paths)
+      .filter_map(|default| {
+        let member = self
+          .types()
+          .struct_info(definition)
+          .members
+          .get(default.member)?;
+        let (mut offset, mut type_id) = (member.offset, member.type_id);
+        for name in &default.path {
+          let underlying = self.types().underlying(type_id);
+          self.complete_type(underlying);
+          let inner = self.types().struct_of(underlying)?;
+          let member = self
+            .types()
+            .struct_info(inner)
+            .members
+            .iter()
+            .find(|member| member.name == *name)?;
+          offset += member.offset;
+          type_id = member.type_id;
+        }
+        Some((offset, type_id, default.source, default.node))
       })
       .collect()
   }
@@ -596,7 +634,12 @@ impl Checker<'_> {
         )
       })
       .collect();
-    let defaults: Vec<(usize, SourceId, NodeId)> = self.member_defaults_of(definition).to_vec();
+    let defaults: Vec<(usize, SourceId, NodeId)> = self
+      .member_defaults_of(definition)
+      .iter()
+      .filter(|default| default.path.is_empty())
+      .map(|default| (default.member, default.source, default.node))
+      .collect();
     let scope = self.struct_scope(definition);
 
     for (index, member_type, offset, skip) in members {
@@ -618,6 +661,17 @@ impl Checker<'_> {
         // A member with no default of its own may still be a struct whose
         // members have theirs.
         None => self.write_defaults(member_type, at, bytes),
+      }
+    }
+
+    // `member.field = value;` lands on top of what the member's own type
+    // already wrote.
+    for (offset, member_type, source, node) in self.member_path_defaults(definition) {
+      let Some(scope) = scope.map(|scope| self.scope_at(source, node, scope)) else {
+        continue;
+      };
+      if let Some(constant) = self.expression(scope, source, node).constant {
+        self.write_constant(&constant, member_type, at + offset as usize, bytes);
       }
     }
   }

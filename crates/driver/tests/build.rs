@@ -2093,3 +2093,90 @@ fn a_modify_sees_an_untyped_constant_as_the_type_its_header_declared() {
     "3\n",
   );
 }
+
+#[test]
+fn a_resizable_arrays_allocated_and_allocator_are_fields_of_its_own() {
+  // `[..] T` is `Resizable_Array`: `.count` and `.data` first, then the
+  // `.allocated` capacity and the `.allocator` that grew it (Preload).
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       xs: [..] int;\n  \
+       array_add(*xs, 1);\n  \
+       array_add(*xs, 2);\n  \
+       put_number(xs.count);\n  \
+       put_number(xs.allocated);\n  \
+       ys: [..] int;\n  \
+       ys.allocator = temp;\n  \
+       array_add(*ys, 3);\n  \
+       put_number(ys.count);\n\
+     }\n",
+    "2\n8\n1\n",
+  );
+}
+
+#[test]
+fn a_struct_body_sets_a_default_through_a_member_path() {
+  // `member.field = value;` after the member's declaration is a default one
+  // level down, applied after the member's own type has taken its (**L§8.1**).
+  assert_output(
+    "Inner :: struct { a := 1; b := 2; }\n\
+     Outer :: struct {\n  \
+       x: Inner;\n  \
+       x.a = 42;\n  \
+       y := 7;\n\
+     }\n\
+     main :: () {\n  \
+       o: Outer;\n  \
+       put_number(o.x.a);\n  \
+       put_number(o.x.b);\n  \
+       put_number(o.y);\n\
+     }\n",
+    "42\n2\n7\n",
+  );
+}
+
+#[test]
+fn a_using_of_a_named_import_widens_the_scope_with_the_modules_names() {
+  // `String` is written `Basic :: #import "Basic"; using Basic;`, which is a
+  // `using` of a name rather than of the `#import` itself (**L§11.2**).
+  assert_output(
+    "Basic :: #import \"Basic\";\n\
+     using Basic;\n\
+     main :: () {\n  \
+       s := tprint(\"%-%\", 6, 7);\n  \
+       put(s);\n  \
+       put(\"\\n\");\n\
+     }\n",
+    "6-7\n",
+  );
+}
+
+#[test]
+fn a_using_of_a_named_import_written_before_the_import_still_widens_the_scope() {
+  assert_output(
+    "using Basic;\n\
+     Basic :: #import \"Basic\";\n\
+     main :: () { put(tprint(\"%\\n\", 42)); }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn an_unqualified_enum_member_takes_the_type_the_operator_it_is_in_was_asked_for() {
+  // `.WEST | .EAST` has no type of its own: what the whole expression was
+  // asked for is what says which enum the names belong to (**L§5.12**).
+  assert_output(
+    "Dir :: enum_flags { EAST; WEST; NORTH; }\n\
+     Stuff :: enum { FIRST; SECOND; THIRD; }\n\
+     main :: () {\n  \
+       d: Dir;\n  \
+       d = .WEST | .EAST;\n  \
+       put_number(cast(int) d);\n  \
+       if d & (.WEST | .NORTH)  put(\"masked\\n\");\n  \
+       y: Stuff = cast(Stuff) .THIRD;\n  \
+       put_number(cast(int) y);\n\
+     }\n",
+    "3\nmasked\n2\n",
+  );
+}

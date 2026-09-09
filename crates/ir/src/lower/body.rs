@@ -1549,6 +1549,20 @@ impl Lowering<'_, '_> {
       let member = self.offset(address, offset, member_type);
       self.apply_member_defaults_at(member, member_type, depth + 1);
     }
+    // A `member.field = value;` default reaches past a member the loop above
+    // has just filled in, so it is written last (**L§8.1**).
+    for (offset, member_type, source, node) in self.checker.member_path_defaults(definition) {
+      let member = self.offset(address, offset, member_type);
+      let scope = self.checker.scope_for(source, node, self.body_scope);
+      let (previous_source, previous_scope) = (self.body_source, self.body_scope);
+      self.body_source = source;
+      self.body_scope = scope;
+      if let Some(value) = self.expression(scope, source, node, Some(member_type)) {
+        self.store(member, value);
+      }
+      self.body_source = previous_source;
+      self.body_scope = previous_scope;
+    }
   }
 
   // ------------------------------------------------------- global prologue ---

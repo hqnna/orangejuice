@@ -324,6 +324,19 @@ enum PendingIf {
   },
 }
 
+/// A `using X;` whose `X` named no module *yet*. A file's declarations are
+/// order-independent, so the `#import` that binds the name may come after the
+/// `using` that widens the scope with it (**L§11.2**).
+struct PendingUsing {
+  expression: NodeId,
+  scope: ScopeId,
+  destination: ScopeId,
+  filter_type: FilterType,
+  filter: Option<NodeId>,
+  span: Span,
+  source: SourceId,
+}
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct ModuleKey {
   entry: PathBuf,
@@ -385,6 +398,7 @@ pub struct Program<'a> {
   macro_injected: RefCell<HashSet<Symbol>>,
   diagnostics: RefCell<Vec<Diagnostic>>,
   pending_ifs: RefCell<Vec<PendingIf>>,
+  pending_usings: RefCell<Vec<PendingUsing>>,
   /// Nonzero while the branches of an undecidable `#if` are being admitted, so
   /// nothing reached from there is known to be real: its diagnostics are held
   /// back until the condition can be decided (M6 runs the `#run`s most of them
@@ -484,6 +498,7 @@ impl<'a> Program<'a> {
       macro_injected: RefCell::default(),
       diagnostics: RefCell::default(),
       pending_ifs: RefCell::default(),
+      pending_usings: RefCell::default(),
       speculative: Cell::new(0),
       conditional: Cell::new(0),
       branch: Cell::new(None),
@@ -507,6 +522,7 @@ impl<'a> Program<'a> {
     // once that file or module exists (**C§3.3**).
     program.apply_added_strings();
     program.settle_pending_ifs();
+    program.settle_pending_usings();
     program
   }
 
@@ -1333,6 +1349,39 @@ impl<'a> Program<'a> {
         if !matches!(parsed.ast.data(expression), NodeData::Declaration(_)) {
           self.walk(parsed, expression, target.scope, source);
         }
+        // `using X;` where `X` was bound by a named `#import` widens the scope
+        // with the module's exports, exactly as `using X :: #import "X";` does
+        // (**L§11.2**): it is what `String`'s `using Basic;` means.
+        if matches!(parsed.ast.data(expression), NodeData::Ident(_)) {
+          match self.used_module(parsed, expression, target.scope) {
+            Some(module) => {
+              let (only, except) = self.name_filter(parsed, filter_type, filter);
+              self.tree.add_import(
+                target.import_destination(),
+                ImportEdge {
+                  target: module,
+                  only,
+                  except,
+                  span,
+                  source: Some(source),
+                  transitive: false,
+                },
+              );
+              return;
+            }
+            // The `#import` that binds the name may still be further down the
+            // file, so the edge is settled once everything is loaded.
+            None => self.pending_usings.borrow_mut().push(PendingUsing {
+              expression,
+              scope: target.scope,
+              destination: target.import_destination(),
+              filter_type,
+              filter,
+              span,
+              source,
+            }),
+          }
+        }
         // `using E :: enum { … };` and `using S :: struct { … };` widen the
         // scope with names the parser already knows; a `using` of a *value*
         // needs its type, so the scope only records that names may still
@@ -1372,6 +1421,23 @@ impl<'a> Program<'a> {
         }
       }
     }
+  }
+
+  /// The module scope a `using X;` names, when `X` is a named `#import`
+  /// binding already in scope (**L§11.2**).
+  fn used_module(&self, parsed: &Parsed, expression: NodeId, scope: ScopeId) -> Option<ScopeId> {
+    let NodeData::Ident(ident) = parsed.ast.data(expression) else {
+      return None;
+    };
+    let crate::tree::Resolution::Found(candidates) = self.tree.lookup(scope, ident.name) else {
+      return None;
+    };
+    candidates
+      .iter()
+      .find_map(|id| match self.tree.decl(*id).kind {
+        DeclKind::Module(module) => Some(module),
+        _ => None,
+      })
   }
 
   /// The member scope of `using E :: enum { … }` / `using S :: struct { … }`.
@@ -1966,6 +2032,32 @@ impl<'a> Program<'a> {
 
   /// Retries the `#if`s whose conditions were not yet decidable until nothing
   /// more folds, then admits every branch of what is left.
+  /// Retries every `using X;` whose `X` was not a module yet when it was
+  /// walked, now that the whole program's declarations are in the tree.
+  fn settle_pending_usings(&self) {
+    let pending = std::mem::take(&mut *self.pending_usings.borrow_mut());
+    for item in pending {
+      let Some(parsed) = self.parsed_of(item.source) else {
+        continue;
+      };
+      let Some(module) = self.used_module(&parsed, item.expression, item.scope) else {
+        continue;
+      };
+      let (only, except) = self.name_filter(&parsed, item.filter_type, item.filter);
+      self.tree.add_import(
+        item.destination,
+        ImportEdge {
+          target: module,
+          only,
+          except,
+          span: item.span,
+          source: Some(item.source),
+          transitive: false,
+        },
+      );
+    }
+  }
+
   fn settle_pending_ifs(&self) {
     loop {
       let pending = std::mem::take(&mut *self.pending_ifs.borrow_mut());
