@@ -2180,3 +2180,126 @@ fn an_unqualified_enum_member_takes_the_type_the_operator_it_is_in_was_asked_for
     "3\nmasked\n2\n",
   );
 }
+
+#[test]
+fn a_struct_operand_picks_the_operator_it_overloads() {
+  // `operator +` and friends are constants named by the operator's own text,
+  // resolved like any other overload set (**L§7.7**).
+  assert_output(
+    "Pair :: struct { a: int; b: int; }\n\
+     operator + :: (x: Pair, y: Pair) -> Pair { return .{x.a + y.a, x.b + y.b}; }\n\
+     operator * :: (x: Pair, s: int) -> Pair #symmetric { return .{x.a * s, x.b * s}; }\n\
+     operator - :: (x: Pair) -> Pair { return .{-x.a, -x.b}; }\n\
+     operator == :: (x: Pair, y: Pair) -> bool { return x.a == y.a && x.b == y.b; }\n\
+     main :: () {\n  \
+       p := Pair.{1, 2};\n  \
+       q := Pair.{10, 20};\n  \
+       r := p + q;\n  \
+       put_number(r.a);\n  \
+       put_number(r.b);\n  \
+       s := 3 * p;\n  \
+       put_number(s.a);\n  \
+       n := -p;\n  \
+       put_number(n.b);\n  \
+       if p == Pair.{1, 2}  put(\"equal\\n\");\n  \
+       if p != q  put(\"different\\n\");\n\
+     }\n",
+    "11\n22\n3\n-2\nequal\ndifferent\n",
+  );
+}
+
+#[test]
+fn a_compound_assignment_takes_its_own_operator_or_falls_back_to_the_plain_one() {
+  // `a op= b` uses `operator op=` when there is one, and otherwise means
+  // `a = a op b` (**L§7.7**).
+  assert_output(
+    "Pair :: struct { a: int; b: int; }\n\
+     operator + :: (x: Pair, y: Pair) -> Pair { return .{x.a + y.a, x.b + y.b}; }\n\
+     operator -= :: (x: *Pair, y: Pair) { x.a -= y.a; x.b -= y.b; }\n\
+     main :: () {\n  \
+       p := Pair.{1, 2};\n  \
+       p += Pair.{10, 20};\n  \
+       put_number(p.a);\n  \
+       p -= Pair.{1, 1};\n  \
+       put_number(p.a);\n  \
+       put_number(p.b);\n\
+     }\n",
+    "11\n10\n21\n",
+  );
+}
+
+#[test]
+fn a_subscript_operator_reads_and_writes_through_the_address_it_gives() {
+  // `operator *[]` gives the element's address, which is enough for a read, a
+  // write and a compound assignment at once (**L§7.7**).
+  assert_output(
+    "Bucket :: struct { items: [10] int; }\n\
+     operator *[] :: (b: *Bucket, index: int) -> *int { return *b.items[index]; }\n\
+     Wrap :: struct { items: [4] int; }\n\
+     operator [] :: (w: Wrap, index: int) -> int { return w.items[index % 4]; }\n\
+     main :: () {\n  \
+       b: Bucket;\n  \
+       b[3] = 7;\n  \
+       b[3] *= 6;\n  \
+       put_number(b[3]);\n  \
+       w: Wrap;\n  \
+       w.items[1] = 5;\n  \
+       put_number(w[5]);\n\
+     }\n",
+    "42\n5\n",
+  );
+}
+
+#[test]
+fn a_polymorphic_struct_takes_the_defaults_of_the_arguments_it_was_not_given() {
+  // A struct's parameters are constants even though they are written
+  // `N: int = 10`, so the ones an instantiation leaves out take their defaults
+  // (**L§8.5**). It is what `Table(string, string)` leans on.
+  assert_output(
+    "Holder :: struct (T: Type = int, N: int = 10) { values: [N] T; }\n\
+     main :: () {\n  \
+       b: Holder(float);\n  \
+       c: Holder(N = 3);\n  \
+       d: Holder(float, 5);\n  \
+       put_number(b.values.count);\n  \
+       put_number(c.values.count);\n  \
+       put_number(d.values.count);\n\
+     }\n",
+    "10\n3\n5\n",
+  );
+}
+
+#[test]
+fn a_nested_type_of_a_baked_struct_is_one_type_however_it_is_reached() {
+  // `Entry` inside `Table(K, V)` belongs to that instantiation; a procedure
+  // taking the family resolves it there rather than under its own (**L§8.5**).
+  assert_output(
+    "Box :: struct (T: Type) {\n  \
+       Item :: struct { value: T; }\n  \
+       items: [] Item;\n\
+     }\n\
+     fill :: (box: *Box, storage: [] $I) { box.items = storage; }\n\
+     main :: () {\n  \
+       b: Box(int);\n  \
+       storage: [2] Box(int).Item;\n  \
+       storage[0].value = 41;\n  \
+       storage[1].value = 1;\n  \
+       fill(*b, storage);\n  \
+       put_number(b.items[0].value + b.items[1].value);\n\
+     }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn an_import_in_a_procedure_body_is_not_a_value() {
+  // `#import` in an imperative scope brings names into the block; there is
+  // nothing in the executable for the statement itself (**L§11.2**).
+  assert_output(
+    "main :: () {\n  \
+       #import \"Basic\";\n  \
+       put(tprint(\"%\\n\", 7));\n\
+     }\n",
+    "7\n",
+  );
+}

@@ -26,8 +26,61 @@ impl Checker<'_> {
     {
       return None;
     }
+    let Some((signature, _)) = self.resolve_operator(scope, source, node, operator, operands)
+    else {
+      // A comparison whose `operator ==` we could not pick is still a `bool`.
+      return is_comparison(operator).then(|| Expr::value(TypeId::BOOL));
+    };
+    let result = signature.returns.first().copied().unwrap_or(TypeId::VOID);
+    Some(Expr::value(self.upcast_back(operands, result)))
+  }
 
-    let name = self.interned().intern(operator.text().as_bytes());
+  /// The same by written text, for `operator []=` and `operator *[]`.
+  pub(crate) fn operator_overload_named(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    text: &str,
+    operands: &[Expr],
+  ) -> Option<Expr> {
+    let (signature, _) = self.resolve_operator_named(scope, source, node, text, operands)?;
+    let result = signature.returns.first().copied().unwrap_or(TypeId::VOID);
+    Some(Expr::value(self.upcast_back(operands, result)))
+  }
+
+  /// The overload an operator's operands pick, and whether it was matched with
+  /// its arguments the other way round — which `#symmetric` allows for a
+  /// two-parameter operator (**L§7.7**).
+  pub(crate) fn resolve_operator(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: OperatorType,
+    operands: &[Expr],
+  ) -> Option<(crate::overload::Signature, bool)> {
+    self.resolve_operator_named(scope, source, node, operator.text(), operands)
+  }
+
+  /// The same by the operator's written text, for the ones that have no
+  /// `Operator_Type` of their own: `operator []=` and `operator *[]`
+  /// (**L§7.7**).
+  pub(crate) fn resolve_operator_named(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    text: &str,
+    operands: &[Expr],
+  ) -> Option<(crate::overload::Signature, bool)> {
+    if !operands
+      .iter()
+      .any(|operand| self.is_overloadable_operand(operand.type_id))
+    {
+      return None;
+    }
+    let name = self.interned().intern(text.as_bytes());
     let scope = self.nearest_scope(source, node, scope);
     let Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
       return None;
@@ -37,20 +90,29 @@ impl Checker<'_> {
       .iter()
       .map(|operand| crate::overload::CallArgument::positional(operand.clone()))
       .collect();
-    let mut resolved = self.resolve_overload(&candidates, &arguments);
-    // `#symmetric` lets a two-parameter operator take its arguments the other
-    // way round (**L§7.7**).
-    if matches!(resolved, Resolved::None) && arguments.len() == 2 {
-      let swapped = vec![arguments[1].clone(), arguments[0].clone()];
-      resolved = self.resolve_overload(&candidates, &swapped);
+    if let Resolved::One(signature) = self.resolve_overload(&candidates, &arguments) {
+      return Some((signature, false));
     }
-
-    let Resolved::One(signature) = resolved else {
-      // A comparison whose `operator ==` we could not pick is still a `bool`.
-      return is_comparison(operator).then(|| Expr::value(TypeId::BOOL));
-    };
-    let result = signature.returns.first().copied().unwrap_or(TypeId::VOID);
-    Some(Expr::value(self.upcast_back(operands, result)))
+    if arguments.len() == 2 {
+      let swapped = vec![arguments[1].clone(), arguments[0].clone()];
+      if let Resolved::One(signature) = self.resolve_overload(&candidates, &swapped) {
+        return Some((signature, true));
+      }
+    }
+    // `operator *[]` and `operator []=` take a *pointer* to the thing being
+    // subscripted, and the compiler takes the address of the place rather than
+    // making the caller write it (**L§7.7**).
+    let first = operands.first()?;
+    if !first.lvalue {
+      return None;
+    }
+    let pointer = self.types_mut().pointer_to(first.type_id);
+    let mut through_address = arguments;
+    through_address[0] = crate::overload::CallArgument::positional(Expr::value(pointer));
+    match self.resolve_overload(&candidates, &through_address) {
+      Resolved::One(signature) => Some((signature, false)),
+      _ => None,
+    }
   }
 
   /// Whether an operator of that name is declared anywhere in scope
@@ -61,9 +123,9 @@ impl Checker<'_> {
     scope: ScopeId,
     source: SourceId,
     node: NodeId,
-    operator: OperatorType,
+    text: &str,
   ) -> bool {
-    let name = self.interned().intern(operator.text().as_bytes());
+    let name = self.interned().intern(text.as_bytes());
     let scope = self.nearest_scope(source, node, scope);
     matches!(
       self.program().tree().lookup(scope, name),

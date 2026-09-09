@@ -194,10 +194,17 @@ impl Checker<'_> {
   /// written (**L§8.3**).
   fn nested_constant(&mut self, definition: oj_types::StructId, name: Symbol) -> Option<Expr> {
     let scope = self.struct_scope(definition)?;
-    match self.program().tree().lookup(scope, name) {
-      oj_scope::Resolution::Found(candidates) => Some(self.declarations_type(&candidates)),
-      _ => None,
-    }
+    let oj_scope::Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
+      return None;
+    };
+    // A baked polymorphic struct's nested declarations belong to its
+    // instantiation, not to whichever one is being checked (**L§8.5**).
+    Some(match self.struct_instance(definition) {
+      Some(instance) => self.with_instance(Some(instance), |checker| {
+        checker.declarations_type(&candidates)
+      }),
+      None => self.declarations_type(&candidates),
+    })
   }
 
   /// A name a `using` of a *type* brings in: an enum's members, or a struct's

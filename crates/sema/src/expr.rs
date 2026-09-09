@@ -631,8 +631,10 @@ impl Checker<'_> {
       // `operator []` reads, `operator *[]` gives the address of, an element
       // of a struct that behaves like an array (**L§7.7**).
       let operands = [base, index];
-      for subscript in [OperatorType::ARRAY_SUBSCRIPT, ADDRESS_SUBSCRIPT] {
-        if let Some(result) = self.operator_overload(scope, source, node, subscript, &operands) {
+      for subscript in [SUBSCRIPT, ADDRESS_SUBSCRIPT] {
+        if let Some(result) =
+          self.operator_overload_named(scope, source, node, subscript, &operands)
+        {
           return match self.types().pointee(result.type_id) {
             Some(pointee) if subscript == ADDRESS_SUBSCRIPT => Expr::place(pointee),
             _ => result,
@@ -643,7 +645,7 @@ impl Checker<'_> {
       // pointee that has no subscript operator of its own to prefer.
       if let Some(pointee) = self.types().pointee(operands[0].type_id)
         && !self.has_operator(scope, source, node, ADDRESS_SUBSCRIPT)
-        && !self.has_operator(scope, source, node, OperatorType::ARRAY_SUBSCRIPT)
+        && !self.has_operator(scope, source, node, SUBSCRIPT)
       {
         return Expr::place(pointee);
       }
@@ -941,7 +943,9 @@ fn negate(value: &Const) -> Option<Const> {
   }
 }
 
-/// `operator *[]` — the address-of-element subscript, which enables reads,
-/// writes and compound assignment at once (**L§7.7**). It is not a
-/// `Operator_Type` the reference exports, so the number is orangejuice's.
-const ADDRESS_SUBSCRIPT: OperatorType = OperatorType(501);
+/// The subscript operators, which are named by their written text rather
+/// than by an `Operator_Type` the reference exports (**L§7.7**): `operator []`
+/// reads an element and `operator *[]` gives its address, which enables reads,
+/// writes and compound assignment at once.
+const SUBSCRIPT: &str = "[]";
+const ADDRESS_SUBSCRIPT: &str = "*[]";

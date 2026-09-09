@@ -588,6 +588,104 @@ impl Checker<'_> {
     })
   }
 
+  /// The `operator` procedure an operator node resolves to, with its operands
+  /// in parameter order (**L§7.7**). `operands` are the nodes the operator was
+  /// written with — one for a unary operator, two for a binary one or a
+  /// subscript. `None` means nothing overloads it, and the back end lowers the
+  /// built-in operator instead.
+  pub fn operator_plan(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: &str,
+    operands: &[NodeId],
+  ) -> Option<CallPlan> {
+    self.at_call_site(scope, source, node, |checker| {
+      checker.operator_plan_inner(scope, source, node, operator, operands)
+    })
+  }
+
+  fn operator_plan_inner(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: &str,
+    operands: &[NodeId],
+  ) -> Option<CallPlan> {
+    let typed: Vec<Expr> = operands
+      .iter()
+      .map(|operand| {
+        let written = self.scope_at(source, *operand, scope);
+        self.expression_type(written, source, *operand)
+      })
+      .collect();
+    let (signature, swapped) =
+      self.resolve_operator_named(scope, source, node, operator, &typed)?;
+    if signature.polymorphic {
+      return None;
+    }
+    if let Some(instance) = signature.instance {
+      self.use_instance(instance);
+    }
+    let mut written: Vec<Argument> = operands
+      .iter()
+      .map(|operand| Argument {
+        name: None,
+        expression: *operand,
+      })
+      .collect();
+    // `#symmetric` matched the operands the other way round, so that is the
+    // order the call takes them in (**L§7.7**).
+    if swapped {
+      written.reverse();
+    }
+    self.plan_arguments(scope, source, &written, signature)
+  }
+
+  /// The `operator op=` an `a op= b` resolves to (**L§7.7**). Its first
+  /// parameter is a *pointer* to the left operand, which is what makes the
+  /// operator able to write through it, so that is the type the left operand
+  /// is offered as.
+  pub fn compound_operator_plan(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: &str,
+    left: NodeId,
+    right: NodeId,
+  ) -> Option<CallPlan> {
+    self.at_call_site(scope, source, node, |checker| {
+      let left_scope = checker.scope_at(source, left, scope);
+      let left_type = checker.expression_type(left_scope, source, left).type_id;
+      let pointer = checker.types_mut().pointer_to(left_type);
+      let right_scope = checker.scope_at(source, right, scope);
+      let right_type = checker.expression_type(right_scope, source, right);
+      let operands = [Expr::value(pointer), right_type];
+      let (signature, _) =
+        checker.resolve_operator_named(scope, source, node, operator, &operands)?;
+      if signature.polymorphic {
+        return None;
+      }
+      if let Some(instance) = signature.instance {
+        checker.use_instance(instance);
+      }
+      let written = [
+        Argument {
+          name: None,
+          expression: left,
+        },
+        Argument {
+          name: None,
+          expression: right,
+        },
+      ];
+      checker.plan_arguments(scope, source, &written, signature)
+    })
+  }
+
   /// The program an `#insert` splices in, expanding it if nobody has yet
   /// (**L§13.2**). The block it names is lowered where the `#insert` stands,
   /// in the scope the expansion recorded.

@@ -263,7 +263,7 @@ impl Checker<'_> {
       let value = match expression {
         Some(expression) => self.expression_type(scope, source, expression).constant?,
         // A parameter the instantiation left out takes its default.
-        None => self.decl_constant(*parameter)?,
+        None => self.parameter_default(*parameter)?,
       };
       let value = match self.types().is_unknown(declared) {
         true => value,
@@ -311,8 +311,30 @@ impl Checker<'_> {
     self.instances[instance.0 as usize].type_id = baked;
     if let Some(baked) = self.types().struct_of(baked) {
       self.types_mut().struct_info_mut(baked).polymorph_source = Some(definition);
+      self.record_struct_instance(baked, instance);
     }
     Some(baked)
+  }
+
+  /// The value a struct parameter takes when the instantiation left it out
+  /// (**L§8.5**). A struct's parameters are constants even though they are
+  /// written `N: int = 10`, so the default is a constant too — which is what
+  /// `Table(string, string)` leans on for the four it does not supply.
+  fn parameter_default(&mut self, id: DeclId) -> Option<Const> {
+    if let Some(value) = self.decl_constant(id) {
+      return Some(value);
+    }
+    let decl = self.program().tree().decl(id);
+    let (source, node, scope) = (decl.source?, decl.node?, decl.scope);
+    let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
+      return None;
+    };
+    let expression = declaration.expression?;
+    let declared = self.decl_type(id).value;
+    match self.types().is_unknown(declared) {
+      true => self.const_value(scope, source, expression),
+      false => self.const_value_at(scope, source, expression, declared),
+    }
   }
 
   /// `Holder(float, 5)`: the family's name with the arguments it was baked

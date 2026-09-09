@@ -257,6 +257,10 @@ pub struct Checker<'a> {
   /// How many units this checker has read. The rest arrived after it started.
   units_seen: usize,
   struct_scopes: HashMap<StructId, ScopeId>,
+  /// The instantiation a baked polymorphic struct came from (**L§8.5**), so
+  /// that a nested declaration of its body — `Table.Entry` — is resolved with
+  /// the arguments in place rather than under whatever instance is current.
+  struct_instances: HashMap<StructId, InstanceId>,
   enum_scopes: HashMap<EnumId, ScopeId>,
   /// The aggregate body a member scope belongs to, so that asking for one
   /// member's type can build the whole definition.
@@ -383,6 +387,7 @@ impl<'a> Checker<'a> {
       scope_of_node: std::cell::RefCell::new(scope_of_node),
       references_seen: std::cell::Cell::new(references_seen),
       struct_scopes: HashMap::new(),
+      struct_instances: HashMap::new(),
       enum_scopes: HashMap::new(),
       aggregate_owners,
       decl_constants: HashMap::new(),
@@ -775,6 +780,14 @@ impl<'a> Checker<'a> {
 
   pub(crate) fn record_struct_scope(&mut self, id: StructId, scope: ScopeId) {
     self.struct_scopes.insert(id, scope);
+  }
+
+  pub(crate) fn record_struct_instance(&mut self, id: StructId, instance: InstanceId) {
+    self.struct_instances.insert(id, instance);
+  }
+
+  pub(crate) fn struct_instance(&self, id: StructId) -> Option<InstanceId> {
+    self.struct_instances.get(&id).copied()
   }
 
   pub(crate) fn record_enum_scope(&mut self, id: EnumId, scope: ScopeId) {

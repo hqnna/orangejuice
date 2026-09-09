@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::ir::{Abi, AbiParameter, ParameterKind};
+use crate::lower::expr::{ADDRESS_SUBSCRIPT, SUBSCRIPT, SUBSCRIPT_ASSIGN};
 
 /// Deep enough for the nesting the module tree has, shallow enough that a
 /// pathological type fails rather than overflowing the stack.
@@ -374,7 +375,14 @@ impl Lowering<'_, '_> {
           frame.push((scope, source, block));
         }
       }
-      NodeData::Using(_) | NodeData::Note { .. } | NodeData::DirectiveScope { .. } => {}
+      // An `#import` or a `#load` in a body brings names into the block; it is
+      // the scope tree's business, and the executable holds nothing for it
+      // (**L§11.2**).
+      NodeData::Using(_)
+      | NodeData::Note { .. }
+      | NodeData::DirectiveScope { .. }
+      | NodeData::DirectiveImport(_)
+      | NodeData::DirectiveLoad { .. } => {}
       NodeData::BinaryOperator {
         operator,
         left,
@@ -973,6 +981,13 @@ impl Lowering<'_, '_> {
   fn assignment(&mut self, node: NodeId, operator: OperatorType, left: NodeId, right: NodeId) {
     let source = self.body_source;
     let scope = self.checker.scope_for(source, left, self.body_scope);
+    // `a[i] = v` writes through `operator []=` when the subscript has one and
+    // no `operator *[]` gave an address to write to (**L§7.7**).
+    if let Some((base, index)) = self.subscript_operands(source, left)
+      && self.subscript_assignment(node, operator, left, base, index, right)
+    {
+      return;
+    }
     let Some(place) = self.place(scope, source, left) else {
       return;
     };
@@ -985,11 +1000,150 @@ impl Lowering<'_, '_> {
       return;
     }
 
+    // `a op= b` takes the `operator op=` declared for it, and otherwise means
+    // `a = a op b` through `operator op` (**L§7.7**). Either way the place is
+    // evaluated once, so it is handed over rather than written again.
+    if let Some(plan) =
+      self
+        .checker
+        .compound_operator_plan(scope, source, node, operator.text(), left, right)
+    {
+      let pointer = self.pointer_to(place.type_id);
+      let address = Val {
+        id: place.id,
+        type_id: pointer,
+        indirect: false,
+      };
+      self.emit_planned_call(scope, source, node, plan, &[Some(address)]);
+      return;
+    }
+    if let Some(base) = base_operator(operator)
+      && let Some(plan) =
+        self
+          .checker
+          .operator_plan(scope, source, node, base.text(), &[left, right])
+    {
+      let current = Val {
+        id: place.id,
+        type_id: place.type_id,
+        indirect: true,
+      };
+      let mut results = match self.emit_planned_call(scope, source, node, plan, &[Some(current)]) {
+        Some(results) => results,
+        None => return,
+      };
+      if !results.is_empty() {
+        let value = results.remove(0);
+        self.store(place.id, value);
+      }
+      return;
+    }
+
     let Some(binary) = compound_operator(operator) else {
       self.unsupported(source, node, "this assignment operator", "M7");
       return;
     };
     self.read_modify_write(node, binary, (place.id, place.type_id), right);
+  }
+
+  /// The base and index of `a[i]`, when that is what was written.
+  fn subscript_operands(&self, source: SourceId, node: NodeId) -> Option<(NodeId, NodeId)> {
+    match self.checker.tree_of(source)?.data(node) {
+      NodeData::BinaryOperator {
+        operator: OperatorType::ARRAY_SUBSCRIPT,
+        left,
+        right,
+        ..
+      } => Some((*left, *right)),
+      _ => None,
+    }
+  }
+
+  /// `a[i] = v` and `a[i] op= v` through `operator []=` (**L§7.7**). The
+  /// compound forms are rewritten as `a[i] = a[i] op v`, reading through
+  /// `operator []`, with the index evaluated once. Returns whether the
+  /// assignment was handled here.
+  fn subscript_assignment(
+    &mut self,
+    node: NodeId,
+    operator: OperatorType,
+    left: NodeId,
+    base: NodeId,
+    index: NodeId,
+    right: NodeId,
+  ) -> bool {
+    let source = self.body_source;
+    let scope = self.checker.scope_for(source, left, self.body_scope);
+    // An `operator *[]` names storage, so the ordinary place path writes
+    // through it and there is nothing to rewrite.
+    if self
+      .checker
+      .operator_plan(scope, source, left, ADDRESS_SUBSCRIPT, &[base, index])
+      .is_some()
+    {
+      return false;
+    }
+    let Some(plan) =
+      self
+        .checker
+        .operator_plan(scope, source, node, SUBSCRIPT_ASSIGN, &[base, index, right])
+    else {
+      return false;
+    };
+    let Some(index_target) = plan.arguments.get(1).map(|argument| argument.target) else {
+      return false;
+    };
+    let Some(element) = plan.arguments.get(2).map(|argument| argument.target) else {
+      return false;
+    };
+    let index_scope = self.checker.scope_for(source, index, self.body_scope);
+    let Some(index_value) = self.expression(index_scope, source, index, Some(index_target)) else {
+      return true;
+    };
+    let index_value = Val {
+      id: self.scalar(index_value),
+      type_id: index_target,
+      indirect: false,
+    };
+
+    let value = match operator {
+      OperatorType::ASSIGN => None,
+      _ => {
+        let Some(binary) = compound_operator(operator) else {
+          self.unsupported(source, node, "this assignment operator", "M7");
+          return true;
+        };
+        let Some(current) = self.operator_call_with(
+          scope,
+          source,
+          left,
+          SUBSCRIPT,
+          &[base, index],
+          &[None, Some(index_value)],
+        ) else {
+          self.unsupported(source, node, "'operator []'", "M7");
+          return true;
+        };
+        let right_scope = self.checker.scope_for(source, right, self.body_scope);
+        let Some(operand) = self.expression(right_scope, source, right, Some(element)) else {
+          return true;
+        };
+        match self.binary_values(source, node, binary, current, operand, element) {
+          Some(value) => Some(value),
+          None => return true,
+        }
+      }
+    };
+    let given = [None, Some(index_value), value];
+    self.operator_call_with(
+      scope,
+      source,
+      node,
+      SUBSCRIPT_ASSIGN,
+      &[base, index, right],
+      &given,
+    );
+    true
   }
 
   /// `x op= e`: the storage is read, combined and written back (**L§5.2**).
@@ -1689,6 +1843,26 @@ fn compound_operator(operator: OperatorType) -> Option<crate::ir::BinaryOp> {
     OperatorType::BITWISE_AND_ASSIGN | OperatorType::LOGICAL_AND_ASSIGN => BinaryOp::BitwiseAnd,
     OperatorType::BITWISE_OR_ASSIGN | OperatorType::LOGICAL_OR_ASSIGN => BinaryOp::BitwiseOr,
     OperatorType::BITWISE_XOR_ASSIGN => BinaryOp::BitwiseXor,
+    _ => return None,
+  })
+}
+
+/// The plain operator behind a compound assignment: `a += b` falls back to
+/// `a = a + b` when no `operator +=` is declared (**L§7.7**).
+fn base_operator(operator: OperatorType) -> Option<OperatorType> {
+  Some(match operator {
+    OperatorType::PLUS_ASSIGN => OperatorType::PLUS,
+    OperatorType::MINUS_ASSIGN => OperatorType::MINUS,
+    OperatorType::TIMES_ASSIGN => OperatorType::TIMES,
+    OperatorType::DIV_ASSIGN => OperatorType::DIVIDE,
+    OperatorType::MOD_ASSIGN => OperatorType::MODULUS,
+    OperatorType::SHIFT_LEFT_ASSIGN => OperatorType::SHIFT_LEFT,
+    OperatorType::SHIFT_RIGHT_ASSIGN => OperatorType::SHIFT_RIGHT,
+    OperatorType::ROTATE_LEFT_ASSIGN => OperatorType::ROTATE_LEFT,
+    OperatorType::ROTATE_RIGHT_ASSIGN => OperatorType::ROTATE_RIGHT,
+    OperatorType::BITWISE_AND_ASSIGN => OperatorType::BITWISE_AND,
+    OperatorType::BITWISE_OR_ASSIGN => OperatorType::BITWISE_OR,
+    OperatorType::BITWISE_XOR_ASSIGN => OperatorType::BITWISE_XOR,
     _ => return None,
   })
 }

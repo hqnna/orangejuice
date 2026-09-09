@@ -112,7 +112,16 @@ impl Checker<'_> {
       // asks a struct for a nested type while that struct's own size is still
       // waiting on the answer (**L§8.3**).
       if let Some(scope) = self.struct_scope(definition) {
-        let found = self.member_in_scope(scope, name);
+        // A nested declaration of a baked polymorphic struct is resolved under
+        // the instantiation it belongs to, so that `Table(string, string).Entry`
+        // is one type however it was reached (**L§8.5**).
+        let instance = self.struct_instance(definition);
+        let found = match instance {
+          Some(instance) => self.with_instance(Some(instance), |checker| {
+            checker.member_in_scope(scope, name)
+          }),
+          None => self.member_in_scope(scope, name),
+        };
         if !found.is_unknown() {
           return found;
         }

@@ -903,6 +903,13 @@ impl Lowering<'_, '_> {
     info: &Expr,
     want: Option<TypeId>,
   ) -> Option<Val> {
+    if matches!(
+      operator,
+      OperatorType::MINUS | OperatorType::NOT | OperatorType::BITWISE_NOT
+    ) && let Some(value) = self.unary_overload(scope, source, node, operator, operand)
+    {
+      return Some(value);
+    }
     match operator {
       // `*x` on a value is its address (**L§3.2**).
       OperatorType::TIMES => {
@@ -972,6 +979,38 @@ impl Lowering<'_, '_> {
     }
   }
 
+  /// `operator *[]` on `a[i]`: the element's address, as a place the caller can
+  /// read or write (**L§7.7**).
+  pub(super) fn subscript_address(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    left: NodeId,
+    right: NodeId,
+  ) -> Option<Val> {
+    let value = self.operator_call(scope, source, node, ADDRESS_SUBSCRIPT, &[left, right])?;
+    let element = self.checker.types().pointee(value.type_id)?;
+    let address = self.scalar(value);
+    Some(Val {
+      id: address,
+      type_id: element,
+      indirect: true,
+    })
+  }
+
+  /// `-c` and `!c` on a struct are `operator -` and `operator !` (**L§7.7**).
+  fn unary_overload(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: OperatorType,
+    operand: NodeId,
+  ) -> Option<Val> {
+    self.operator_call(scope, source, node, operator.text(), &[operand])
+  }
+
   #[allow(clippy::too_many_arguments)]
   fn binary_value(
     &mut self,
@@ -995,6 +1034,33 @@ impl Lowering<'_, '_> {
       OperatorType::LOGICAL_AND | OperatorType::LOGICAL_OR
     ) {
       return self.short_circuit(scope, source, operator, left, right);
+    }
+    // A struct operand may overload the operator (**L§7.7**); `a != b` with
+    // only an `operator ==` in scope is that call, negated.
+    if let Some(value) = self.operator_call(scope, source, node, operator.text(), &[left, right]) {
+      return Some(value);
+    }
+    if operator == OperatorType::IS_NOT_EQUAL
+      && let Some(value) = self.operator_call(
+        scope,
+        source,
+        node,
+        OperatorType::IS_EQUAL.text(),
+        &[left, right],
+      )
+    {
+      let operand = self.scalar(value);
+      let dest = self.value(TypeId::BOOL);
+      self.emit(Inst::Unary {
+        dest,
+        operator: UnaryOp::LogicalNot,
+        operand,
+      });
+      return Some(Val {
+        id: dest,
+        type_id: TypeId::BOOL,
+        indirect: false,
+      });
     }
     let Some(binary) = binary_operator(operator) else {
       self.unsupported(source, node, "this operator", "M7");
@@ -1529,6 +1595,14 @@ impl Lowering<'_, '_> {
     left: NodeId,
     right: NodeId,
   ) -> Option<Val> {
+    // `operator []` reads an element; `operator *[]` gives its address, which
+    // is a place. A read prefers `[]` and falls back to `*[]` (**L§7.7**).
+    if let Some(value) = self.operator_call(scope, source, node, SUBSCRIPT, &[left, right]) {
+      return Some(value);
+    }
+    if let Some(value) = self.subscript_address(scope, source, node, left, right) {
+      return Some(value);
+    }
     let base = self.expression(scope, source, left, None)?;
     let index = self.expression(scope, source, right, Some(TypeId::S64))?;
     // `p[i]` indexes a pointer as if it were an array (**L§5.4**), unless the
@@ -1708,6 +1782,83 @@ impl Lowering<'_, '_> {
       );
       return None;
     };
+    self.emit_planned_call(scope, source, node, plan, &[])
+  }
+
+  /// An `operator` procedure the operands of an operator node picked, called
+  /// with those operands as its arguments (**L§7.7**).
+  pub(super) fn operator_call(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: &str,
+    operands: &[NodeId],
+  ) -> Option<Val> {
+    self.operator_call_with(scope, source, node, operator, operands, &[])
+  }
+
+  /// The same, with values the caller has already lowered for some of the
+  /// operands — which is what keeps `w[i] += 1` from evaluating `i` twice.
+  pub(super) fn operator_call_with(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: &str,
+    operands: &[NodeId],
+    given: &[Option<Val>],
+  ) -> Option<Val> {
+    let plan = self
+      .checker
+      .operator_plan(scope, source, node, operator, operands)?;
+    // A parameter that is a pointer to the operand's own type takes the
+    // address of the place the operand names: `operator *[] :: (b: *Bucket…)`
+    // is written `b[i]` (**L§7.7**).
+    let mut overrides = Vec::with_capacity(plan.arguments.len());
+    for (index, argument) in plan.arguments.iter().enumerate() {
+      if let Some(value) = given.get(index).copied().flatten() {
+        overrides.push(Some(value));
+        continue;
+      }
+      let written = self
+        .checker
+        .expression(argument.scope, argument.source, argument.node)
+        .type_id;
+      if self.checker.types().pointee(argument.target) == Some(written) {
+        let place = self.place(argument.scope, argument.source, argument.node)?;
+        let pointer = self.pointer_to(place.type_id);
+        overrides.push(Some(Val {
+          id: place.id,
+          type_id: pointer,
+          indirect: false,
+        }));
+      } else {
+        overrides.push(None);
+      }
+    }
+    let mut results = self.emit_planned_call(scope, source, node, plan, &overrides)?;
+    match results.is_empty() {
+      true => Some(Val {
+        id: self.value(TypeId::VOID),
+        type_id: TypeId::VOID,
+        indirect: false,
+      }),
+      false => Some(results.remove(0)),
+    }
+  }
+
+  /// `overrides` gives values for declared parameters the caller has already
+  /// lowered, by parameter index: `a += b` hands over the place `a` that way,
+  /// since evaluating it a second time is not what the operator means.
+  pub(super) fn emit_planned_call(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    plan: CallPlan,
+    overrides: &[Option<Val>],
+  ) -> Option<Vec<Val>> {
     // A macro is expanded into its caller rather than called (**L§7.13**);
     // until it is, the call site has nothing to lower.
     if let Some(decl) = plan.callee
@@ -1814,16 +1965,22 @@ impl Lowering<'_, '_> {
               let extra = extra.clone();
               self.gather_varargs(*view, &extra, plan.varargs_spread)?
             }
-            _ => {
-              let argument = *plan.arguments.get(given)?;
-              given += 1;
-              self.expression(
-                argument.scope,
-                argument.source,
-                argument.node,
-                Some(parameter.type_id),
-              )?
-            }
+            _ => match overrides.get(declared).copied().flatten() {
+              Some(value) => {
+                given += 1;
+                value
+              }
+              None => {
+                let argument = *plan.arguments.get(given)?;
+                given += 1;
+                self.expression(
+                  argument.scope,
+                  argument.source,
+                  argument.node,
+                  Some(parameter.type_id),
+                )?
+              }
+            },
           };
           declared += 1;
           match parameter.kind {
@@ -2415,3 +2572,10 @@ const ANY_VALUE_POINTER: u64 = 8;
 /// Where the `data` of a `string` or a `[] T` sits: after the count
 /// (**L§3.3**, **L§3.4**).
 const VIEW_DATA: u64 = 8;
+
+/// The subscript operators, which are named by their written text (**L§7.7**):
+/// `operator []` reads an element and `operator *[]` gives its address.
+pub(super) const SUBSCRIPT: &str = "[]";
+pub(super) const ADDRESS_SUBSCRIPT: &str = "*[]";
+/// `operator []=` writes one, which is what `a[i] = v` prefers.
+pub(super) const SUBSCRIPT_ASSIGN: &str = "[]=";
