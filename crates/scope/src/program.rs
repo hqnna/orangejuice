@@ -399,6 +399,9 @@ pub struct Program<'a> {
   /// instantiation binds the `$T`s declared in the constants block, so it
   /// needs a way in that does not go through a name (**L§7.8**).
   procedure_scopes: RefCell<HashMap<(SourceId, NodeId), ProcedureScopes>>,
+  /// The header each procedure's scopes belong to, which is what `#this`
+  /// inside one names (**L§5.11**).
+  procedure_owners: RefCell<HashMap<ScopeId, (SourceId, NodeId)>>,
   /// The constants scope of every polymorphic procedure and macro. Nothing
   /// inside one of those exists until an instantiation makes it exist, so a
   /// `#run` written there waits for an instantiation rather than running (**L§12.1**).
@@ -509,6 +512,7 @@ impl<'a> Program<'a> {
       aggregate_scopes: RefCell::default(),
       loop_scopes: RefCell::default(),
       procedure_scopes: RefCell::default(),
+      procedure_owners: RefCell::default(),
       uninstantiated_scopes: RefCell::default(),
       macro_scopes: RefCell::default(),
       builtins: RefCell::default(),
@@ -616,6 +620,12 @@ impl<'a> Program<'a> {
   /// The scope a `for` loop declared its `it` and `it_index` in (**L§6.5**). A
   /// loop that did not name them has no identifier to find them through, so
   /// this is the only way in.
+  /// The procedure a scope is the constants block of, which is what `#this`
+  /// written inside it names (**L§5.11**).
+  pub fn procedure_owner(&self, scope: ScopeId) -> Option<(SourceId, NodeId)> {
+    self.procedure_owners.borrow().get(&scope).copied()
+  }
+
   pub fn loop_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
     self.loop_scopes.borrow().get(&(source, node)).copied()
   }
@@ -2813,6 +2823,14 @@ impl Program<'_> {
         let mut target = DataTarget::nested(scope);
         self.poke_name(parsed, module, name, &mut target, source);
       }
+      // `#this` names whatever contains it, so where it stands is the answer;
+      // nothing in it is a lookup any scope would otherwise record (**L§5.11**).
+      NodeData::DirectiveThis => {
+        self
+          .directive_scopes
+          .borrow_mut()
+          .insert((source, node), scope);
+      }
       NodeData::Asm(_) => self.asm(parsed, node, scope, source),
       // `#exists` asks whether a name resolves, so a miss is its answer rather
       // than an error (**L§5.14**); a `#place` target names a struct member,
@@ -2824,7 +2842,6 @@ impl Program<'_> {
       | NodeData::DirectiveScope { .. }
       | NodeData::DirectiveLibrary { .. }
       | NodeData::Context
-      | NodeData::DirectiveThis
       | NodeData::DirectiveThrough
       | NodeData::DirectiveCompileTime
       | NodeData::DirectiveContextType
@@ -2997,6 +3014,10 @@ impl Program<'_> {
     if payload.procedure_flags.contains(ProcedureFlags::MACRO) {
       self.macro_scopes.borrow_mut().insert(constants);
     }
+    self
+      .procedure_owners
+      .borrow_mut()
+      .insert(constants, (source, header));
     self.procedure_scopes.borrow_mut().insert(
       (source, header),
       ProcedureScopes {

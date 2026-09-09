@@ -3434,3 +3434,33 @@ fn a_polymorphic_struct_takes_a_procedure_as_an_argument() {
     "hello\nhi\n",
   );
 }
+
+#[test]
+fn this_names_the_procedure_or_type_that_contains_it() {
+  // `#this` is a compile-time constant: the procedure it was written in, or
+  // the struct whose body it stands in (**L§5.11**).
+  assert_output(
+    "#import \"Basic\";\n\
+     factorial :: (x: int) -> int {\n  \
+       f :: #this;\n  \
+       if x <= 0  return 1;\n  \
+       return x * f(x-1);\n\
+     }\n\
+     countdown :: (x: int) -> int {\n  \
+       if x <= 0  return 1;\n  \
+       return x * #this(x-1);\n\
+     }\n\
+     Self_Referential :: struct {\n  \
+       pointer: *Self_Referential;\n  \
+       other:   *#this;\n\
+     }\n\
+     main :: () {\n  \
+       put_number(factorial(5));\n  \
+       put_number(countdown(4));\n  \
+       r: Self_Referential;\n  \
+       put(tprint(\"% %\\n\", type_of(r.pointer) == type_of(r.other), is_constant(#this)));\n  \
+       THIS :: #this;\n\
+     }\n",
+    "120\n24\ntrue true\n",
+  );
+}

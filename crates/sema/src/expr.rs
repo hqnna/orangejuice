@@ -103,6 +103,15 @@ impl Checker<'_> {
         )),
         None => Expr::value(TypeId::CODE),
       },
+      // `#this` is the procedure or the type that contains it, as a constant
+      // (**L§5.11**).
+      NodeData::DirectiveThis => {
+        let scope = self
+          .program()
+          .directive_scope(source, node)
+          .unwrap_or(scope);
+        self.this_value(scope)
+      }
       NodeData::DirectiveProcedureName { .. } => Expr::value(TypeId::STRING),
       NodeData::DirectiveExists(_) => Expr::constant(Const::bool(false)),
       // `#compile_time` is a `bool` but not a constant one (**L§5.14**).
@@ -455,6 +464,78 @@ impl Checker<'_> {
       }
     }
     caller.unwrap_or(Expr::UNKNOWN)
+  }
+
+  /// What `#this` names: the procedure, struct or enum whose body it was
+  /// written in, as the compile-time constant that is (**L§5.11**). A macro is
+  /// spliced into whoever expanded it, so one written inside a macro names the
+  /// procedure the expansion landed in (**L§7.13**).
+  fn this_value(&mut self, scope: ScopeId) -> Expr {
+    let start = match self.program().is_in_macro(scope) {
+      true => self.caller_scope().unwrap_or(scope),
+      false => scope,
+    };
+    let mut current = Some(start);
+    while let Some(id) = current {
+      // A struct or enum body: the type it makes, which inside an
+      // instantiation is that specialization (**L§8.5**).
+      if let Some((source, node)) = self.aggregate_owner(id)
+        && let Some(type_id) = self.aggregate_type_in(id, source, node)
+      {
+        return Expr::type_expression(type_id);
+      }
+      if let Some((source, header)) = self.program().procedure_owner(id) {
+        let outer = self.program().tree().parent(id).unwrap_or(id);
+        // One with a name of its own is that declaration, and so a constant a
+        // `::` can hold; an anonymous procedure — a quick lambda calling
+        // itself — is only the address the back end generates for it.
+        let Some(decl) = self.procedure_declared_at(source, header, id) else {
+          return Expr::value(self.procedure_type(source, header, outer));
+        };
+        let type_id = self.decl_type(decl).value;
+        return Expr {
+          overloads: vec![decl],
+          constant: Some(Const::new(type_id, Value::Procedure(decl))),
+          ..Expr::value(type_id)
+        };
+      }
+      current = self.program().tree().parent(id);
+    }
+    Expr::UNKNOWN
+  }
+
+  /// The declaration a procedure header was written at, found from the scope
+  /// around it: a header knows nothing about the name it was given.
+  fn procedure_declared_at(
+    &mut self,
+    source: SourceId,
+    header: NodeId,
+    constants: ScopeId,
+  ) -> Option<DeclId> {
+    let mut scope = self.program().tree().parent(constants);
+    while let Some(id) = scope {
+      let found = self
+        .program()
+        .tree()
+        .declarations(id)
+        .into_iter()
+        .find(|declared| {
+          let decl = self.program().tree().decl(*declared);
+          decl.source == Some(source)
+            && decl.node.is_some_and(|node| {
+              matches!(
+                self.ast(source).map(|ast| ast.data(node)),
+                Some(NodeData::Declaration(declaration))
+                  if declaration.expression == Some(header)
+              )
+            })
+        });
+      if found.is_some() {
+        return found;
+      }
+      scope = self.program().tree().parent(id);
+    }
+    None
   }
 
   /// Resolves `name` on the chain out of `scope`. `None` means it is not there

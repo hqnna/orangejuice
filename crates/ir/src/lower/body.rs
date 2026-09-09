@@ -45,6 +45,7 @@ impl Lowering<'_, '_> {
 
   pub(super) fn lower_procedure(&mut self, id: ProcId, key: ProcKey) {
     self.start_procedure();
+    self.current_procedure = Some(id);
     // An instantiated body is walked with its own constants bound, so that the
     // questions the lowering asks get the specialization's answers, not the
     // header's (**L§7.8**).

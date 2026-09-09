@@ -510,6 +510,20 @@ impl Lowering<'_, '_> {
         self.body_scope = previous_scope;
         value
       }
+      // `#this` in a procedure with no name of its own is the address of the
+      // one being generated, which is how a quick lambda calls itself
+      // (**L§5.11**).
+      NodeData::DirectiveThis => {
+        let procedure = self.current_procedure?;
+        let procedure_type = self.procedures[procedure.0 as usize].type_id;
+        let dest = self.value(procedure_type);
+        self.emit(Inst::ProcedureAddress { dest, procedure });
+        Some(Val {
+          id: dest,
+          type_id: procedure_type,
+          indirect: false,
+        })
+      }
       // `#compile_time` is a value each back end folds for itself: true in
       // compile-time code, false in the executable (**L§6.10**).
       NodeData::DirectiveCompileTime => {

@@ -195,6 +195,9 @@ struct Lowering<'c, 'p> {
   locals: Vec<Local>,
   value_types: Vec<TypeId>,
   current: BlockId,
+  /// The procedure being generated, which is what `#this` written inside one
+  /// that has no name of its own is the address of (**L§5.11**).
+  current_procedure: Option<ProcId>,
   /// The local a declaration became. A macro body's declarations are one
   /// local per expansion, so the instantiation is part of the key
   /// (**L§7.13**).
@@ -257,6 +260,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       locals: Vec::new(),
       value_types: Vec::new(),
       current: BlockId(0),
+      current_procedure: None,
       local_of_decl: HashMap::new(),
       constants: std::collections::HashSet::new(),
       loops: Vec::new(),
