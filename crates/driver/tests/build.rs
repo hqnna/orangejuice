@@ -3106,3 +3106,23 @@ fn a_quick_lambda_takes_the_shape_a_polymorphic_parameter_asks_for() {
     "2\n3\n4\n",
   );
 }
+
+#[test]
+fn a_parameter_typed_through_a_family_parameter_takes_the_instantiations_type() {
+  // `b: Poly` is a family, so `k: b.T` is only a type once the call has said
+  // which instantiation `b` is — which makes the header polymorphic even
+  // though it has no `$` in it (**L§7.8**, **L§8.5**).
+  assert_output(
+    "Poly :: struct (T: Type) { x: T; }\n\
+     twice :: (b: Poly, k: b.T) -> int { return k * 2; }\n\
+     Poly2 :: struct (T: Type) { x: T; LIMIT :: 9; }\n\
+     hold :: (b: *Poly2) -> int { y: b.T = 3; return y + b.LIMIT; }\n\
+     main :: () {\n  \
+       q: Poly(int);\n  \
+       put_number(twice(q, 21));\n  \
+       r: Poly2(int);\n  \
+       put_number(hold(*r));\n\
+     }\n",
+    "42\n12\n",
+  );
+}

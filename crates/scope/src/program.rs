@@ -630,6 +630,15 @@ impl<'a> Program<'a> {
   /// Whether a scope lies inside a polymorphic procedure or a macro, whose
   /// body only exists once something instantiates or expands it. Nothing
   /// written there is checked or executed until then (**L§7.8**, **L§7.13**).
+  /// Marks a procedure body as one that belongs to its instantiations rather
+  /// than to the program. The tree cannot always tell on its own: a header with
+  /// no `$` in it is still polymorphic when a parameter's *type* is a
+  /// polymorphic struct family, which takes types to see (**L§7.8**,
+  /// **L§8.5**), so the typechecker says so when it works that out.
+  pub fn mark_uninstantiated(&self, scope: ScopeId) {
+    self.uninstantiated_scopes.borrow_mut().insert(scope);
+  }
+
   pub fn is_uninstantiated(&self, scope: ScopeId) -> bool {
     let mut current = Some(scope);
     while let Some(id) = current {

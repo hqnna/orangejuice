@@ -37,9 +37,15 @@ impl Checker<'_> {
     let NodeData::TypeInstantiation(inst) = ast.data(node) else {
       // A type written where an expression was expected: a struct literal's
       // type slot lands here.
-      return self
-        .expression_type(scope, source, node)
-        .denoted
+      let value = self.expression_type(scope, source, node);
+      if let Some(denoted) = value.denoted {
+        return denoted;
+      }
+      // A value that *is* a type names that type: `b.T` reads the argument a
+      // polymorphic struct was baked with off a variable of it (**L§8.5**).
+      return value
+        .constant
+        .and_then(|value| value.as_type())
         .unwrap_or(TypeId::UNKNOWN);
     };
 

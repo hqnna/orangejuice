@@ -367,6 +367,13 @@ impl Checker<'_> {
         .arguments
         .iter()
         .any(|argument| self.is_polymorphic_type(*argument));
+    // A header the scope tree could not see was polymorphic — one whose only
+    // variable is a parameter typed by a polymorphic struct *family* — has to
+    // be marked now, since that is what keys what is written inside it by the
+    // instantiation rather than by the program (**L§7.8**, **L§8.5**).
+    if polymorphic && let Some((source, node)) = header {
+      self.mark_body_uninstantiated(source, node);
+    }
     let is_macro = header.is_some_and(|(source, node)| self.is_macro_header(source, node));
 
     let parameters = match header {
@@ -406,6 +413,14 @@ impl Checker<'_> {
     };
     let signature = self.signature_of(only)?;
     signature.polymorphic.then_some(only)
+  }
+
+  /// Says that a header is polymorphic after all, so that everything written
+  /// inside it is keyed by the instantiation (**L§7.8**).
+  fn mark_body_uninstantiated(&mut self, source: SourceId, header: NodeId) {
+    if let Some(scopes) = self.program().procedure_scopes(source, header) {
+      self.program().mark_uninstantiated(scopes.constants);
+    }
   }
 
   /// A candidate built from a header nobody declared: a quick lambda written
