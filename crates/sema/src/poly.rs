@@ -625,6 +625,26 @@ impl Checker<'_> {
         .push((id, Const::new(TypeId::TYPE, Value::Type(bound))));
     }
 
+    // A `$T := int` the call site said nothing about takes the default it was
+    // declared with, which is what makes `string_to_int(s)` mean
+    // `string_to_int(s, 10, int)` (**L§7.8**). Without a default there is
+    // nothing to bake and the candidate does not apply.
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+      if slots.contains(&index) {
+        continue;
+      }
+      let Some(decl) = self.baked_parameter_decl(source, signature, index) else {
+        continue;
+      };
+      if solution.bindings.iter().any(|(bound, _)| *bound == decl) {
+        continue;
+      }
+      let default = parameter.default?;
+      let scope = self.scope_at(source, default, scopes.arguments);
+      let value = self.expression_type(scope, source, default).constant?;
+      solution.bindings.push((decl, value));
+    }
+
     // A macro's `Code` parameter the call site left out takes its default,
     // which is how `call := #caller_code` reaches the body (**L§7.13**).
     if signature.is_macro {

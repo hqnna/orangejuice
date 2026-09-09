@@ -14,12 +14,26 @@ use oj_types::{StructMember, TypeId};
 
 use crate::checker::{Checker, Expr};
 
+/// Where the bytes a `using`ed value's member sits in come from (**L§6.8**).
+/// `using p;` names a declaration; `using o.inner;` names an expression, which
+/// the back end evaluates the way it evaluates any other place.
+#[derive(Clone, Copy, Debug)]
+pub enum UsedBase {
+  Declaration(DeclId),
+  Expression {
+    source: SourceId,
+    node: NodeId,
+    scope: ScopeId,
+  },
+}
+
 /// What a bare name written next to a `using` of a value stands for
 /// (**L§6.8**).
 #[derive(Clone, Debug)]
 pub struct UsedMember {
-  /// The declaration the `using` named, which is where the bytes are.
-  pub base: DeclId,
+  /// Where the bytes are: the declaration the `using` named, or the expression
+  /// it was written as.
+  pub base: UsedBase,
   /// The type of that declaration, before any dereference.
   pub base_type: TypeId,
   /// Whether the base is a pointer that has to be followed first
@@ -49,8 +63,8 @@ impl Checker<'_> {
   }
 
   pub(crate) fn resolve_used_member(&mut self, scope: ScopeId, name: Symbol) -> Option<UsedMember> {
-    self.walk_used_values(scope, name, |checker, from, value, name| {
-      checker.member_of_used_value(from, value, name)
+    self.walk_used_values(scope, name, |checker, from, owner, value, name| {
+      checker.member_of_used_value(from, owner, value, name)
     })
   }
 
@@ -60,7 +74,7 @@ impl Checker<'_> {
     &mut self,
     scope: ScopeId,
     name: Symbol,
-    answer: impl Fn(&mut Self, ScopeId, &oj_scope::UsedValue, Symbol) -> Option<T>,
+    answer: impl Fn(&mut Self, ScopeId, ScopeId, &oj_scope::UsedValue, Symbol) -> Option<T>,
   ) -> Option<T> {
     if !self.enter() {
       return None;
@@ -73,7 +87,7 @@ impl Checker<'_> {
         if !value.admits(name) {
           continue;
         }
-        found = answer(self, scope, &value, name);
+        found = answer(self, scope, id, &value, name);
         if found.is_some() {
           break;
         }
@@ -90,19 +104,26 @@ impl Checker<'_> {
   fn member_of_used_value(
     &mut self,
     from: ScopeId,
+    owner: ScopeId,
     value: &oj_scope::UsedValue,
     name: Symbol,
   ) -> Option<UsedMember> {
-    let base = self.used_base(value)?;
-    // Asking a `using`ed value for its own type while that is what we are
-    // working out is the lookup that started this, not a member. A member of
-    // a struct that is being laid out is the same case from the other side:
-    // asking for its type is what the layout is doing (**L§8.3**).
-    let owner = self.program().tree().decl(base).scope;
-    if self.is_resolving(base) || self.scope_is_completing(owner) {
-      return None;
-    }
-    let base_type = self.decl_type(base).value;
+    let (base, base_type) = match self.used_base(value) {
+      Some(decl) => {
+        // Asking a `using`ed value for its own type while that is what we are
+        // working out is the lookup that started this, not a member. A member
+        // of a struct that is being laid out is the same case from the other
+        // side: asking for its type is what the layout is doing (**L§8.3**).
+        let declared_in = self.program().tree().decl(decl).scope;
+        if self.is_resolving(decl) || self.scope_is_completing(declared_in) {
+          return None;
+        }
+        (UsedBase::Declaration(decl), self.decl_type(decl).value)
+      }
+      // `using o.inner;` names no declaration of its own, so the base is the
+      // expression itself (**L§6.8**).
+      None => self.used_expression_base(value, owner)?,
+    };
     let (pointee, through_pointer) = match self.types().pointee(base_type) {
       Some(pointee) => (pointee, true),
       None => (base_type, false),
@@ -155,11 +176,11 @@ impl Checker<'_> {
   /// member of a used value, or a name of a used *type* — `using
   /// Type_Info_Tag;` makes `STRING` one of its members (**L§6.8**).
   pub(crate) fn used_name_type(&mut self, scope: ScopeId, name: Symbol) -> Option<Expr> {
-    self.walk_used_values(scope, name, |checker, from, value, name| {
+    self.walk_used_values(scope, name, |checker, from, owner, value, name| {
       if let Some(found) = checker.name_of_used_type(value, name) {
         return Some(found);
       }
-      let member = checker.member_of_used_value(from, value, name)?;
+      let member = checker.member_of_used_value(from, owner, value, name)?;
       // A nested constant — `Buffer :: struct { … }` inside `String_Builder`
       // — has no storage; it is what its declaration says (**L§8.3**).
       if member.member.is_constant() {
@@ -205,5 +226,30 @@ impl Checker<'_> {
       Some(decl) => Some(decl),
       None => self.declaration_named(value.source, value.expression),
     }
+  }
+
+  /// The base of a `using` that names no declaration — `using o.inner;`, or a
+  /// `using` of a call's result — and the type that expression has
+  /// (**L§6.8**).
+  fn used_expression_base(
+    &mut self,
+    value: &oj_scope::UsedValue,
+    owner: ScopeId,
+  ) -> Option<(UsedBase, TypeId)> {
+    let source = value.source;
+    let node = value.expression;
+    let scope = self.scope_at(source, node, owner);
+    let expression = self.expression_type(scope, source, node);
+    if expression.is_unknown() {
+      return None;
+    }
+    Some((
+      UsedBase::Expression {
+        source,
+        node,
+        scope,
+      },
+      expression.type_id,
+    ))
   }
 }

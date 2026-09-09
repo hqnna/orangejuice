@@ -332,8 +332,22 @@ impl Lowering<'_, '_> {
       }
       NodeData::If(payload) => {
         let payload = payload.clone();
+        // A `#if x == { … }` the front end decided contributes only the cases
+        // it kept, the way a `#if` without cases does (**L§6.10**); one it
+        // could not decide is lowered as an ordinary switch.
         if payload.if_flags.contains(IfFlags::IS_SWITCH_STATEMENT) {
-          self.switch_statement(node, &payload);
+          let source = self.body_source;
+          let scope = self
+            .checker
+            .scope_for(source, payload.condition, self.body_scope);
+          match self.checker.static_if_branches(scope, source, &payload) {
+            Some(branches) => {
+              for branch in branches {
+                self.statement(branch);
+              }
+            }
+            None => self.switch_statement(node, &payload),
+          }
         } else {
           self.if_statement(&payload);
         }

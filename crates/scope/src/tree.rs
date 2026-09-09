@@ -469,6 +469,12 @@ impl ScopeTree {
   pub fn lookup(&self, scope: ScopeId, name: Symbol) -> Resolution {
     let mut pending = false;
     let mut current = Some(scope);
+    // An overload set is open across every scope that can see it (**L§7.7**),
+    // so a name that resolves to procedures keeps gathering outwards: `Basic`'s
+    // `to_string(*u8, s64)` and the `to_string(*u8)` Runtime_Support makes
+    // visible the way Preload's names are visible are one set. Anything else
+    // shadows and stops the walk.
+    let mut collected: Vec<DeclId> = Vec::new();
 
     while let Some(id) = current {
       let (found, has_pending, parent) = self.with_scope(id, |scope| {
@@ -478,16 +484,30 @@ impl ScopeTree {
           scope.parent,
         )
       });
-      if let Some(found) = found {
-        return Resolution::Found(found);
-      }
-      if let Some(found) = self.lookup_through_imports(id, name) {
-        return Resolution::Found(found);
+      let here = found.or_else(|| self.lookup_through_imports(id, name));
+      if let Some(here) = here {
+        if !here
+          .iter()
+          .all(|decl| self.decl(*decl).kind == DeclKind::Procedure)
+        {
+          return Resolution::Found(match collected.is_empty() {
+            true => here,
+            false => collected,
+          });
+        }
+        for decl in here {
+          if !collected.contains(&decl) {
+            collected.push(decl);
+          }
+        }
       }
       pending |= has_pending;
       current = parent;
     }
 
+    if !collected.is_empty() {
+      return Resolution::Found(collected);
+    }
     if pending {
       Resolution::Pending
     } else {

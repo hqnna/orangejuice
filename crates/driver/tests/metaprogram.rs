@@ -24,6 +24,7 @@ Build_Options :: struct {
   output_executable_name: string;
   output_path:            string;
   append_executable_filename_extension := true;
+  use_custom_link_command := false;
 }
 
 Report :: enum u8 { ERROR; ERROR_CONTINUABLE; WARNING; INFO; }
@@ -855,4 +856,190 @@ fn a_watching_metaprogram_is_sent_the_declarations_that_typechecked() {
     return;
   };
   assert_built(&report, &fixture.path("typechecked"));
+}
+
+#[test]
+fn the_distributions_default_metaprogram_drives_the_build() {
+  let Some(jai_dir) = oj_testsupport::jai_dir() else {
+    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+    return;
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let Some(metaprogram) = ({
+    // SAFETY: cargo runs each integration test binary in its own process, and
+    // nothing else in this one reads it.
+    unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
+    oj_driver::default_metaprogram()
+  }) else {
+    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
+    return;
+  };
+
+  let fixture = Fixture::new();
+  fixture.write(
+    "greet.jai",
+    "#import \"Basic\";\nmain :: () { print(\"driven\\n\"); }\n",
+  );
+  let report = oj_driver::run_through_metaprogram(
+    &metaprogram,
+    &fixture.path("greet.jai"),
+    &[],
+    &oj_driver::BuildOptions::new(),
+    oj_driver::Stage::Executable,
+  );
+  assert!(
+    !report.failed,
+    "the metaprogram should build the program it was given, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report
+    .executable
+    .expect("the workspace the metaprogram created produced an executable");
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the produced program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "driven\n");
+}
+
+#[test]
+fn a_program_the_default_metaprogram_cannot_compile_fails_the_build() {
+  let Some(jai_dir) = oj_testsupport::jai_dir() else {
+    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+    return;
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  // SAFETY: as above.
+  unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
+  let Some(metaprogram) = oj_driver::default_metaprogram() else {
+    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
+    return;
+  };
+
+  let fixture = Fixture::new();
+  fixture.write("wrong.jai", "main :: () { x: int = \"no\"; }\n");
+  let report = oj_driver::run_through_metaprogram(
+    &metaprogram,
+    &fixture.path("wrong.jai"),
+    &[],
+    &oj_driver::BuildOptions::new(),
+    oj_driver::Stage::Executable,
+  );
+  assert!(report.failed, "the workspace failed, so the build did");
+  assert!(
+    report
+      .diagnostics
+      .iter()
+      .any(|diagnostic| diagnostic.contains("Type mismatch")),
+    "the workspace's own diagnostics reach the compiler's output:\n{}",
+    report.diagnostics.join("")
+  );
+}
+
+/// Lowers a library and hands back its IR listing, so that what it exports can
+/// be read off the symbols.
+fn library_listing(source: &str, runtime_support: oj_driver::RuntimeSupport) -> Option<String> {
+  let jai_dir = oj_testsupport::jai_dir()?;
+  // SAFETY: cargo runs each integration test binary in its own process, and
+  // nothing else in this one reads it.
+  unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
+  let fixture = Fixture::new();
+  fixture.write("library.jai", source);
+  let options = oj_driver::BuildOptions {
+    output_type: oj_link::OutputType::DynamicLibrary,
+    runtime_support,
+    ..oj_driver::BuildOptions::new()
+  };
+  let report = oj_driver::run(
+    &fixture.path("library.jai"),
+    &options,
+    oj_driver::Stage::Ir,
+    None,
+  );
+  assert!(
+    !report.failed,
+    "the library should lower, but:\n{}",
+    report.diagnostics.join("")
+  );
+  Some(report.output)
+}
+
+#[test]
+fn a_library_takes_the_runtime_init_its_build_options_ask_for() {
+  const SOURCE: &str = "#program_export\ngreet :: () { }\n";
+  let Some(listing) = library_listing(SOURCE, oj_driver::RuntimeSupport::OnlyInit) else {
+    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+    return;
+  };
+  assert!(
+    listing.contains("procedure __jai_runtime_init"),
+    "a library that takes Runtime_Support's init exports it under its own name"
+  );
+  assert!(listing.contains("procedure greet"), "and its own exports");
+}
+
+#[test]
+fn a_library_that_omits_runtime_support_defines_no_init() {
+  const SOURCE: &str = "#program_export\ngreet :: () { }\n";
+  let Some(listing) = library_listing(SOURCE, oj_driver::RuntimeSupport::Omit) else {
+    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+    return;
+  };
+  assert!(
+    !listing.contains("procedure __jai_runtime_init"),
+    "OMIT means neither the entry point nor the runtime's init is defined"
+  );
+  assert!(listing.contains("procedure greet"));
+}
+
+#[test]
+fn a_workspace_with_a_custom_link_command_stops_at_its_objects() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n\
+       compiler_custom_link_command_is_complete :: (w: Workspace) #compiler;\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"linked_by_hand\";\n  \
+         options.use_custom_link_command = true;\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(\"main :: () {{ }}\", w);\n  \
+         asked := false;\n  \
+         wrote := false;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .PHASE {{\n      \
+             phase := cast(*Message_Phase) message;\n      \
+             if phase.phase == .READY_FOR_CUSTOM_LINK_COMMAND {{\n        \
+               asked = true;\n        \
+               if phase.compiler_generated_object_files.count == 0  compiler_report(\"no objects were reported\");\n        \
+               compiler_custom_link_command_is_complete(w);\n      \
+             }}\n      \
+             if phase.phase == .POST_WRITE_EXECUTABLE  wrote = true;\n    \
+           }}\n    \
+           if message.kind == .COMPLETE  break;\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if !asked  compiler_report(\"the link was never handed over\");\n  \
+         if wrote   compiler_report(\"the compiler linked it anyway\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  assert!(!report.failed, "{}", report.diagnostics.join(""));
+  assert!(
+    !fixture.path("linked_by_hand").exists(),
+    "the compiler stops at the object it made; linking is the metaprogram's"
+  );
 }

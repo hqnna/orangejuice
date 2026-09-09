@@ -60,6 +60,12 @@ pub struct BuildOptionsLayout {
   pub output_path: Option<u64>,
   pub output_type: Option<u64>,
   pub append_executable_filename_extension: Option<u64>,
+  /// `runtime_support_definitions`, which decides what a compilation takes
+  /// from Runtime_Support (**C§4**).
+  pub runtime_support_definitions: Option<u64>,
+  /// `use_custom_link_command`, which hands the link to the metaprogram
+  /// (**C§3.2**).
+  pub use_custom_link_command: Option<u64>,
   /// Where the arguments after a lone `-` are handed to a metaprogram
   /// (**C§2.1**).
   pub compile_time_command_line: Option<u64>,
@@ -92,7 +98,7 @@ pub struct Workspace {
   /// (**C§3.1**).
   pub started: bool,
   pub destroyed: bool,
-  /// The compilation.s own workspace, which nobody created and nobody builds
+  /// The compilation's own workspace, which nobody created and nobody builds
   /// again (**C§3.1**).
   pub implicit: bool,
   /// `remap_import` calls: host module, import name, replacement (**C§3.3**).
@@ -103,6 +109,9 @@ pub struct Workspace {
   /// Whether a metaprogram watched this workspace compile, in which case the
   /// driver has nothing left to do for it.
   pub intercepted: bool,
+  /// Whether the metaprogram ran its own link command and said so
+  /// (**C§3.3**).
+  pub link_command_complete: bool,
 }
 
 impl Workspace {
@@ -177,11 +186,15 @@ pub struct Compiled {
   /// The `TYPECHECKED` batches the compilation produced (**C§3.2**), already
   /// exported into the nodes a watching metaprogram reads.
   pub typechecked: Vec<TypecheckedBatch>,
+  /// The metaprogram is the one that links, so the compiler stopped at the
+  /// objects and says so with a `READY_FOR_CUSTOM_LINK_COMMAND` phase rather
+  /// than the two write-executable ones (**C§3.2**).
+  pub custom_link_command: bool,
   pub errors: usize,
   pub failed: bool,
 }
 
-/// One `Message_Typechecked`.s worth of exported trees (**C§3.2**). Only
+/// One `Message_Typechecked`'s worth of exported trees (**C§3.2**). Only
 /// toplevel declarations are sent; headers, bodies and structs are sent
 /// wherever they were written.
 #[derive(Clone, Debug, Default)]
@@ -345,6 +358,7 @@ impl Meta {
       remaps: Vec::new(),
       during_compile: None,
       intercepted: false,
+      link_command_complete: false,
     });
     id
   }
@@ -507,6 +521,26 @@ impl Meta {
     }
     if !compiled.failed {
       self.push_message(Stored::Phase(Box::new(phase(Phase::AllTargetCodeBuilt))));
+      // The metaprogram links: it is handed what the compiler made and runs
+      // its own command, rather than being told about a link that happened
+      // (**C§3.2**).
+      if compiled.custom_link_command {
+        self.push_message(Stored::Phase(Box::new(MessagePhase {
+          executable_name: executable,
+          compiler_generated_object_files: objects,
+          system_libraries,
+          user_libraries,
+          ..phase(Phase::ReadyForCustomLinkCommand)
+        })));
+        self.push_message(Stored::Complete(Box::new(MessageComplete {
+          message: head(Kind::Complete),
+          error_code: ErrorCode::None,
+        })));
+        if let Some(intercept) = self.intercept.as_mut() {
+          intercept.compiled = true;
+        }
+        return;
+      }
       self.push_message(Stored::Phase(Box::new(MessagePhase {
         executable_name: executable,
         ..phase(Phase::PreWriteExecutable)
@@ -531,6 +565,14 @@ impl Meta {
 
     if let Some(intercept) = self.intercept.as_mut() {
       intercept.compiled = true;
+    }
+    // A workspace whose compilation failed has failed, whether or not its
+    // metaprogram says so: that is what makes the compiler exit non-zero when
+    // the program it was asked to build did not build (**C§2.1**).
+    if compiled.failed
+      && let Some(failed) = self.workspace(workspace)
+    {
+      failed.status = WorkspaceStatus::Failed;
     }
   }
 

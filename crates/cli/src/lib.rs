@@ -55,6 +55,11 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {
+  /// Compile without the distribution's `Default_Metaprogram` driving the
+  /// build, which is what a distribution-less checkout has to do anyway
+  #[arg(long)]
+  pub no_metaprogram: bool,
+
   /// The Jai file to compile
   pub file: PathBuf,
 
@@ -65,6 +70,11 @@ pub struct BuildArgs {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
+  /// Compile without the distribution's `Default_Metaprogram` driving the
+  /// build
+  #[arg(long)]
+  pub no_metaprogram: bool,
+
   /// The Jai file to compile and run
   pub file: PathBuf,
 
@@ -194,8 +204,13 @@ fn execute(cli: &Cli) -> u8 {
       println!("{VERSION_LINE}");
       EXIT_SUCCESS
     }
-    Some(Command::Build(args)) => build(&args.file, &args.options, None),
-    Some(Command::Run(args)) => build(&args.file, &args.options, Some(&args.program_args)),
+    Some(Command::Build(args)) => build(&args.file, &args.options, None, args.no_metaprogram),
+    Some(Command::Run(args)) => build(
+      &args.file,
+      &args.options,
+      Some(&args.program_args),
+      args.no_metaprogram,
+    ),
     Some(Command::Dump { stage }) => match stage {
       DumpStage::Tokens { file } => dump_tokens(file),
       DumpStage::Ast { file, tree } => dump_ast(file, *tree),
@@ -383,7 +398,12 @@ fn dump(path: &Path, stage: oj_driver::Stage, only: Option<&str>) -> u8 {
 
 /// `oj build`, and `oj run` when `program_args` is given: compile, link, and
 /// then execute what came out.
-fn build(path: &Path, arguments: &[String], program_args: Option<&[OsString]>) -> u8 {
+fn build(
+  path: &Path,
+  arguments: &[String],
+  program_args: Option<&[OsString]>,
+  no_metaprogram: bool,
+) -> u8 {
   let parsed = match oj_driver::parse(arguments) {
     Ok(parsed) => parsed,
     Err(error) => {
@@ -405,7 +425,23 @@ fn build(path: &Path, arguments: &[String], program_args: Option<&[OsString]>) -
     return EXIT_FAILURE;
   }
 
-  let report = oj_driver::run(path, &parsed.options, oj_driver::Stage::Executable, None);
+  // The reference compiles `Default_Metaprogram` and lets *it* create the
+  // workspace the program is compiled in (**C§2.1**); a checkout with no
+  // distribution behind it has no metaprogram to run, so the pipeline drives
+  // itself instead.
+  let metaprogram = (!no_metaprogram)
+    .then(oj_driver::default_metaprogram)
+    .flatten();
+  let report = match metaprogram {
+    Some(metaprogram) => oj_driver::run_through_metaprogram(
+      &metaprogram,
+      path,
+      arguments,
+      &parsed.options,
+      oj_driver::Stage::Executable,
+    ),
+    None => oj_driver::run(path, &parsed.options, oj_driver::Stage::Executable, None),
+  };
   for diagnostic in &report.diagnostics {
     eprint!("{diagnostic}");
   }
@@ -426,7 +462,10 @@ fn build(path: &Path, arguments: &[String], program_args: Option<&[OsString]>) -
     }
     return EXIT_SUCCESS;
   };
-  match std::process::Command::new(&executable)
+  // A bare name is looked up on `PATH` rather than in the working directory,
+  // and `oj run x.jai` next to `x.jai` produces exactly that.
+  let program = std::path::absolute(&executable).unwrap_or_else(|_| executable.clone());
+  match std::process::Command::new(&program)
     .args(program_args)
     .status()
   {

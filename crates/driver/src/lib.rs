@@ -5,8 +5,11 @@
 //! line sets, and where the artefacts land. A metaprogram joins in through
 //! `oj-meta`: its `#run`s are part of typechecking, so the workspaces it
 //! created are compiled here once the checker is done with the program that
-//! created them (**C§3.1**). The message loop that would let it watch a
-//! workspace compile is still M8 work.
+//! created them (**C§3.1**), and one it *watches* is compiled from inside the
+//! `compiler_wait_for_message` that asked for its messages. The distribution's
+//! own `Default_Metaprogram` is the driver: `oj build` compiles it and hands it
+//! the command line, and it creates the workspace the program is compiled in
+//! (**C§2.1**).
 
 mod options;
 
@@ -15,7 +18,9 @@ use std::path::{Path, PathBuf};
 use oj_diag::SourceMap;
 use oj_lexer::Interner;
 
-pub use options::{BuildOptions, Deferred, Optimization, OptionError, ParsedOptions, parse};
+pub use options::{
+  BuildOptions, Deferred, Optimization, OptionError, ParsedOptions, RuntimeSupport, parse,
+};
 
 /// How far the pipeline runs, and what it prints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +94,54 @@ impl Input {
 /// Runs the pipeline over one root file.
 pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>) -> Report {
   run_input(&Input::file(root), options, stage, only)
+}
+
+/// Where the distribution's own startup metaprogram lives, when there is one
+/// (**C§2.1**).
+pub fn default_metaprogram() -> Option<PathBuf> {
+  let path = jai_dir()?.join("modules").join("Default_Metaprogram.jai");
+  path.is_file().then_some(path)
+}
+
+/// Compiles the way the reference does: `Default_Metaprogram` is the program,
+/// and the file and options the command line named reach it as
+/// `Build_Options.compile_time_command_line`, from which it creates the
+/// workspace the target program is compiled in (**C§2.1**, **C§3.1**).
+///
+/// The metaprogram itself produces no executable — it turns its own output off
+/// with `set_build_options_dc` — so what comes back is what the workspace it
+/// created produced.
+pub fn run_through_metaprogram(
+  metaprogram: &Path,
+  file: &Path,
+  arguments: &[String],
+  options: &BuildOptions,
+  stage: Stage,
+) -> Report {
+  let mut driver = options.clone();
+  driver.compile_time_command_line = std::iter::once(file.display().to_string())
+    .chain(arguments.iter().cloned())
+    .collect();
+  // The target workspace's output belongs where its own file is, not where the
+  // distribution keeps its modules; the metaprogram sets that itself, so the
+  // compilation it drives starts from nothing of ours.
+  driver.output_executable_name = None;
+  driver.output_path = None;
+  run(metaprogram, &driver, stage, None)
+}
+
+/// The executable a workspace produced, and the line that linked it.
+type Produced = (PathBuf, Option<String>);
+
+/// What a compilation shares with the workspaces its metaprogram watches
+/// compile (**C§3.1**): those compilations are not this one, so their
+/// diagnostics, the storage their trees are exported into, and whatever the
+/// first of them produced all come back through here.
+#[derive(Clone, Default)]
+struct Watching {
+  diagnostics: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+  nodes: std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>,
+  produced: std::rc::Rc<std::cell::RefCell<Option<Produced>>>,
 }
 
 /// Runs the pipeline over a whole workspace.
@@ -182,9 +235,10 @@ fn run_workspace(
   // the checker writes into the same arena the metaprogram reads.
   checker.set_nodes(state.nodes.clone());
   let nodes = state.nodes.clone();
-  // A workspace compiled while its metaprogram watches reports through this,
-  // since the compilation that produced the diagnostics is not this one.
-  let watched: std::rc::Rc<std::cell::RefCell<Vec<String>>> = std::rc::Rc::default();
+  let watched = Watching {
+    nodes: nodes.clone(),
+    ..Watching::default()
+  };
   state.compiler = Some(workspace_compiler(
     root,
     options,
@@ -192,7 +246,6 @@ fn run_workspace(
     state.build_options_layout,
     state.during_compile_layout,
     watched.clone(),
-    nodes.clone(),
   ));
   let outer = oj_meta::install(state);
   checker.check();
@@ -208,11 +261,17 @@ fn run_workspace(
     oj_meta::install(outer);
   }
   render(checker.diagnostics(), &mut report);
-  report.diagnostics.extend(watched.borrow_mut().drain(..));
+  report
+    .diagnostics
+    .extend(watched.diagnostics.borrow_mut().drain(..));
   report_metaprogram_diagnostics(&meta, &mut report);
   if checker.has_errors() || meta.has_errors() {
     report.failed = true;
     return report;
+  }
+  if let Some((executable, line)) = watched.produced.borrow_mut().take() {
+    report.executable = Some(executable);
+    report.link_line = line;
   }
   build_workspaces(&meta, root, options, stage, &mut report);
   if report.failed {
@@ -245,7 +304,9 @@ fn run_workspace(
   // A library has no `main`; what it holds is whatever its exports reach
   // (**L§11.6**).
   let mut lowered = match options.output_type {
-    oj_link::OutputType::DynamicLibrary => oj_ir::lower_library(&mut checker),
+    oj_link::OutputType::DynamicLibrary => {
+      oj_ir::lower_library(&mut checker, options.runtime_support.defines_init())
+    }
     _ => oj_ir::lower(&mut checker),
   };
   keep_compile_time_data(&mut lowered.program, &engine);
@@ -336,6 +397,15 @@ fn run_workspace(
         .filter(|library| !library.system)
         .map(|library| library.name.clone())
         .collect();
+      // `use_custom_link_command` hands the link over to the metaprogram: the
+      // compiler stops at the object and reports what it made, and the
+      // metaprogram runs its own linker when it sees the phase (**C§3.2**).
+      if options.custom_link_command {
+        report.compiled.custom_link_command = true;
+        report.compiled.failed = false;
+        report.compiled.executable = Some(request.output);
+        return report;
+      }
       match oj_link::link(&request) {
         Ok(line) => {
           report.link_line = line.map(|line| line.display());
@@ -398,6 +468,8 @@ fn build_options_layout(
       "output_path" => layout.output_path = Some(offset),
       "output_type" => layout.output_type = Some(offset),
       "compile_time_command_line" => layout.compile_time_command_line = Some(offset),
+      "runtime_support_definitions" => layout.runtime_support_definitions = Some(offset),
+      "use_custom_link_command" => layout.use_custom_link_command = Some(offset),
       "append_executable_filename_extension" => {
         layout.append_executable_filename_extension = Some(offset);
       }
@@ -453,18 +525,22 @@ fn workspace_compiler(
   stage: Stage,
   layout: oj_meta::BuildOptionsLayout,
   dc_layout: oj_meta::DuringCompileLayout,
-  sink: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
-  nodes: std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>,
+  watching: Watching,
 ) -> oj_meta::Compiler {
   let outer = outer.to_path_buf();
   let options = options.clone();
   std::rc::Rc::new(move |workspace: &oj_meta::Workspace| {
     let (input, nested) = workspace_input(workspace, &layout, &dc_layout, &outer, &options);
-    let report = run_workspace(&input, &nested, stage, None, Some(nodes.clone()));
+    let report = run_workspace(&input, &nested, stage, None, Some(watching.nodes.clone()));
     let mut compiled = report.compiled;
     compiled.errors = report.diagnostics.len();
     compiled.failed |= report.failed;
-    sink.borrow_mut().extend(report.diagnostics);
+    watching.diagnostics.borrow_mut().extend(report.diagnostics);
+    if let Some(executable) = report.executable
+      && watching.produced.borrow().is_none()
+    {
+      *watching.produced.borrow_mut() = Some((executable, report.link_line));
+    }
     compiled
   })
 }
@@ -501,6 +577,12 @@ fn workspace_input(
     workspace.option_u8(layout, |layout| layout.append_executable_filename_extension)
   {
     nested.append_extension = append != 0;
+  }
+  if let Some(support) = workspace.option_u8(layout, |layout| layout.runtime_support_definitions) {
+    nested.runtime_support = RuntimeSupport::from_value(support);
+  }
+  if let Some(custom) = workspace.option_u8(layout, |layout| layout.use_custom_link_command) {
+    nested.custom_link_command = custom != 0;
   }
   apply_during_compile(workspace, dc_layout, &mut nested);
   nested.import_remaps = workspace

@@ -89,6 +89,16 @@ impl Checker<'_> {
     // stands for joins the scope the `#insert` itself is in.
     let target = self.scope_at(source, node, scope);
     let operand_scope = self.scope_at(source, expression, target);
+    // A `#placeholder` nothing has filled stands for no program at all. The
+    // reference stalls the `#insert` until a metaprogram declares the name;
+    // orangejuice compiles a `#run` before it executes, so the fill can never
+    // arrive in time and the insert expands to nothing (`docs/spec.md` §10).
+    if self.names_unfilled_placeholder(operand_scope, source, expression) {
+      let kind = kind.unwrap_or_else(|| insert_kind(self, target));
+      return self
+        .program()
+        .insert_source(target, kind, (source, node), b"");
+    }
     let value = self
       .expression(operand_scope, source, expression)
       .constant?
@@ -130,5 +140,24 @@ fn insert_kind(checker: &Checker<'_>, scope: ScopeId) -> InsertKind {
     ScopeKind::StructMembers | ScopeKind::Enum => InsertKind::Members,
     kind if kind.is_program_scope() => InsertKind::Data(Visibility::Export),
     _ => InsertKind::Imperative,
+  }
+}
+
+impl Checker<'_> {
+  /// Whether the operand of an `#insert` is a `#placeholder` and nothing else:
+  /// a name a metaprogram was meant to declare and did not (**L§11.8**).
+  fn names_unfilled_placeholder(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> bool {
+    let Some(name) = self.name_at(source, node) else {
+      return false;
+    };
+    match self.program().tree().lookup(scope, name) {
+      oj_scope::Resolution::Found(candidates) => {
+        !candidates.is_empty()
+          && candidates
+            .iter()
+            .all(|id| self.program().tree().decl(*id).kind == oj_scope::DeclKind::Placeholder)
+      }
+      _ => false,
+    }
   }
 }

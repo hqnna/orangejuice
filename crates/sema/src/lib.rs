@@ -41,4 +41,4 @@ pub use modify::{MODIFY_SYMBOL_PREFIX, ModifyOutcome, ModifyRequest, ModifyVaria
 pub use poly::InstanceId;
 pub use query::{CallPlan, InstanceInfo, PlannedArgument, ProcedureBody};
 pub use run::{CompileTime, RUN_SYMBOL_PREFIX, RunOutcome, RunRequest};
-pub use used::UsedMember;
+pub use used::{UsedBase, UsedMember};

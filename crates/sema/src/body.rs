@@ -105,6 +105,12 @@ impl Checker<'_> {
       return None;
     }
     let condition_scope = self.scope_at(source, payload.condition, scope);
+    if payload
+      .if_flags
+      .contains(oj_syntax::ast::IfFlags::IS_SWITCH_STATEMENT)
+    {
+      return self.static_switch_branch(condition_scope, source, payload);
+    }
     let truth = self
       .expression_type(condition_scope, source, payload.condition)
       .constant
@@ -115,6 +121,87 @@ impl Checker<'_> {
       payload.else_block
     };
     Some(branch.into_iter().collect())
+  }
+
+  /// `#if x == { case a; … case; … }` (**L§6.10**): the first case whose value
+  /// equals the subject is taken, `#through` continues into the next one, and
+  /// a case with no value is the default. Only the cases taken are typechecked
+  /// or lowered, which is what lets `Basic`'s `exit` write a `#asm` for Linux
+  /// and a libc call for everything else.
+  fn static_switch_branch(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    payload: &oj_syntax::ast::IfNode,
+  ) -> Option<Vec<NodeId>> {
+    let subject = self
+      .expression_type(scope, source, payload.condition)
+      .constant?;
+    let block = payload.then_block?;
+    let NodeData::Block(cases) = self.ast(source)?.data(block) else {
+      return None;
+    };
+    let cases = cases.statements.clone();
+
+    let mut taken = Vec::new();
+    let mut matching = false;
+    let mut default = None;
+    for case in cases {
+      let NodeData::Case(entry) = self.ast(source)?.data(case) else {
+        continue;
+      };
+      let entry = entry.clone();
+      if !matching {
+        match entry.condition {
+          Some(condition) => {
+            let value = self.expression_type(scope, source, condition).constant?;
+            if !self.same_constant(&subject, &value) {
+              continue;
+            }
+            matching = true;
+          }
+          None => {
+            default = Some(entry.then_block);
+            continue;
+          }
+        }
+      }
+      taken.push(entry.then_block);
+      if !entry.marked_as_fallthrough {
+        return Some(taken);
+      }
+    }
+    if matching {
+      return Some(taken);
+    }
+    Some(default.into_iter().collect())
+  }
+
+  /// Whether a case's value is the subject's. A `.NAME` written in a case has
+  /// no enum of its own until the subject supplies one (**L§5.12**).
+  fn same_constant(
+    &mut self,
+    subject: &crate::constants::Const,
+    value: &crate::constants::Const,
+  ) -> bool {
+    let normalize =
+      |checker: &mut Self, value: &crate::constants::Const, target: TypeId| match &value.value {
+        crate::constants::Value::EnumName(name) => {
+          let name = *name;
+          checker
+            .types()
+            .enum_of(checker.types().underlying(target))
+            .and_then(|definition| checker.types().enum_info(definition).value_of(name))
+            .map(|member| crate::constants::Value::Int(i128::from(member)))
+        }
+        other => Some(other.clone()),
+      };
+    let subject_value = normalize(self, subject, subject.type_id);
+    let case_value = normalize(self, value, subject.type_id);
+    match (subject_value, case_value) {
+      (Some(left), Some(right)) => left == right,
+      _ => false,
+    }
   }
 
   fn check_procedure(&mut self, procedure: DeclId) {

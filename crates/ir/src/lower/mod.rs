@@ -106,9 +106,12 @@ pub fn lower(checker: &mut Checker) -> Lowered {
 
 /// Lowers a library: there is no entry point, so what is reachable is what
 /// every `#program_export` reaches (**L§11.6**, **C§4**).
-pub fn lower_library(checker: &mut Checker) -> Lowered {
+pub fn lower_library(checker: &mut Checker, runtime_support: bool) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::Executable);
   lowering.run_exports();
+  if runtime_support {
+    lowering.export_runtime_support();
+  }
   lowering.finish()
 }
 
@@ -273,6 +276,26 @@ impl<'c, 'p> Lowering<'c, 'p> {
     self.drain_queue();
     self.emit_global_initializers();
     self.drain_queue();
+  }
+
+  /// What `Build_Options.runtime_support_definitions` asks a library to take
+  /// from Runtime_Support (**C§4**): `__jai_runtime_init` and
+  /// `__jai_runtime_fini`, under the names the reference gives them, so that a
+  /// non-Jai program linking the library can build the context the code in it
+  /// expects. `__system_entry_point` is not among them — orangejuice generates
+  /// its own `main` (`docs/spec.md` §10) — so `ENTRY_POINT_AND_INIT` and
+  /// `ONLY_INIT` amount to the same thing here.
+  fn export_runtime_support(&mut self) {
+    for name in ["__jai_runtime_init", "__jai_runtime_fini"] {
+      let Some(decl) = self.checker.procedure_named(name) else {
+        continue;
+      };
+      let id = self.procedure_id(decl);
+      self.drain_queue();
+      let procedure = &mut self.procedures[id.0 as usize];
+      procedure.flags |= ProcedureFlags::EXPORT;
+      procedure.symbol = String::from(name);
+    }
   }
 
   fn drain_queue(&mut self) {

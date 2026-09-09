@@ -26,6 +26,40 @@ impl Optimization {
   }
 }
 
+/// `Build_Options.runtime_support_definitions` (**C§4**), which decides what a
+/// compilation defines out of Runtime_Support. orangejuice generates its own
+/// `main` rather than using `__system_entry_point` (`docs/spec.md` §10), so
+/// what is left to decide is whether `__jai_runtime_init` and
+/// `__jai_runtime_fini` are exported — which is what a Jai library linked into
+/// a non-Jai program needs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RuntimeSupport {
+  /// `ENTRY_POINT_AND_INIT` for an executable, `ONLY_INIT` for everything else.
+  #[default]
+  Auto,
+  EntryPointAndInit,
+  OnlyInit,
+  Omit,
+}
+
+impl RuntimeSupport {
+  /// The values the distribution's enum gives its members (**C§4**).
+  pub fn from_value(value: u8) -> Self {
+    match value {
+      1 => Self::EntryPointAndInit,
+      2 => Self::OnlyInit,
+      3 => Self::Omit,
+      _ => Self::Auto,
+    }
+  }
+
+  /// Whether a compilation that produces no executable still defines the
+  /// runtime's init and fini, and exports them.
+  pub fn defines_init(self) -> bool {
+    self != Self::Omit
+  }
+}
+
 /// The subset of `Build_Options` the command line sets, plus the switches the
 /// driver itself reads.
 #[derive(Clone, Debug, Default)]
@@ -45,6 +79,12 @@ pub struct BuildOptions {
   pub output_type: oj_link::OutputType,
   /// `Build_Options.append_executable_filename_extension`.
   pub append_extension: bool,
+  /// `Build_Options.runtime_support_definitions` (**C§4**): what a compilation
+  /// takes from Runtime_Support.
+  pub runtime_support: RuntimeSupport,
+  /// `Build_Options.use_custom_link_command` (**C§4**): the metaprogram links,
+  /// so the compiler stops at the object it made.
+  pub custom_link_command: bool,
   pub import_dirs: Vec<PathBuf>,
   pub set_working_directory: bool,
   pub debug_for_expansions: bool,
@@ -179,7 +219,12 @@ pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
           milestone: "M6",
         });
       }
-      "-ps5" | "-no_check" | "-no_check_bindings" | "-check_bindings" => {
+      // The `Check` plugin never runs — `Metaprogram_Plugins` fills a
+      // `#placeholder` from inside a `#run` that orangejuice has already
+      // compiled (`docs/spec.md` §10) — so a switch that turns it off or
+      // configures it describes what happens anyway.
+      "-no_check" | "-no_check_bindings" | "-check_bindings" => {}
+      "-ps5" => {
         deferred.push(Deferred {
           option: argument,
           milestone: "M8",

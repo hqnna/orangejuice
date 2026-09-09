@@ -84,6 +84,10 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
     ),
     ("compiler_get_code", compiler_get_code as *const () as usize),
     ("get_root_type", get_root_type as *const () as usize),
+    (
+      "compiler_custom_link_command_is_complete",
+      compiler_custom_link_command_is_complete as *const () as usize,
+    ),
     ("write_string", write_string as *const () as usize),
     ("write_strings", write_strings as *const () as usize),
   ]
@@ -162,6 +166,20 @@ unsafe extern "C" fn get_root_type(
     Some(_) => 4,
     None => 3,
   }
+}
+
+/// `compiler_custom_link_command_is_complete :: (w: Workspace)`
+///
+/// The reference is waiting for this before it finishes the workspace; here
+/// the compilation is already over by the time the metaprogram sees the phase
+/// (`docs/spec.md` §10), so what this records is that the metaprogram did its
+/// own link.
+unsafe extern "C" fn compiler_custom_link_command_is_complete(w: i64, _context: *mut c_void) {
+  with(|meta| {
+    if let Some(workspace) = meta.workspace(w) {
+      workspace.link_command_complete = true;
+    }
+  });
 }
 
 /// `write_string :: (s: string, to_standard_error := false) #no_context #compiler`

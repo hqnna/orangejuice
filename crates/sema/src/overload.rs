@@ -110,12 +110,33 @@ impl Checker<'_> {
     let Some(best) = scored.iter().map(|(distance, _)| *distance).min() else {
       return Resolved::None;
     };
-    let mut winners = scored.into_iter().filter(|(distance, _)| *distance == best);
-    let winner = winners.next().expect("the minimum came from the list");
-    if winners.next().is_some() {
+    let winners: Vec<Signature> = scored
+      .into_iter()
+      .filter(|(distance, _)| *distance == best)
+      .map(|(_, signature)| signature)
+      .collect();
+    // An overload set gathers outwards, so a tie may be between a declaration
+    // written here and one an outer scope contributed — `compare_and_swap`
+    // declared next to the call and the one Preload declares. The nearer one
+    // wins, which is what shadowing amounts to; a tie *within* one scope is
+    // the ambiguity the reference reports (**L§7.5**).
+    let scope_of = |checker: &Self, signature: &Signature| {
+      signature
+        .decl
+        .map(|decl| checker.program().tree().decl(decl).scope)
+    };
+    let nearest = scope_of(
+      self,
+      winners.first().expect("the minimum came from the list"),
+    );
+    if winners
+      .iter()
+      .skip(1)
+      .any(|signature| scope_of(self, signature) == nearest)
+    {
       return Resolved::Ambiguous;
     }
-    Resolved::One(winner.1)
+    Resolved::One(winners.into_iter().next().expect("checked above"))
   }
 
   pub(crate) fn accepts(&mut self, signature: &Signature, arguments: &[CallArgument]) -> bool {

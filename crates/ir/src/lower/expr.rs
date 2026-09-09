@@ -633,7 +633,18 @@ impl Lowering<'_, '_> {
     node: NodeId,
     used: &oj_sema::UsedMember,
   ) -> Option<Val> {
-    let base = self.declaration_value(source, node, used.base, used.base_type)?;
+    let base = match used.base {
+      oj_sema::UsedBase::Declaration(decl) => {
+        self.declaration_value(source, node, decl, used.base_type)?
+      }
+      // `using o.inner;` is an expression, evaluated where it was written
+      // rather than where the bare name was (**L§6.8**).
+      oj_sema::UsedBase::Expression {
+        source,
+        node,
+        scope,
+      } => self.expression(scope, source, node, None)?,
+    };
     let address = match used.through_pointer {
       true => self.scalar(base),
       false => self.address_of(base),
