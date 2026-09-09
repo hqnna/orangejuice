@@ -401,7 +401,7 @@ impl Lowering<'_, '_> {
   ) -> Option<Val> {
     let data = self.checker.tree_of(source)?.data(node).clone();
     match data {
-      NodeData::Ident(_) => self.name_value(scope, source, node, info),
+      NodeData::Ident(_) => self.name_value(scope, source, node, info, want),
       NodeData::Literal(literal) => {
         self.literal_value(scope, source, node, &literal.value, info, want)
       }
@@ -643,6 +643,7 @@ impl Lowering<'_, '_> {
     source: SourceId,
     node: NodeId,
     info: &Expr,
+    want: Option<TypeId>,
   ) -> Option<Val> {
     // A bare name that a `using` of a value declared is that value's member
     // (**L§6.8**).
@@ -650,6 +651,19 @@ impl Lowering<'_, '_> {
       && let Some(used) = self.checker.used_member(scope, source, node)
     {
       return self.used_member_value(source, node, &used);
+    }
+    // A name that stands for a whole overload set is narrowed by whatever
+    // asked for the value: passing `to_upper` where a `(string) -> string` is
+    // wanted means that one (**L§7.5**).
+    if info.overloads.len() > 1
+      && let Some(target) = want
+      && let Some(chosen) = info
+        .overloads
+        .iter()
+        .copied()
+        .find(|decl| self.checker.decl_type(*decl).value == target)
+    {
+      return self.declaration_value(source, node, chosen, target);
     }
     let [only] = info.overloads[..] else {
       if info.overloads.len() > 1 {

@@ -294,6 +294,16 @@ impl Checker<'_> {
     if let Some(distance) = self.implicit_conversion(value, target) {
       return Some(distance);
     }
+    // A name that stands for a whole overload set is narrowed by the parameter
+    // it is being passed to (**L§7.5**): `map(fruits, to_upper)` means the
+    // `to_upper` that takes a string, not `Basic`'s that takes a `u8`.
+    if !value.overloads.is_empty() && self.types().procedure_of(target).is_some() {
+      return self
+        .narrowed_overloads(value)
+        .into_iter()
+        .filter_map(|candidate| self.argument_distance(&candidate, target))
+        .min();
+    }
     // A polymorphic procedure passed where a concrete one is wanted is
     // instantiated to it (**L§7.8**).
     if self.types().procedure_of(target).is_some()
@@ -526,6 +536,22 @@ impl Checker<'_> {
       // `holder: Holder($T, $N)`.
       _ => self.is_polymorph_family(type_id) || self.is_polymorph_instantiation(type_id),
     }
+  }
+
+  /// Each member of an overload set as a value of its own type (**L§7.5**).
+  pub(crate) fn narrowed_overloads(&mut self, value: &Expr) -> Vec<Expr> {
+    let candidates = value.overloads.clone();
+    candidates
+      .into_iter()
+      .filter_map(|id| {
+        let signature = self.signature_of(id)?;
+        Some(Expr {
+          type_id: signature.type_id,
+          overloads: Vec::new(),
+          ..value.clone()
+        })
+      })
+      .collect()
   }
 
   /// Whether `type_id` is a baked polymorphic struct one of whose arguments is

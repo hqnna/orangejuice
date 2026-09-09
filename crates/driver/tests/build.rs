@@ -2738,3 +2738,23 @@ fn a_struct_parameters_type_slot_may_declare_a_variable() {
     "Hello\nThing(T=string, x=\"Hello\")\n",
   );
 }
+
+#[test]
+fn an_overload_set_passed_as_an_argument_is_narrowed_by_the_parameter() {
+  // `map(fruits, to_upper)` means the `to_upper` that takes a string, not the
+  // one that takes a `u8` (**L§7.5**).
+  assert_output(
+    "shout :: (c: u8) -> u8 { return c; }\n\
+     shout :: (s: string) -> int { return s.count; }\n\
+     each :: (values: [] $T, f: (T) -> $R) -> R {\n  \
+       total: R;\n  \
+       for values  total += f(it);\n  \
+       return total;\n\
+     }\n\
+     main :: () {\n  \
+       words :: string.[\"ab\", \"cde\"];\n  \
+       put_number(each(words, shout));\n\
+     }\n",
+    "5\n",
+  );
+}

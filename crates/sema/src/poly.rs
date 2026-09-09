@@ -1148,8 +1148,65 @@ impl Checker<'_> {
     ) {
       return true;
     }
+    // A name that stands for a whole overload set decides a variable through
+    // the one member whose shape the pattern already admits (**L§7.5**).
+    if !value.overloads.is_empty() && self.types().procedure_of(pattern).is_some() {
+      for candidate in self.narrowed_overloads(value) {
+        if self.pattern_admits(pattern, candidate.type_id, substitution) {
+          return self.unify_types(pattern, candidate.type_id, substitution);
+        }
+      }
+      return false;
+    }
     let actual = self.harden(value.type_id);
     self.unify_types(pattern, actual, substitution)
+  }
+
+  /// Whether a type could be what a pattern is solved to, given what is
+  /// already substituted: a variable nothing has decided admits anything, and
+  /// one that is already bound admits only what it was bound to (**L§7.8**).
+  fn pattern_admits(
+    &mut self,
+    pattern: TypeId,
+    actual: TypeId,
+    substitution: &HashMap<PolymorphId, TypeId>,
+  ) -> bool {
+    if pattern == actual || !self.is_polymorphic_type(pattern) {
+      return true;
+    }
+    match (
+      self.types().kind(pattern).clone(),
+      self.types().kind(actual).clone(),
+    ) {
+      (TypeKind::Polymorph(definition), _) => substitution.get(&definition).is_none_or(|bound| {
+        *bound == actual || self.types().underlying(*bound) == self.types().underlying(actual)
+      }),
+      (TypeKind::Unknown, _) => true,
+      (TypeKind::Pointer(pattern), TypeKind::Pointer(actual)) => {
+        self.pattern_admits(pattern, actual, substitution)
+      }
+      (
+        TypeKind::Array {
+          element: pattern, ..
+        },
+        TypeKind::Array {
+          element: actual, ..
+        },
+      ) => self.pattern_admits(pattern, actual, substitution),
+      (TypeKind::Procedure(pattern), TypeKind::Procedure(actual)) => {
+        pattern.arguments.len() == actual.arguments.len()
+          && pattern.returns.len() == actual.returns.len()
+          && pattern
+            .arguments
+            .iter()
+            .zip(actual.arguments.iter())
+            .chain(pattern.returns.iter().zip(actual.returns.iter()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .all(|(pattern, actual)| self.pattern_admits(*pattern, *actual, substitution))
+      }
+      _ => false,
+    }
   }
 
   fn unify_types(
