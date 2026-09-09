@@ -3595,3 +3595,43 @@ fn this_names_the_procedure_a_macro_expanded_into() {
     "in procedure () at line 40\n",
   );
 }
+
+#[test]
+fn a_caller_reads_what_a_macro_left_in_its_block() {
+  // A `` `x `` a macro declares belongs to the block it was expanded into, so
+  // the caller's code written after the expansion reads it (**L§7.13**).
+  assert_output(
+    "leave :: (n: int) #expand {\n  \
+       `slot := n * 10;\n\
+     }\n\
+     main :: () {\n  \
+       leave(4);\n  \
+       put_number(slot);\n  \
+       slot += 1;\n  \
+       put_number(slot);\n\
+     }\n",
+    "40\n41\n",
+  );
+}
+
+#[test]
+fn a_compound_assignment_through_a_subscript_operator_reads_first() {
+  // `w[x] += 10` is `w[x] = w[x] + 10` with the index evaluated once
+  // (**L§6.7**), which is what `how_to/094`'s own prose says. The reference at
+  // 0.2.009 passes the right-hand side alone (**L§19**).
+  assert_output(
+    "SIZE :: 4;\n\
+     Wrapping :: struct { data: [SIZE] int; }\n\
+     operator [] :: (w: Wrapping, index: int) -> int { return w.data[index % SIZE]; }\n\
+     operator []= :: (w: *Wrapping, index: int, value: int) { w.data[index % SIZE] = value; }\n\
+     main :: () {\n  \
+       w: Wrapping;\n  \
+       for 0..SIZE-1  w[it] = 10;\n  \
+       w[0] += 10;\n  \
+       w[1] *= 30;\n  \
+       w[2] /= 2;\n  \
+       for w.data  put_number(it);\n\
+     }\n",
+    "20\n300\n5\n10\n",
+  );
+}

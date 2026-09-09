@@ -478,6 +478,17 @@ impl Checker<'_> {
         return found;
       }
     }
+    // One a macro already expanded into this block declared is read under that
+    // expansion, which is what gave it a type at all (**L§7.13**).
+    if let Some((instance, declared)) = self.expanded_backticked(start, name) {
+      let found = self.with_instance(Some(instance), |checker| {
+        checker.declarations_type(&[declared])
+      });
+      if !found.is_unknown() {
+        self.backticked_owner.insert(declared, instance);
+        return found;
+      }
+    }
     caller.unwrap_or(Expr::UNKNOWN)
   }
 

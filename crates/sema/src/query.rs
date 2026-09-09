@@ -352,7 +352,12 @@ impl Checker<'_> {
   /// a local written inside a macro's body is a different local in every
   /// expansion (**L§7.8**, **L§7.13**).
   pub fn decl_instance(&self, decl: DeclId) -> Option<InstanceId> {
-    self.decl_key(decl).0
+    // A `` `x `` a macro declared belongs to the expansion wherever it is read
+    // from, since that is where its storage was made (**L§7.13**).
+    self
+      .decl_key(decl)
+      .0
+      .or_else(|| self.backticked_owner.get(&decl).copied())
   }
 
   /// Whether the active instantiation gave a declaration a constant value, so

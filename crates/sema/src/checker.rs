@@ -337,6 +337,10 @@ pub struct Checker<'a> {
   /// The answer each `#run` gave, so that a run written once executes once —
   /// once per instantiation for one written inside a polymorphic body, which
   /// is why the instance is part of the key (**L§12.1**).
+  /// Which instantiation a backticked declaration's storage belongs to. A
+  /// macro declares `` `x `` into the block it was expanded into, so what the
+  /// caller reads afterwards is the expansion's local (**L§7.13**).
+  pub(crate) backticked_owner: HashMap<DeclId, InstanceId>,
   pub(crate) runs: HashMap<(Option<InstanceId>, SourceId, NodeId), Expr>,
   /// The runs being worked out right now, which is what makes a `#run` that
   /// depends on itself an error rather than a hang.
@@ -433,6 +437,7 @@ impl<'a> Checker<'a> {
       reported: HashSet::new(),
       depth: 0,
       compile_time: None,
+      backticked_owner: HashMap::new(),
       runs: HashMap::new(),
       runs_in_flight: HashSet::new(),
       run_index: 0,

@@ -255,6 +255,55 @@ impl Checker<'_> {
   }
 
   /// A backticked declaration one instantiation's body holds, by name.
+  /// A name a macro *already expanded into this block* declared with a
+  /// backtick. The declaration belongs to that expansion, so what the caller
+  /// reads afterwards is the expansion's — which is how `Hash_Table`'s
+  /// `table_add` reads the `index` its `Walk_Table` left behind (**L§7.13**).
+  ///
+  /// Two specializations of one polymorphic caller expand the same macro into
+  /// the same written scope, so the one that belongs here is the one this
+  /// instantiation expanded: its immediate parent, not merely an ancestor.
+  pub(crate) fn expanded_backticked(
+    &mut self,
+    scope: ScopeId,
+    name: Symbol,
+  ) -> Option<(InstanceId, DeclId)> {
+    for index in (0..self.instances.len()).rev() {
+      let id = InstanceId(index as u32);
+      let instance = self.instance(id);
+      let Some(expansion) = instance.expansion else {
+        continue;
+      };
+      if instance.parent != self.current_instance {
+        continue;
+      }
+      if !self.scope_encloses(expansion.caller_scope, scope) {
+        continue;
+      }
+      if let Some(decl) = self.declared_backticked(id, name) {
+        return Some((id, decl));
+      }
+    }
+    None
+  }
+
+  /// A backticked declaration one instantiation's body holds, by name.
+  fn declared_backticked(&self, instance: InstanceId, name: Symbol) -> Option<DeclId> {
+    let root = self.instance(instance).body_root();
+    let mut pending = vec![root];
+    while let Some(scope) = pending.pop() {
+      let tree = self.program().tree();
+      for declared in &tree.declarations(scope) {
+        let decl = tree.decl(*declared);
+        if decl.name == name && decl.flags.contains(DeclarationFlags::HAS_SCOPE_MODIFIER) {
+          return Some(*declared);
+        }
+      }
+      pending.extend(tree.children(scope).iter().copied());
+    }
+    None
+  }
+
   fn exported_declaration(&self, instance: InstanceId, name: &[u8]) -> Option<DeclId> {
     let name = self.interned().intern(name);
     let root = self.instance(instance).body_root();

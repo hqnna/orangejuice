@@ -1611,3 +1611,4 @@ args            := [ arg { ',' arg } [','] ]      arg := [ident '='] ['..'] expr
 8. `#dynamic_specialize` is unimplemented in orangejuice (error).
 9. `#cpp_method`/`#cpp_return_type_is_non_pod` are accepted and follow the Itanium C++ ABI on Linux.
 10. `_` shadowing, `?` operator, `.?` operator: `_` always exists; `?` and `.?` are errors.
+11. A compound assignment through `operator []=`: the reference at 0.2.009 passes the right-hand side alone, so `w[0] += 10` on a `10` leaves a `10` and `w[2] /= 2` leaves a `2` — measured, and at odds with both this section 6.7 and `how_to/094`'s own prose. orangejuice does what they say and assigns `w[0] = w[0] + 10`.
