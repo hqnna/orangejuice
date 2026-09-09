@@ -177,7 +177,7 @@ impl Checker<'_> {
   /// Type_Info_Tag;` makes `STRING` one of its members (**L§6.8**).
   pub(crate) fn used_name_type(&mut self, scope: ScopeId, name: Symbol) -> Option<Expr> {
     self.walk_used_values(scope, name, |checker, from, owner, value, name| {
-      if let Some(found) = checker.name_of_used_type(value, name) {
+      if let Some(found) = checker.name_of_used_type(value, owner, name) {
         return Some(found);
       }
       let member = checker.member_of_used_value(from, owner, value, name)?;
@@ -202,12 +202,29 @@ impl Checker<'_> {
 
   /// A name a `using` of a *type* brings in: an enum's members, or a struct's
   /// nested constants (**L§6.8**).
-  fn name_of_used_type(&mut self, value: &oj_scope::UsedValue, name: Symbol) -> Option<Expr> {
-    let base = self.used_base(value)?;
-    if self.is_resolving(base) {
-      return None;
-    }
-    let denoted = self.decl_type(base).denoted?;
+  fn name_of_used_type(
+    &mut self,
+    value: &oj_scope::UsedValue,
+    owner: ScopeId,
+    name: Symbol,
+  ) -> Option<Expr> {
+    let denoted = match self.used_base(value) {
+      Some(base) => {
+        if self.is_resolving(base) {
+          return None;
+        }
+        self.decl_type(base).denoted?
+      }
+      // `using Code_Node.Kind;` names a type without naming a declaration of
+      // any scope of ours, so the expression itself is what says which type
+      // (**L§6.8**).
+      None => {
+        let scope = self.scope_at(value.source, value.expression, owner);
+        self
+          .expression_type(scope, value.source, value.expression)
+          .denoted?
+      }
+    };
     let scope = match *self.types().kind(denoted) {
       oj_types::TypeKind::Enum(definition) => self.enum_scope(definition),
       oj_types::TypeKind::Struct(definition) => self.struct_scope(definition),

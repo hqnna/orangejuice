@@ -23,7 +23,7 @@ impl Checker<'_> {
     };
 
     if let Some(module) = self.module_scope(scope, source, left) {
-      let candidates = self.program().tree().lookup_exported(module, name);
+      let candidates = self.program().tree().lookup_in_module(module, name);
       return self.declarations_type(&candidates);
     }
 

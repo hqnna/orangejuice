@@ -781,3 +781,37 @@ fn an_insert_whose_text_needs_the_typechecker_leaves_the_scope_waiting() {
     assert_eq!(program.pending_inserts().len(), 1);
   });
 }
+
+#[test]
+fn a_named_import_reaches_the_module_scope_a_plain_one_cannot() {
+  // Verified against the reference compiler: `M :: #import "Widget"` and then
+  // `M.internal()` compiles, while `#import "Widget"` followed by a bare
+  // `internal()` is an undeclared identifier. It is what lets
+  // `Metaprogram_Plugins` call a plugin's `#scope_module get_plugin`.
+  let fixture = Fixture::new();
+  fixture
+    .write(
+      "modules/Widget/module.jai",
+      "#scope_module\ninternal :: () {}\n#scope_export\npublic :: () {}\n",
+    )
+    .write(
+      "main.jai",
+      "M :: #import \"Widget\";\nmain :: () { M.internal(); }\n",
+    );
+
+  resolve(&fixture, "main.jai", |program, interner| {
+    let internal = interner.intern(b"internal");
+    let public = interner.intern(b"public");
+    let module = program
+      .tree()
+      .scope_ids()
+      .find(|id| {
+        program.tree().scope_kind(*id) == ScopeKind::Module
+          && !program.tree().lookup_exported(*id, public).is_empty()
+      })
+      .expect("the imported module should have a scope");
+    assert_eq!(program.tree().lookup_in_module(module, internal).len(), 1);
+    assert_eq!(program.tree().lookup_in_module(module, public).len(), 1);
+    assert_eq!(program.tree().lookup_exported(module, internal).len(), 0);
+  });
+}

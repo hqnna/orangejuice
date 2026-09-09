@@ -494,8 +494,24 @@ impl Checker<'_> {
       oj_types::TypeKind::Polymorph(_) | oj_types::TypeKind::Unknown => true,
       oj_types::TypeKind::Pointer(pointee) => self.is_polymorphic_type(*pointee),
       oj_types::TypeKind::Array { element, .. } => self.is_polymorphic_type(*element),
-      _ => false,
+      // A parameter written as the polymorphic struct *family* rather than as
+      // one of its instantiations — `tc: Typechecked` where `Typechecked ::
+      // struct (T: Type)` — takes whichever instantiation the call passes,
+      // which is what makes the header polymorphic (**L§7.8**, **L§8.5**).
+      _ => self.is_polymorph_family(type_id),
     }
+  }
+
+  /// Whether `type_id` is a polymorphic struct that nothing has baked yet.
+  pub(crate) fn is_polymorph_family(&self, type_id: TypeId) -> bool {
+    let Some(definition) = self.types().struct_of(self.types().underlying(type_id)) else {
+      return false;
+    };
+    let info = self.types().struct_info(definition);
+    info
+      .nontextual_flags
+      .contains(oj_types::StructNontextualFlags::POLYMORPHIC)
+      && info.polymorph_source.is_none()
   }
 
   /// The named and positional arguments of a call, typed.

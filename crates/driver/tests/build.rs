@@ -1971,3 +1971,105 @@ fn add_data_segment_reports_that_no_segment_of_its_own_is_made() {
     "2\n",
   );
 }
+
+/// The same, with one more file beside the program for it to `#load`.
+fn assert_output_with_file(name: &str, contents: &str, body: &str, expected: &str) {
+  let jai_dir = match oj_testsupport::jai_dir() {
+    Some(dir) => dir,
+    None => {
+      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+      return;
+    }
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  std::fs::write(directory.path().join(name), contents).expect("the input should be writable");
+  let path = directory.path().join("program.jai");
+  std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
+  // SAFETY: as `build_and_run`.
+  unsafe {
+    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+  }
+  let options = oj_driver::BuildOptions::new();
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+}
+
+#[test]
+fn a_baked_argument_is_read_where_the_bake_was_written() {
+  // The default a `#bake_arguments` gives a `$`-marked parameter is a node of
+  // the file the *bake* is in, not of the header's (**L§7.10**); reading it
+  // out of the header's own AST binds whatever node sits at that index.
+  assert_output_with_file(
+    "chooser.jai",
+    "choose :: ($T: Type, $doubled := false) -> T {\n  \
+       #if doubled  return 2;\n  \
+       return 1;\n\
+     }\n",
+    "#load \"chooser.jai\";\n\
+     Twice :: #bake_arguments choose(doubled = true);\n\
+     main :: () {\n  \
+       put_number(choose(int));\n  \
+       put_number(Twice(int));\n\
+     }\n",
+    "1\n2\n",
+  );
+}
+
+#[test]
+fn a_using_of_a_type_named_through_a_dot_brings_in_its_members() {
+  assert_output(
+    "Outer :: struct {\n  \
+       Kind :: enum u8 { A; B; }\n\
+     }\n\
+     which :: (k: Outer.Kind) -> int {\n  \
+       using Outer.Kind;\n  \
+       if k == A  return 10;\n  \
+       return 20;\n\
+     }\n\
+     main :: () { put_number(which(.B)); }\n",
+    "20\n",
+  );
+}
+
+#[test]
+fn a_parameter_written_as_a_polymorphic_struct_family_takes_any_instantiation() {
+  assert_output(
+    "Boxed :: struct (T: Type) { value: T; }\n\
+     unwrap :: (box: Boxed) -> int { return cast(int) box.value; }\n\
+     main :: () {\n  \
+       b: Boxed(s32);\n  \
+       b.value = 7;\n  \
+       put_number(unwrap(b));\n\
+     }\n",
+    "7\n",
+  );
+}
+
+#[test]
+fn a_foreign_symbol_is_not_taken_by_an_overload_that_can_be_renamed() {
+  // Jai has no mangling, so two overloads of one name compete for one symbol
+  // (**C§11**); the `#foreign` one cannot be renamed, since the name is what
+  // it binds to.
+  assert_output(
+    "strlen :: (s: *u8) -> u64 #foreign libc;\n\
+     strlen :: (a: int, b: int) -> int { return a + b; }\n\
+     main :: () {\n  \
+       put_number(strlen(19, 23));\n  \
+       put_number(cast(int) strlen(\"abcd\\0\".data));\n\
+     }\n",
+    "42\n4\n",
+  );
+}

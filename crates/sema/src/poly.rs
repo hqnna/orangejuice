@@ -641,8 +641,15 @@ impl Checker<'_> {
         continue;
       }
       let default = parameter.default?;
-      let scope = self.scope_at(source, default, scopes.arguments);
-      let value = self.expression_type(scope, source, default).constant?;
+      // A `#bake_arguments` writes the default at the *bake*, not in the
+      // header, so the node belongs to that file rather than to this one
+      // (**L§7.10**). Reading it out of the header's own AST would be reading
+      // whichever node happens to sit at that index.
+      let default_source = parameter.default_source.unwrap_or(source);
+      let scope = self.scope_at(default_source, default, scopes.arguments);
+      let value = self
+        .expression_type(scope, default_source, default)
+        .constant?;
       solution.bindings.push((decl, value));
     }
 
@@ -659,8 +666,12 @@ impl Checker<'_> {
         ) else {
           continue;
         };
-        let scope = self.scope_at(source, default, scopes.arguments);
-        if let Some(value) = self.expression_type(scope, source, default).constant {
+        let default_source = parameter.default_source.unwrap_or(source);
+        let scope = self.scope_at(default_source, default, scopes.arguments);
+        if let Some(value) = self
+          .expression_type(scope, default_source, default)
+          .constant
+        {
           solution.bindings.push((decl, value));
         }
       }

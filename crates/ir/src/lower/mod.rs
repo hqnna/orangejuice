@@ -396,6 +396,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
 
   fn finish(mut self) -> Lowered {
     self.place_type_table();
+    self.resolve_symbol_collisions();
     let type_table = crate::ir::TypeTableImage {
       symbol: self
         .type_table_global
@@ -454,6 +455,56 @@ impl<'c, 'p> Lowering<'c, 'p> {
   }
 
   // --------------------------------------------------------------- symbols ---
+
+  /// Gives up a symbol an ordinary procedure took to the one that has to have
+  /// it. Jai has no name mangling, so two overloads of a name compete for one
+  /// symbol (**C§11**), and a `#foreign` or `#compiler` procedure cannot be
+  /// renamed — the name is what it binds to. `Compiler`'s two
+  /// `compiler_report`s are the pair that shows it: the one with a Jai body is
+  /// reached first and would otherwise take the name the intrinsic needs.
+  fn resolve_symbol_collisions(&mut self) {
+    let bound: std::collections::HashSet<String> = self
+      .procedures
+      .iter()
+      .filter(|procedure| {
+        procedure
+          .flags
+          .intersects(ProcedureFlags::FOREIGN | ProcedureFlags::EXPORT)
+      })
+      .map(|procedure| procedure.symbol.clone())
+      .collect();
+    if bound.is_empty() {
+      return;
+    }
+    let mut used: std::collections::HashSet<String> = self
+      .procedures
+      .iter()
+      .map(|procedure| procedure.symbol.clone())
+      .chain(self.globals.iter().map(|global| global.symbol.clone()))
+      .collect();
+    for index in 0..self.procedures.len() {
+      if self.procedures[index]
+        .flags
+        .intersects(ProcedureFlags::FOREIGN | ProcedureFlags::EXPORT)
+      {
+        continue;
+      }
+      let symbol = self.procedures[index].symbol.clone();
+      if !bound.contains(&symbol) {
+        continue;
+      }
+      let mut suffix = 1u32;
+      let renamed = loop {
+        let candidate = format!("{symbol}.{suffix}");
+        if !used.contains(&candidate) {
+          break candidate;
+        }
+        suffix += 1;
+      };
+      used.insert(renamed.clone());
+      self.procedures[index].symbol = renamed;
+    }
+  }
 
   /// A linker-visible name for a declaration. Jai has no name mangling, so two
   /// overloads of one name are told apart by a suffix rather than by their

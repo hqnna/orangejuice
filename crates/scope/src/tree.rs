@@ -524,6 +524,26 @@ impl ScopeTree {
     found
   }
 
+  /// What `M.name` reaches when `M` is a *named* `#import` (**L§11.2**): the
+  /// module's exports, plus the names it kept to itself with `#scope_module`.
+  ///
+  /// The two forms of import differ here, which the reference compiler
+  /// confirms: a plain `#import "Mod"` cannot see `Mod`'s `#scope_module`
+  /// names, but writing `M :: #import "Mod"` and then `M.secret()` can. It is
+  /// what lets `Metaprogram_Plugins` call a plugin module's `get_plugin`,
+  /// which every plugin declares `#scope_module`.
+  pub fn lookup_in_module(&self, scope: ScopeId, name: Symbol) -> Vec<DeclId> {
+    let mut found = Vec::new();
+    self.collect_exports(scope, name, &mut Vec::new(), &mut found);
+    let own = self.with_scope(scope, |scope| scope.names.get(&name).cloned());
+    for id in own.unwrap_or_default() {
+      if self.decl(id).visibility == Visibility::Module && !found.contains(&id) {
+        found.push(id);
+      }
+    }
+    found
+  }
+
   /// The exported declarations of `name` in the scopes `scope` imports, plus
   /// whatever those scopes made their own with a transitive `using`. What a
   /// scope merely `#import`ed stops there (**L§11.2**).
