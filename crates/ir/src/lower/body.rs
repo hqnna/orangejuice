@@ -430,15 +430,32 @@ impl Lowering<'_, '_> {
       // An `#insert` splices a piece of program into the block around it: the
       // statements a string parsed into, or the ones a `Code` value names, in
       // the scope the front end admitted them to (**L§13.2**).
-      NodeData::DirectiveInsert(_) => {
+      NodeData::DirectiveInsert(insert) => {
+        let controls = crate::lower::InsertControls {
+          source,
+          scope: self.body_scope,
+          loops: self.loops.len(),
+          break_replacement: insert.break_replacement,
+          continue_replacement: insert.continue_replacement,
+          remove_replacement: insert.remove_replacement,
+        };
         let scope = self.body_scope;
         match self.checker.insert_expansion(scope, source, node) {
           Some(expansion) => {
+            let remaps = controls.break_replacement.is_some()
+              || controls.continue_replacement.is_some()
+              || controls.remove_replacement.is_some();
+            if remaps {
+              self.insert_controls.push(controls);
+            }
             let previous_source = std::mem::replace(&mut self.body_source, expansion.source);
             let previous_scope = std::mem::replace(&mut self.body_scope, expansion.scope);
             self.statement(expansion.root);
             self.body_source = previous_source;
             self.body_scope = previous_scope;
+            if remaps {
+              self.insert_controls.pop();
+            }
           }
           None => self.unsupported(source, node, "'#insert'", "M8"),
         }
@@ -1032,6 +1049,13 @@ impl Lowering<'_, '_> {
 
   fn loop_control(&mut self, node: NodeId, control: LoopControlType, target: Option<NodeId>) {
     let source = self.body_source;
+    // `#insert(break=break y) body` says what a bare `break` in the spliced
+    // program means: the statement the `#insert` wrote, lowered where it was
+    // written (**L§13.2**). A control inside a loop the spliced body opened
+    // for itself belongs to that loop and is left alone.
+    if target.is_none() && self.remapped_control(control) {
+      return;
+    }
     // `break label;` names a `while`'s condition variable or a `for`'s
     // iterator, and leaves *that* loop (**L§6.4**, **L§6.5**).
     let entry = match target.and_then(|target| self.checker.name_at(source, target)) {
@@ -1292,6 +1316,56 @@ impl Lowering<'_, '_> {
     self.store(address, result);
   }
 
+  /// The statement an `#insert`'s remapping says a bare loop control stands
+  /// for, lowered with the source and scope the `#insert` was written in. The
+  /// frame is taken off while it is lowered, so a remapping that names a bare
+  /// control of its own does not fold back into itself (**L§13.2**).
+  fn remapped_control(&mut self, control: LoopControlType) -> bool {
+    let Some(frame) = self.insert_controls.last() else {
+      return false;
+    };
+    if self.loops.len() > frame.loops {
+      return false;
+    }
+    let replacement = match control {
+      LoopControlType::Break => frame.break_replacement,
+      LoopControlType::Continue => frame.continue_replacement,
+      LoopControlType::Remove => frame.remove_replacement,
+    };
+    let Some(replacement) = replacement else {
+      return false;
+    };
+    let Some(frame) = self.insert_controls.pop() else {
+      return false;
+    };
+    let previous_source = std::mem::replace(&mut self.body_source, frame.source);
+    let previous_scope = std::mem::replace(&mut self.body_scope, frame.scope);
+    self.statement(replacement);
+    self.body_source = previous_source;
+    self.body_scope = previous_scope;
+    self.insert_controls.push(frame);
+    true
+  }
+
+  /// The local an iterator already has: a `for `it, `it_index: xs` written
+  /// inside a `for_expansion` declares the loop's own iterators, and the loop
+  /// that expanded it has already made the storage they name (**L§7.14**).
+  fn iterator_local(&mut self, decl: Option<DeclId>) -> Option<LocalId> {
+    let decl = decl?;
+    if !self
+      .checker
+      .program()
+      .tree()
+      .decl(decl)
+      .flags
+      .contains(ast::DeclarationFlags::HAS_SCOPE_MODIFIER)
+    {
+      return None;
+    }
+    let key = self.local_key(decl);
+    self.local_of_decl.get(&key).copied()
+  }
+
   /// `for` over a range, over an array, or through the `for_expansion` the
   /// container's type declares (**L§6.6**, **L§7.14**).
   fn for_statement(&mut self, node: NodeId, payload: &ast::ForNode) {
@@ -1303,21 +1377,27 @@ impl Lowering<'_, '_> {
       self.expand_for(node, payload, expansion);
       return;
     }
-    if payload.want_pointer_expression.is_some() || payload.want_reverse_expression.is_some() {
+    // `for *= cond, <= cond xs` decides its modifiers at compile time, which
+    // is what a `for_expansion` handed its caller's `For_Flags` does
+    // (**L§6.6**); one that only a running program could answer is not
+    // something the back end can lower.
+    let Some((by_pointer, reverse)) = self.checker.loop_modifiers(scope, source, node) else {
       self.unsupported(source, node, "a 'for' with computed modifiers", "M7");
       return;
-    }
-    let reverse = payload.for_flags.contains(ForFlags::REVERSE);
-    let by_pointer = payload.for_flags.contains(ForFlags::POINTER);
+    };
 
     let (it_decl, index_decl) = self.checker.loop_iterators(source, node);
-    let index_local = self.new_local(String::from("it_index"), TypeId::S64);
-    if let Some(id) = index_decl {
-      {
-        let key = self.local_key(id);
-        self.local_of_decl.insert(key, index_local);
+    let index_local = match self.iterator_local(index_decl) {
+      Some(local) => local,
+      None => {
+        let local = self.new_local(String::from("it_index"), TypeId::S64);
+        if let Some(id) = index_decl {
+          let key = self.local_key(id);
+          self.local_of_decl.insert(key, local);
+        }
+        local
       }
-    }
+    };
 
     match payload.iteration_expression_right {
       Some(right) => self.range_loop(node, payload, right, reverse, index_local, it_decl),
@@ -1489,13 +1569,17 @@ impl Lowering<'_, '_> {
       false => (start, end),
     };
 
-    let it_local = self.new_local(String::from("it"), it_type);
-    if let Some(id) = it_decl {
-      {
-        let key = self.local_key(id);
-        self.local_of_decl.insert(key, it_local);
+    let it_local = match self.iterator_local(it_decl) {
+      Some(local) => local,
+      None => {
+        let local = self.new_local(String::from("it"), it_type);
+        if let Some(id) = it_decl {
+          let key = self.local_key(id);
+          self.local_of_decl.insert(key, local);
+        }
+        local
       }
-    }
+    };
     let it_address = self.local_address(it_local);
     self.store(it_address, first);
     let index_address = self.local_address(index_local);
@@ -1646,13 +1730,17 @@ impl Lowering<'_, '_> {
     self.store(index_address, start);
 
     let it_type = if by_pointer { pointer } else { element };
-    let it_local = self.new_local(String::from("it"), it_type);
-    if let Some(id) = it_decl {
-      {
-        let key = self.local_key(id);
-        self.local_of_decl.insert(key, it_local);
+    let it_local = match self.iterator_local(it_decl) {
+      Some(local) => local,
+      None => {
+        let local = self.new_local(String::from("it"), it_type);
+        if let Some(id) = it_decl {
+          let key = self.local_key(id);
+          self.local_of_decl.insert(key, local);
+        }
+        local
       }
-    }
+    };
 
     let head = self.new_block();
     let body = self.new_block();

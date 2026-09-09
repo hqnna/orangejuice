@@ -39,6 +39,19 @@ struct Val {
 }
 
 /// Where a `break` and a `continue` go, and how many defer scopes they leave.
+/// What an `#insert(break=…, continue=…, remove=…)` says a loop control in the
+/// program it splices means instead (**L§13.2**). It applies only to a control
+/// that would leave the loop the body was spliced into, which is what `loops`
+/// being no deeper than it was at the splice says.
+struct InsertControls {
+  source: SourceId,
+  scope: ScopeId,
+  loops: usize,
+  break_replacement: Option<NodeId>,
+  continue_replacement: Option<NodeId>,
+  remove_replacement: Option<NodeId>,
+}
+
 struct Loop {
   break_block: BlockId,
   continue_block: BlockId,
@@ -190,6 +203,7 @@ struct Lowering<'c, 'p> {
   /// names itself stops instead of looping.
   constants: std::collections::HashSet<DeclId>,
   loops: Vec<Loop>,
+  insert_controls: Vec<InsertControls>,
   /// The macros whose bodies are being spliced in right now, innermost last
   /// (**L§7.13**).
   expansions: Vec<Expansion>,
@@ -246,6 +260,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       local_of_decl: HashMap::new(),
       constants: std::collections::HashSet::new(),
       loops: Vec::new(),
+      insert_controls: Vec::new(),
       expansions: Vec::new(),
       call_sites: Vec::new(),
       defers: Vec::new(),

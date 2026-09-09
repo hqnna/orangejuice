@@ -3267,18 +3267,31 @@ impl Program<'_> {
       }
       // `it` and `it_index` are ordinary identifiers that the loop declares
       // implicitly unless it names them itself (**L§6.6**).
-      let (symbol, span, node) = match written.map(|name| (parsed.ast.data(name), name)) {
-        Some((NodeData::Ident(ident), name)) => {
-          (ident.name, parsed.ast.node(name).span, Some(name))
-        }
-        _ => (self.interner.intern(fallback), span, None),
+      // A `for `it, `it_index: xs` inside a macro declares the loop's own
+      // iterators into the block the macro was expanded into, the way any
+      // backticked declaration does (**L§7.13**, **L§7.14**).
+      let (symbol, span, node, backticked) = match written.map(|name| (parsed.ast.data(name), name))
+      {
+        Some((NodeData::Ident(ident), name)) => (
+          ident.name,
+          parsed.ast.node(name).span,
+          Some(name),
+          ident
+            .flags
+            .contains(oj_syntax::ast::IdentFlags::HAS_SCOPE_MODIFIER),
+        ),
+        _ => (self.interner.intern(fallback), span, None, false),
       };
+      let mut flags = DeclarationFlags::IS_ITERATOR;
+      if backticked {
+        flags |= DeclarationFlags::HAS_SCOPE_MODIFIER;
+      }
       let _ = self.tree.declare(Decl {
         name: symbol,
         scope,
         kind: DeclKind::Iterator,
         visibility: Visibility::File,
-        flags: DeclarationFlags::IS_ITERATOR,
+        flags,
         source: Some(source),
         span,
         node,

@@ -142,6 +142,44 @@ impl Checker<'_> {
     })
   }
 
+  /// Whether a `for` iterates by pointer, and whether it runs backwards
+  /// (**L§6.6**). `for *= cond, <= cond xs` decides both at compile time,
+  /// which is what a `for_expansion` handed its caller's `For_Flags` does;
+  /// `None` is a modifier that only a running program could answer, which
+  /// nothing here can lower.
+  pub fn loop_modifiers(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<(bool, bool)> {
+    let NodeData::For(payload) = self.ast(source)?.data(node) else {
+      return None;
+    };
+    let payload = payload.clone();
+    let mut answers = [false, false];
+    for (index, (written, flag)) in [
+      (payload.want_pointer_expression, ForFlags::POINTER),
+      (payload.want_reverse_expression, ForFlags::REVERSE),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+      answers[index] = match written {
+        None => payload.for_flags.contains(flag),
+        Some(expression) => {
+          let scope = self.scope_at(source, expression, scope);
+          self
+            .expression(scope, source, expression)
+            .constant?
+            .value
+            .truth()?
+        }
+      };
+    }
+    Some((answers[0], answers[1]))
+  }
+
   /// What the compiler hands a `for_expansion`: the container, the loop's body
   /// as `Code`, and the modifiers the loop was written with (**L§7.14**).
   fn expansion_arguments(

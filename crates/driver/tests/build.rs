@@ -3177,3 +3177,76 @@ fn a_macro_reads_the_names_it_exports_by_their_plain_names() {
     "0\n7\n4\n7\n8\n",
   );
 }
+
+#[test]
+fn a_for_expansion_places_the_loops_iterators_with_a_backticked_for() {
+  // `for `it, `it_index: xs` declares the loop's own iterators, which are the
+  // storage the loop that expanded the macro reads (**L§7.14**).
+  assert_output(
+    "Holder :: struct { data: [3] int; }\n\
+     for_expansion :: (a: *Holder, body: Code, flags: For_Flags) #expand {\n  \
+       for `it, `it_index: a.data {\n    \
+         #insert body;\n  \
+       }\n\
+     }\n\
+     main :: () {\n  \
+       h: Holder;\n  \
+       h.data[0] = 74;\n  \
+       h.data[1] = 65;\n  \
+       h.data[2] = 73;\n  \
+       for h  put_number(it_index * 100 + it);\n\
+     }\n",
+    "74\n165\n273\n",
+  );
+}
+
+#[test]
+fn an_insert_says_what_a_loop_control_in_the_program_it_splices_means() {
+  // `#insert(break=break y) body` makes the user's `break` leave the loop the
+  // expansion meant it to (**L§13.2**); one inside a loop the body opened for
+  // itself is that loop's.
+  assert_output(
+    "Grid :: struct { rows: [2] int; }\n\
+     for_expansion :: (grid: Grid, body: Code, flags: For_Flags) #expand {\n  \
+       for y: 0..1 {\n    \
+         for x: 0..1 {\n      \
+           `it := grid.rows[y] * 10 + x;\n      \
+           `it_index := y;\n      \
+           #insert(break=break y) body;\n    \
+         }\n  \
+       }\n\
+     }\n\
+     main :: () {\n  \
+       g: Grid;\n  \
+       g.rows[0] = 1;\n  \
+       g.rows[1] = 2;\n  \
+       for g {\n    \
+         put_number(it);\n    \
+         for 0..0  break;\n    \
+         if it == 11  break;\n  \
+       }\n  \
+       put_number(999);\n\
+     }\n",
+    "10\n11\n999\n",
+  );
+}
+
+#[test]
+fn a_for_decides_a_computed_modifier_at_compile_time() {
+  // `for *= cond, <= cond xs` is what a `for_expansion` handed its caller's
+  // `For_Flags` writes; both fold before anything is lowered (**L§6.6**).
+  assert_output(
+    "walk :: (xs: [] int, $pointers: bool, $backwards: bool) {\n  \
+       for *= pointers, <= backwards xs {\n    \
+         #if pointers  put_number(it.*);\n    \
+         #if !pointers put_number(it);\n  \
+       }\n\
+     }\n\
+     main :: () {\n  \
+       xs := int.[1, 2, 3];\n  \
+       walk(xs, false, false);\n  \
+       walk(xs, true, true);\n\
+     }\n",
+    "1\n2\n3\n3\n2\n1\n",
+  );
+}

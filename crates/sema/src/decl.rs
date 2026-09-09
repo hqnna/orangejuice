@@ -56,13 +56,12 @@ impl Checker<'_> {
     if is_index {
       return TypeId::S64;
     }
-    if payload
-      .for_flags
-      .contains(oj_syntax::ast::ForFlags::POINTER)
-    {
-      return self.types_mut().pointer_to(element);
+    // `for *= cond xs` says by pointer or not at compile time, so the answer
+    // is the same shape as the written `for *` (**L§6.6**).
+    match self.loop_modifiers(scope, source, loop_node) {
+      Some((true, _)) => self.types_mut().pointer_to(element),
+      _ => element,
     }
-    element
   }
 
   /// The type of one `Code_Declaration`: its type slot when it has one, else
