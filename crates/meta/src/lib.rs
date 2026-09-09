@@ -45,8 +45,8 @@ pub use message::{
 };
 pub use state::{
   BuildOptionsLayout, Compiled, CompiledFailedImport, CompiledFile, CompiledModule, Compiler,
-  DuringCompileLayout, Intercept, Meta, ProvidedImport, Report, ReportMode, TypecheckedBatch,
-  Workspace, WorkspaceStatus,
+  DataSegment, DuringCompileLayout, GlobalData, Intercept, Meta, ProvidedImport, Report,
+  ReportMode, TypecheckedBatch, Workspace, WorkspaceStatus,
 };
 
 thread_local! {

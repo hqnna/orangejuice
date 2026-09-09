@@ -36,7 +36,16 @@ pub enum Constant {
   /// The storage of an aggregate a `#run` produced, laid out the way its type
   /// says (**L§12.1**). It becomes read-only data, and the value is its
   /// address.
-  Bytes(Box<[u8]>),
+  ///
+  /// `links` are the pointers among those bytes that named compile-time
+  /// storage: whatever they pointed at has been appended to `bytes`, and each
+  /// `(at, target)` says the eight bytes at `at` hold the address of `target`,
+  /// both relative to where the data lands. That is what carries a slice
+  /// `add_global_data` produced into the executable (**C§3.3**).
+  Bytes {
+    bytes: Box<[u8]>,
+    links: Box<[(u64, u64)]>,
+  },
   /// All-zero storage of the value's type, which is what an aggregate starts
   /// out as (**L§4.6**).
   Zero,

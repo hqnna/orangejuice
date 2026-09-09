@@ -357,7 +357,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
             .into(),
         )
       }
-      Constant::Bytes(bytes) => Some(self.context.const_string(bytes, false).into()),
+      // As a *value* the bytes stand on their own; a pointer among them needs
+      // an address, which only the data form has.
+      Constant::Bytes { bytes, .. } => Some(self.context.const_string(bytes, false).into()),
       Constant::Zero => Some(self.llvm_type(type_id).const_zero()),
       _ => {
         let llvm_type = self.llvm_type(type_id);
@@ -481,7 +483,21 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
 
   /// Read-only storage holding an aggregate constant's bytes, aligned the way
   /// its type asks so that loads out of it are legal.
-  fn bytes_data(&mut self, bytes: &[u8], alignment: u32) -> PointerValue<'ctx> {
+  fn bytes_data(
+    &mut self,
+    bytes: &[u8],
+    links: &[(u64, u64)],
+    alignment: u32,
+  ) -> PointerValue<'ctx> {
+    // A pointer among the bytes points somewhere else inside them, which is
+    // the same shape the type table image has (**L§12.1**, **L§17**).
+    if !links.is_empty() {
+      let symbol = format!(".data.{}", self.constants);
+      self.constants += 1;
+      let global = self.image_global(&symbol, alignment.max(8), bytes, links);
+      global.set_linkage(Linkage::Private);
+      return global.as_pointer_value();
+    }
     let data = self.context.const_string(bytes, false);
     let global = self.module.add_global(
       data.get_type(),
@@ -632,13 +648,13 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
           }
           // An aggregate constant is data, and its value is where that data
           // sits (**L§3.14**).
-          Constant::Bytes(bytes) => {
+          Constant::Bytes { bytes, links } => {
             let alignment = self
               .types()
               .align_of(self.types().underlying(type_id))
               .unwrap_or(1)
               .max(1);
-            self.bytes_data(bytes, alignment as u32).into()
+            self.bytes_data(bytes, links, alignment as u32).into()
           }
           _ => {
             let llvm_type = self.llvm_type(type_id);

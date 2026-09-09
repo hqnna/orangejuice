@@ -12,9 +12,9 @@ pub enum Value {
   String(Box<[u8]>),
   /// The storage of an aggregate a `#run` produced, laid out the way its type
   /// says (**L§12.1**). A pointer inside those bytes is the compiler's, not
-  /// the program's; the reference remaps the ones that name globals and warns
-  /// about the rest.
-  Bytes(Box<[u8]>),
+  /// the program's, so what it names travels with it: the back end lays that
+  /// data down beside the bytes and points them at it.
+  Bytes(RunBytes),
   Null,
   Type(TypeId),
   /// A `.NAME` whose enum the context has not supplied yet (**L§5.12**).
@@ -26,6 +26,44 @@ pub enum Value {
     node: oj_syntax::ast::NodeId,
     scope: oj_scope::ScopeId,
   },
+}
+
+/// Bytes a `#run` produced, and the compile-time storage the pointers among
+/// them name (**L§12.1**). A pointer into the compiler's own memory means
+/// nothing in the executable, so what it points at is carried alongside and
+/// laid down next to the bytes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunBytes {
+  pub data: Box<[u8]>,
+  pub links: Box<[RunLink]>,
+}
+
+impl RunBytes {
+  /// Bytes with no pointer among them, which is every aggregate that holds
+  /// only values.
+  pub fn plain(data: Box<[u8]>) -> Self {
+    Self {
+      data,
+      links: Box::default(),
+    }
+  }
+
+  pub fn len(&self) -> usize {
+    self.data.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.data.is_empty()
+  }
+}
+
+/// One pointer among a run's bytes: where it sits, what it points at, and how
+/// far into that it points.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunLink {
+  pub at: u64,
+  pub data: Box<[u8]>,
+  pub offset: u64,
 }
 
 impl Value {
@@ -150,7 +188,7 @@ impl Const {
   pub fn write_bytes(&self, types: &Types, type_id: TypeId, bytes: &mut [u8]) -> bool {
     if let Value::Bytes(source) = &self.value {
       let count = source.len().min(bytes.len());
-      bytes[..count].copy_from_slice(&source[..count]);
+      bytes[..count].copy_from_slice(&source.data[..count]);
       return true;
     }
     let converted = self.convert(types, type_id);

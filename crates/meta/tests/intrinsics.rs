@@ -116,8 +116,7 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
   unanswered.sort_unstable();
 
   // `add_build_string_scoped_by_message` splices into a scope a `Code` names,
-  // which needs a `#run` that can stall; `add_global_data`/`add_data_segment`
-  // need `Global_Data_Info`, which nothing fills in yet;
+  // which needs a `#run` that can stall;
   // `compiler_modify_procedure`/`compiler_make_procedure_live` need the
   // `Code_*` export read back into the AST; and `compiler_get_struct_location`
   // needs a `*Type_Info` followed back to the declaration it came from
@@ -131,8 +130,6 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
     unanswered,
     [
       "add_build_string_scoped_by_message",
-      "add_data_segment",
-      "add_global_data",
       "compiler_get_struct_location",
       "compiler_make_procedure_live",
       "compiler_modify_procedure",

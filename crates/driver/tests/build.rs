@@ -1923,3 +1923,51 @@ fn the_type_table_is_reachable_through_runtime_info() {
     "1\n1\n",
   );
 }
+
+#[test]
+fn add_global_data_puts_its_bytes_in_the_executable() {
+  // `image :: #run add_global_data(…)` is the canonical use (**C§3.3**): the
+  // run hands back a slice of storage the compiler owns, and the pointer among
+  // those bytes has to name data the *executable* carries. The bytes travel
+  // with the slice and are laid down beside it.
+  assert_output(
+    "Data_Segment_Index :: enum u16 {\n  \
+       WRITABLE :: 0x0; WRITABLE_NO_RESET :: 0x1; READ_ONLY :: 0x2; BSS :: 0x3;\n  \
+       USER_SEGMENT :: 0x10;\n\
+     }\n\
+     Data_Segment :: struct {}\n\
+     add_global_data :: (data: [] u8, segment: Data_Segment_Index, user_segment: *Data_Segment = null, w: s64 = -1) -> [] u8 #compiler;\n\
+     make :: () -> [] u8 {\n  \
+       bytes: [4] u8;\n  \
+       bytes[0] = 7; bytes[1] = 8; bytes[2] = 9; bytes[3] = 10;\n  \
+       return add_global_data(bytes, .READ_ONLY);\n\
+     }\n\
+     DATA :: #run make();\n\
+     main :: () {\n  \
+       put_number(DATA.count);\n  \
+       for DATA  put_number(it);\n\
+     }\n",
+    "4\n7\n8\n9\n10\n",
+  );
+}
+
+#[test]
+fn add_data_segment_reports_that_no_segment_of_its_own_is_made() {
+  // orangejuice puts what a metaprogram asks for with the rest of the
+  // program's data rather than in a section of its own, which is what the
+  // second return value is for (**C§3.3**).
+  assert_output(
+    "Data_Segment :: struct {}\n\
+     Data_Segment_Characteristics :: enum_flags u32 { READ :: 0x1; WRITE :: 0x2; }\n\
+     add_data_segment :: (section_name: string, characteristics := Data_Segment_Characteristics.READ | .WRITE, alignment: s32 = 16, w: s64 = -1) -> (segment: *Data_Segment, actual_segment_will_be_created: bool) #compiler;\n\
+     ask :: () -> int {\n  \
+       segment, created := add_data_segment(\"mine\");\n  \
+       if segment == null  return 0;\n  \
+       if created          return 1;\n  \
+       return 2;\n\
+     }\n\
+     ASKED :: #run ask();\n\
+     main :: () { put_number(ASKED); }\n",
+    "2\n",
+  );
+}

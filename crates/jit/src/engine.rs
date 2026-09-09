@@ -21,7 +21,9 @@ use oj_diag::Diagnostic;
 use oj_ir::{Constant, Global, GlobalInit, Library, ProcedureFlags, Program};
 use oj_runtime::{Segment, Segments};
 use oj_scope::DeclId;
-use oj_sema::{Checker, CompileTime, ModifyOutcome, ModifyRequest, RunOutcome, RunRequest};
+use oj_sema::{
+  Checker, CompileTime, ModifyOutcome, ModifyRequest, RunBytes, RunOutcome, RunRequest,
+};
 use oj_types::{FloatKind, IntKind, TypeId, TypeKind, Types};
 
 use crate::orc::Orc;
@@ -420,7 +422,7 @@ fn write_constant(types: &Types, type_id: TypeId, constant: &Constant, bytes: &m
       Some(FloatKind::F32) => copy(&(*value as f32).to_le_bytes(), bytes),
       _ => copy(&value.to_le_bytes(), bytes),
     },
-    Constant::Bytes(source) => copy(source, bytes),
+    Constant::Bytes { bytes: source, .. } => copy(source, bytes),
     Constant::Null | Constant::Zero => {}
     // A string in a global would need its characters somewhere the JIT can
     // point at; the reference puts them in the read-only segment, which is
@@ -484,12 +486,16 @@ fn read_value(types: &Types, type_id: TypeId, bytes: &[u8]) -> Option<oj_sema::C
       Some(Const::string(text.into_boxed_slice()))
     }
     // Everything else is storage: the run wrote its bytes into the buffer, and
-    // those bytes are the constant (**L§12.1**). A pointer inside them still
-    // points into the compiler's memory, which the reference remaps only when
-    // it names a global (`docs/spec.md` §10).
-    TypeKind::Struct(_) | TypeKind::Array { .. } => {
-      Some(Const::new(type_id, Value::Bytes(bytes.into())))
-    }
+    // those bytes are the constant (**L§12.1**). A pointer among them that
+    // names storage `add_global_data` created is carried along with what it
+    // names, so that the executable gets both (**C§3.3**).
+    TypeKind::Struct(_) | TypeKind::Array { .. } => Some(Const::new(
+      type_id,
+      Value::Bytes(RunBytes {
+        data: bytes.into(),
+        links: compile_time_links(bytes),
+      }),
+    )),
     _ => None,
   }
 }
@@ -505,4 +511,39 @@ fn read_integer(kind: IntKind, bytes: &[u8]) -> Option<i128> {
     return Some(value as i128 - (1i128 << bits));
   }
   Some(value as i128)
+}
+
+/// The pointers among a run's bytes that name storage `add_global_data`
+/// created (**C§3.3**). Each one is carried along with what it points at, so
+/// that the back end can lay that data down beside the bytes and point them at
+/// it — which is what makes `image :: #run add_global_data(…)` reach the
+/// program.
+fn compile_time_links(bytes: &[u8]) -> Box<[oj_sema::RunLink]> {
+  if bytes.len() < 8 {
+    return Box::default();
+  }
+  let mut links = Vec::new();
+  for at in (0..=bytes.len() - 8).step_by(8) {
+    let Ok(word) = bytes[at..at + 8].try_into() else {
+      continue;
+    };
+    let address = u64::from_le_bytes(word) as usize;
+    if address == 0 {
+      continue;
+    }
+    let found = oj_meta::with(|meta| {
+      meta
+        .global_data_at(address)
+        .map(|(data, offset)| (data.bytes.clone(), offset))
+    })
+    .flatten();
+    if let Some((data, offset)) = found {
+      links.push(oj_sema::RunLink {
+        at: at as u64,
+        data: data.into_boxed_slice(),
+        offset,
+      });
+    }
+  }
+  links.into_boxed_slice()
 }

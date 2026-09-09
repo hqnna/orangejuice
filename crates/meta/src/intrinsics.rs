@@ -71,6 +71,8 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
     ),
     ("remap_import", remap_import as *const () as usize),
     ("provide_import", provide_import as *const () as usize),
+    ("add_global_data", add_global_data as *const () as usize),
+    ("add_data_segment", add_data_segment as *const () as usize),
     (
       "set_build_options_dc",
       set_build_options_dc as *const () as usize,
@@ -337,6 +339,58 @@ unsafe extern "C" fn provide_import(
 ) {
   let value = unsafe { read_str(value) };
   with(|meta| meta.provide_import(w, message as usize, kind, value));
+}
+
+/// `add_global_data :: (data: [] u8, segment: Data_Segment_Index, user_segment: *Data_Segment = null, w: Workspace = -1) -> [] u8`
+///
+/// The bytes are copied into storage the compilation owns and handed back as a
+/// slice of it. That slice is what a `#run` returns, and what a pointer among
+/// a run's bytes names is laid down beside them in the executable
+/// (**L§12.1**), which is how `image.data` reaches the program.
+unsafe extern "C" fn add_global_data(
+  result: *mut Slice,
+  data: *const Slice,
+  segment: u16,
+  _user_segment: *mut c_void,
+  w: i64,
+  _context: *mut c_void,
+) {
+  let bytes = match data.is_null() {
+    true => Vec::new(),
+    false => {
+      let data = unsafe { &*data };
+      match data.data.is_null() || data.count <= 0 {
+        true => Vec::new(),
+        false => unsafe { std::slice::from_raw_parts(data.data, data.count as usize) }.to_vec(),
+      }
+    }
+  };
+  let slice = with(|meta| meta.add_global_data(w, bytes, segment)).unwrap_or(Slice::EMPTY);
+  if !result.is_null() {
+    unsafe { *result = slice };
+  }
+}
+
+/// `add_data_segment :: (section_name: string, characteristics, alignment: s32 = 16, w: Workspace = -1) -> (segment: *Data_Segment, actual_segment_will_be_created: bool)`
+///
+/// A segment of one's own is recorded and handed back, but orangejuice puts
+/// what goes in it with the rest of the program's data rather than in a
+/// section of its own — which is the answer the second return value is for
+/// (`docs/spec.md` §10).
+unsafe extern "C" fn add_data_segment(
+  name: *const Str,
+  characteristics: u32,
+  alignment: i32,
+  w: i64,
+  created: *mut bool,
+  _context: *mut c_void,
+) -> *mut c_void {
+  let name = unsafe { read_str(name) };
+  if !created.is_null() {
+    unsafe { *created = false };
+  }
+  with(|meta| meta.add_data_segment(w, name, characteristics, alignment))
+    .unwrap_or(std::ptr::null_mut())
 }
 
 /// `compiler_begin_intercept :: (w: Workspace, flags: Intercept_Flags = 0)`

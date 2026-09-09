@@ -117,6 +117,27 @@ pub struct Workspace {
   pub provided_imports: Vec<ProvidedImport>,
 }
 
+/// One `add_global_data` (**C§3.3**): the bytes, where they sit in the
+/// compiler's own memory, and which segment they were asked for.
+#[derive(Clone, Debug)]
+pub struct GlobalData {
+  pub address: usize,
+  pub bytes: Vec<u8>,
+  /// `Data_Segment_Index` as the distribution numbers it.
+  pub segment: u16,
+  pub workspace: i64,
+}
+
+/// One `add_data_segment` (**C§3.3**). `Data_Segment` is opaque to the
+/// metaprogram — it only ever holds the pointer — so what it holds is ours.
+#[derive(Clone, Debug)]
+pub struct DataSegment {
+  pub name: String,
+  pub characteristics: u32,
+  pub alignment: i32,
+  pub workspace: i64,
+}
+
 /// One `provide_import` (**C§3.3**): the import it answers, and what to import
 /// instead. `kind` is `Provided_Import_Type` as the distribution numbers it.
 #[derive(Clone, Debug)]
@@ -302,6 +323,13 @@ pub struct Meta {
   /// (**C§3.3**). Recorded rather than acted on — what they leave out of the
   /// type table is an optimization (`docs/spec.md` §10).
   pub type_info_flags: Vec<(usize, u32)>,
+  /// The blobs `add_global_data` put into the compilation, by where they live
+  /// in the compiler's own memory (**C§3.3**). A pointer among a `#run`'s
+  /// bytes that lands in one of these names data the executable has to carry.
+  global_data: Vec<GlobalData>,
+  /// The segments `add_data_segment` created, kept so that the pointer handed
+  /// back stays valid for the whole compilation (**C§3.3**).
+  segments: Vec<std::pin::Pin<Box<DataSegment>>>,
   /// The trees a metaprogram has been handed, and the storage they live in
   /// (**C§5.3**). A metaprogram keeps every pointer it was given, so this
   /// lasts as long as the compilation does.
@@ -433,6 +461,70 @@ impl Meta {
     {
       workspace.intercepted = true;
     }
+  }
+
+  /// Copies bytes a metaprogram wants in the target into storage this
+  /// compilation owns, and describes them the way a `[] u8` does (**C§3.3**).
+  /// The address stays valid for the whole compilation, which is what lets a
+  /// pointer to it be recognised later.
+  pub fn add_global_data(&mut self, workspace: i64, bytes: Vec<u8>, segment: u16) -> Slice {
+    let interned = self.intern(&bytes);
+    let slice = Slice {
+      count: interned.count,
+      data: interned.data,
+    };
+    let workspace = match workspace {
+      -1 => self.current,
+      other => other,
+    };
+    self.global_data.push(GlobalData {
+      address: slice.data as usize,
+      bytes,
+      segment,
+      workspace,
+    });
+    slice
+  }
+
+  /// Records a segment of a metaprogram's own and hands back the pointer it
+  /// will name it by (**C§3.3**).
+  pub fn add_data_segment(
+    &mut self,
+    workspace: i64,
+    name: String,
+    characteristics: u32,
+    alignment: i32,
+  ) -> *mut std::ffi::c_void {
+    let workspace = match workspace {
+      -1 => self.current,
+      other => other,
+    };
+    let mut segment = Box::pin(DataSegment {
+      name,
+      characteristics,
+      alignment,
+      workspace,
+    });
+    // SAFETY: the address is handed to a metaprogram as an opaque
+    // `*Data_Segment` and never read back through this reference.
+    let address = unsafe { segment.as_mut().get_unchecked_mut() as *mut DataSegment }.cast();
+    self.segments.push(segment);
+    address
+  }
+
+  /// The blobs `add_global_data` put into this compilation: where each one
+  /// lives in the compiler's memory, and how long it is. A pointer among a
+  /// `#run`'s bytes that lands inside one names data the executable carries.
+  pub fn global_data(&self) -> &[GlobalData] {
+    &self.global_data
+  }
+
+  /// The blob a compile-time address points into, and how far in.
+  pub fn global_data_at(&self, address: usize) -> Option<(&GlobalData, u64)> {
+    self.global_data.iter().find_map(|data| {
+      let end = data.address.checked_add(data.bytes.len())?;
+      (address >= data.address && address < end).then(|| (data, (address - data.address) as u64))
+    })
   }
 
   /// Records what a metaprogram answered a failed import with, and asks for

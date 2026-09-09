@@ -795,10 +795,18 @@ impl<'c, 'p> Lowering<'c, 'p> {
       Value::String(text) if self.checker.types().pointee(target).is_some() => {
         let mut bytes = text.to_vec();
         bytes.push(0);
-        Some(Constant::Bytes(bytes.into_boxed_slice()))
+        Some(Constant::Bytes {
+          bytes: bytes.into_boxed_slice(),
+          links: Box::default(),
+        })
       }
       Value::String(text) => Some(Constant::String(text.clone())),
-      Value::Bytes(bytes) => Some(Constant::Bytes(bytes.clone())),
+      // A pointer among the bytes names compile-time storage, which only the
+      // instruction form can carry along; as plain data it is dropped.
+      Value::Bytes(bytes) => Some(Constant::Bytes {
+        bytes: bytes.data.clone(),
+        links: Box::default(),
+      }),
       // A `Code` value is a piece of the program, not data (**L§13.1**).
       Value::Type(_) | Value::EnumName(_) | Value::Code { .. } => None,
     }

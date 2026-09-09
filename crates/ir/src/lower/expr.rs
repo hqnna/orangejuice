@@ -94,7 +94,8 @@ impl Lowering<'_, '_> {
     // An aggregate a `#run` produced is read-only data the program reads out
     // of, the same as any other constant (**L§12.1**).
     if let Value::Bytes(bytes) = &constant.value {
-      return Some(self.bytes_constant(bytes.clone(), target));
+      let bytes = bytes.clone();
+      return Some(self.bytes_constant(&bytes, target));
     }
     // A `Type` is its `Type_Info`'s address at runtime, which is also what
     // makes two of them compare equal exactly when the types are the same
@@ -336,12 +337,34 @@ impl Lowering<'_, '_> {
 
   /// The storage of an aggregate constant: the value is its address, the way
   /// every aggregate value is (**L§3.14**).
-  fn bytes_constant(&mut self, bytes: Box<[u8]>, type_id: TypeId) -> Val {
+  /// An aggregate a `#run` produced, as data the program can address
+  /// (**L§12.1**). A pointer among those bytes named compile-time storage, so
+  /// what it named is appended to them and the pointer points at that instead
+  /// — which is how a `[] u8` from `add_global_data` reaches the executable
+  /// (**C§3.3**).
+  fn bytes_constant(&mut self, source: &oj_sema::RunBytes, type_id: TypeId) -> Val {
+    /// A pointer's alignment on the one target orangejuice has.
+    const POINTER_ALIGNMENT: usize = 8;
+
+    let mut bytes = source.data.to_vec();
+    let mut links = Vec::with_capacity(source.links.len());
+    for link in &source.links {
+      // Every pointee starts on a pointer boundary, so that anything with an
+      // alignment of its own still lands somewhere it can be read.
+      let padding = bytes.len().next_multiple_of(POINTER_ALIGNMENT) - bytes.len();
+      bytes.extend(std::iter::repeat_n(0u8, padding));
+      let at = bytes.len() as u64;
+      bytes.extend_from_slice(&link.data);
+      links.push((link.at, at + link.offset));
+    }
     let pointer = self.pointer_to(type_id);
     let dest = self.value(pointer);
     self.emit(Inst::Const {
       dest,
-      value: Constant::Bytes(bytes),
+      value: Constant::Bytes {
+        bytes: bytes.into_boxed_slice(),
+        links: links.into_boxed_slice(),
+      },
     });
     Val {
       id: dest,

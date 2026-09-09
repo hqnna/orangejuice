@@ -8,7 +8,7 @@ use oj_syntax::ast::{
 use oj_types::{ArrayKind, FloatKind, TypeId, TypeKind};
 
 use crate::checker::{Checker, Expr};
-use crate::constants::{Const, Value};
+use crate::constants::{Const, RunBytes, Value};
 
 impl Checker<'_> {
   /// The type of an expression, with its constant value when it has one
@@ -199,7 +199,7 @@ impl Checker<'_> {
         // is what makes a lookup table data rather than code (**L§5.11**).
         let members = array.members.clone();
         match self.fold_array_literal(scope, source, element, &members) {
-          Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(bytes))),
+          Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(RunBytes::plain(bytes)))),
           None => Expr::value(type_id),
         }
       }
@@ -249,7 +249,7 @@ impl Checker<'_> {
       return None;
     }
     let bytes = self.fold_array_literal(scope, source, element, &members)?;
-    Some(Const::new(target, Value::Bytes(bytes)))
+    Some(Const::new(target, Value::Bytes(RunBytes::plain(bytes))))
   }
 
   /// The storage of an array literal all of whose members fold. `None` as soon

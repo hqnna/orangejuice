@@ -657,7 +657,7 @@ impl Checker<'_> {
         8 => slot.copy_from_slice(&value.to_ne_bytes()),
         _ => {}
       },
-      Value::Bytes(source) if source.len() == size => slot.copy_from_slice(source),
+      Value::Bytes(source) if source.len() == size => slot.copy_from_slice(&source.data),
       _ => {}
     }
   }
