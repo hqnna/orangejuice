@@ -748,7 +748,7 @@ The condition is re-evaluated each iteration (including the declaration form; `n
 Forms:
 
 ```
-for 0..7 { }                       // integer range, inclusive, `it` and `it_index` (it_index counts from 0)
+for 0..7 { }                       // integer range, inclusive, `it` (a range counts with `it` alone: it declares no `it_index`)
 for i: 0..n-1 { }                  // named iterator
 for #v2 < a..b { }                 // reverse range (see rules below)
 for < 0..3 { }                     // reverse (with #v2): 3, 2, 1, 0
@@ -772,7 +772,7 @@ Rules:
 - **Arrays** (`[N] T`, `[] T`, `[..] T`): `it` is a copy of the element (not assignable; since 0.1.069 taking `*it` gives the address of the actual element when possible); `for *` makes `it` a pointer. `it_index` is `s64`. The array expression is evaluated once. Elements of `void` type are allowed.
 - **Strings** iterate bytes, forward or reverse.
 - Modifiers: `<` reverse, `*` by pointer; both combine (`<*`). Expression forms `<=expr`, `*=expr` need a comma between them.
-- `it` and `it_index` are ordinary (implicitly declared) identifiers; nested loops shadow them; **`it_index` and `it` may be assigned** in range loops to skip elements (`it += 1;`, `it_index += n;`) — this affects the loop's counter in the reference implementation. orangejuice implements: the loop counter *is* the `it` variable for ranges and the `it_index` variable for arrays, so assignments to them affect iteration.
+- `it` and `it_index` are ordinary (implicitly declared) identifiers; nested loops shadow them. A loop over a *range* declares only the iteration value, named or not, so `it_index` inside `for 0..3` is an undeclared identifier (measured against the reference); a loop over a container declares `it_index` even when the value is named — `for x: xs` still has one — and a name written for either slot replaces the implicit one. **`it_index` and `it` may be assigned** to skip elements (`it += 1;`, `it_index += n;`) — this affects the loop's counter in the reference implementation. orangejuice implements: the loop counter *is* the `it` variable for ranges and the `it_index` variable for arrays, so assignments to them affect iteration.
 - `break;`, `continue;`, `break name;`, `continue name;` where `name` is the iterator variable of an enclosing `for` (`break tbd;`, `continue condition;`).
 - `remove it;` (or `remove;`, or `remove p;` for a named pointer iterator) removes the current element by **unordered removal** (moves the last element into the current slot, decrements `count`) and re-visits the slot; legal on `[..] T` and `[] T` (the view's count is decremented; the backing storage is not freed) but not on fixed arrays or immutable values ("remove on immutable values is an error"). `remove` inside a `for <` downward loop is supported.
 - **Custom iteration (`for_expansion`)**: a `for` over a value of struct type `S` (or `*S`) whose scope defines a macro `for_expansion :: (container: *S, body: Code, flags: For_Flags) #expand` expands that macro with the loop body; `for :name x` selects a named expansion macro `name`. Native arrays use built-in iteration unless `for :name` is written. Details in 7.14.

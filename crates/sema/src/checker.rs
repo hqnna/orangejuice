@@ -474,10 +474,11 @@ impl<'a> Checker<'a> {
           // A loop that did not name its variables declares them with no
           // identifier to be found through, so the loop's own scope — which
           // holds `it` then `it_index` and nothing else — is the key.
-          for (index, id) in program
-            .tree()
+          let tree = program.tree();
+          for (index, id) in tree
             .declarations(scope)
             .iter()
+            .filter(|id| tree.decl(**id).kind == oj_scope::DeclKind::Iterator)
             .take(2)
             .enumerate()
           {

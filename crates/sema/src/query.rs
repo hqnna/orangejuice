@@ -129,8 +129,16 @@ impl Checker<'_> {
     let Some(scope) = self.program().loop_scope(source, loop_node) else {
       return (None, None);
     };
-    let declarations = &self.program().tree().declarations(scope);
-    (declarations.first().copied(), declarations.get(1).copied())
+    let tree = self.program().tree();
+    // The body is that same scope, so its own locals are in the list too: only
+    // the iterators the loop declared count (**L§6.5**).
+    let iterators: Vec<DeclId> = tree
+      .declarations(scope)
+      .iter()
+      .copied()
+      .filter(|id| tree.decl(*id).kind == oj_scope::DeclKind::Iterator)
+      .collect();
+    (iterators.first().copied(), iterators.get(1).copied())
   }
 
   /// The type an untyped literal settles on when nothing asked for one:

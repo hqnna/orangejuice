@@ -356,11 +356,26 @@ fn a_for_loop_declares_its_iterators_in_the_loop_scope() {
   let fixture = Fixture::new();
   fixture.write(
     "main.jai",
-    "main :: () {\n  for 0..3 use(it, it_index);\n  for value, index: 0..3 use(value, index);\n}\nuse :: (a: int, b: int) {}\n",
+    "main :: () {\n  xs: [4] int;\n  for xs use(it, it_index);\n  for 0..3 use(it, it);\n  for value, index: xs use(value, index);\n}\nuse :: (a: int, b: int) {}\n",
   );
 
   resolve(&fixture, "main.jai", |program, _| {
     assert_eq!(undeclared(program), Vec::<String>::new());
+  });
+}
+
+/// A range counts with the one iterator it has, so `it_index` is a name
+/// nothing declared — which the reference compiler reports (**L§6.6**).
+#[test]
+fn a_range_loop_declares_no_it_index() {
+  let fixture = Fixture::new();
+  fixture.write(
+    "main.jai",
+    "main :: () {\n  for 0..3 use(it, it_index);\n}\nuse :: (a: int, b: int) {}\n",
+  );
+
+  resolve(&fixture, "main.jai", |program, _| {
+    assert_eq!(undeclared(program), vec![String::from("it_index")]);
   });
 }
 

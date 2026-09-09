@@ -3126,3 +3126,54 @@ fn a_parameter_typed_through_a_family_parameter_takes_the_instantiations_type() 
     "42\n12\n",
   );
 }
+
+#[test]
+fn a_range_loop_declares_only_the_one_iterator_it_counts_with() {
+  // A container loop declares `it_index` beside a named `it`; a range loop
+  // has nothing to index, so one written outside it is not shadowed
+  // (**L§6.6**), measured against the reference compiler.
+  assert_output(
+    "main :: () {\n  \
+       it_index := 9;\n  \
+       xs := int.[10, 20];\n  \
+       for x: xs  put_number(it_index);\n  \
+       for j: 0..1  put_number(it_index);\n  \
+       for 0..1  put_number(it_index);\n  \
+       for xs  put_number(it_index);\n\
+     }\n",
+    "0\n1\n9\n9\n9\n9\n0\n1\n",
+  );
+}
+
+#[test]
+fn a_macro_reads_the_names_it_exports_by_their_plain_names() {
+  // A `` `x `` a macro declares belongs to the block it was expanded into, so
+  // the macro's own body and a `Code` argument it splices back in both see it
+  // (**L§7.13**, **L§7.14**).
+  assert_output(
+    "Coord :: struct { x, y: s64; }\n\
+     Grid :: struct { values: [3] int; }\n\
+     for_expansion :: (grid: Grid, body: Code, flags: For_Flags) #expand {\n  \
+       for i: 0..2 {\n    \
+         `it := grid.values[i];\n    \
+         `it_index: Coord;\n    \
+         it_index.x = i;\n    \
+         it_index.y = i * 2;\n    \
+         #insert body;\n  \
+       }\n\
+     }\n\
+     twice :: (code: Code) #expand {\n  \
+       `slot := 7;\n  \
+       #insert code;\n  \
+       slot += 1;\n  \
+       #insert code;\n\
+     }\n\
+     main :: () {\n  \
+       g: Grid;\n  \
+       g.values[1] = 5;\n  \
+       for g  put_number(it + it_index.y);\n  \
+       twice(#code { put_number(slot); });\n\
+     }\n",
+    "0\n7\n4\n7\n8\n",
+  );
+}

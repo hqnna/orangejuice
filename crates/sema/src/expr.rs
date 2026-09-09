@@ -430,13 +430,28 @@ impl Checker<'_> {
     }
     // A macro's body sees the caller's locals by name, for names its own
     // scopes do not hold (**L§7.13**).
-    match self.caller_scope() {
-      Some(caller) => self
+    let caller = self.caller_scope().and_then(|caller| {
+      self
         .lookup_from(caller, name)
         .or_else(|| self.used_name_type(caller, name))
-        .unwrap_or(Expr::UNKNOWN),
-      None => Expr::UNKNOWN,
+    });
+    if let Some(found) = caller.clone().filter(|found| !found.is_unknown()) {
+      return found;
     }
+    // A `` `x := … `` a macro wrote declares `x` in the block the macro was
+    // expanded into, so what is written there sees it — including a `Code`
+    // argument the macro splices back in, which is how `Hash_Table`'s
+    // `Walk_Table` hands its `index` to the body it was given. The macro's own
+    // body reads it by the plain name too, and has to: asking the loop what
+    // its `it_index` is while the macro that exports it is being typed goes in
+    // a circle (**L§7.13**, **L§7.14**).
+    if let Some(declared) = self.backticked_declaration(name) {
+      let found = self.declarations_type(&[declared]);
+      if !found.is_unknown() {
+        return found;
+      }
+    }
+    caller.unwrap_or(Expr::UNKNOWN)
   }
 
   /// Resolves `name` on the chain out of `scope`. `None` means it is not there

@@ -3253,10 +3253,18 @@ impl Program<'_> {
     self.loop_scopes.borrow_mut().insert((source, node), scope);
     let span = parsed.ast.node(payload.block).span;
     let implicit = [b"it".as_slice(), b"it_index".as_slice()];
+    // A loop over a range counts with the one iterator it has, so an
+    // `it_index` written outside it is not shadowed by one it never declared:
+    // `for 0..1` and `for j: 0..1` both leave it alone (**L§6.6**), measured
+    // against the reference compiler.
+    let range = payload.iteration_expression_right.is_some();
     for (written, fallback) in [payload.ident_it, payload.ident_it_index]
       .into_iter()
       .zip(implicit)
     {
+      if range && written.is_none() && fallback == b"it_index" {
+        continue;
+      }
       // `it` and `it_index` are ordinary identifiers that the loop declares
       // implicitly unless it names them itself (**L§6.6**).
       let (symbol, span, node) = match written.map(|name| (parsed.ast.data(name), name)) {
