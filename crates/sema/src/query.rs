@@ -202,6 +202,19 @@ impl Checker<'_> {
     self.struct_instance(definition)
   }
 
+  /// The constant value of an expression once a type is known for it: an
+  /// untyped `.[…]` only becomes data when something says what it is
+  /// (**L§5.8**, **L§5.11**).
+  pub fn constant_at(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    target: TypeId,
+  ) -> Option<Const> {
+    self.const_value_at(scope, source, node, target)
+  }
+
   /// The scope an expression was written in.
   pub fn scope_for(&self, source: SourceId, node: NodeId, fallback: ScopeId) -> ScopeId {
     self.scope_at(source, node, fallback)

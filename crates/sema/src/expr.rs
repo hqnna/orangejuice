@@ -199,7 +199,7 @@ impl Checker<'_> {
         // is what makes a lookup table data rather than code (**L§5.11**).
         let members = array.members.clone();
         match self.fold_array_literal(scope, source, element, &members) {
-          Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(RunBytes::plain(bytes)))),
+          Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(bytes))),
           None => Expr::value(type_id),
         }
       }
@@ -255,7 +255,7 @@ impl Checker<'_> {
       return None;
     }
     let bytes = self.fold_array_literal(scope, source, element, &members)?;
-    Some(Const::new(target, Value::Bytes(RunBytes::plain(bytes))))
+    Some(Const::new(target, Value::Bytes(bytes)))
   }
 
   /// The storage of a struct literal all of whose members fold, starting from
@@ -330,20 +330,38 @@ impl Checker<'_> {
     source: SourceId,
     element: TypeId,
     members: &[NodeId],
-  ) -> Option<Box<[u8]>> {
+  ) -> Option<RunBytes> {
     let stride = self.layout_of(element)?.size as usize;
     if stride == 0 {
       return None;
     }
     let mut bytes = vec![0u8; stride * members.len()];
+    let mut links = Vec::new();
     for (index, member) in members.iter().enumerate() {
       let value = self.const_value(scope, source, *member)?;
       let start = index * stride;
+      // A string is a `{count, data}` pair whose bytes go beside the array,
+      // with the pointer linked to them (**L§3.4**, **L§12.1**).
+      if let Value::String(text) = &value.value
+        && self.types().underlying(element) == TypeId::STRING
+      {
+        let count = (text.len() as u64).to_le_bytes();
+        bytes[start..start + 8].copy_from_slice(&count);
+        links.push(crate::constants::RunLink {
+          at: (start + 8) as u64,
+          data: text.clone(),
+          offset: 0,
+        });
+        continue;
+      }
       if !value.write_bytes(self.types(), element, &mut bytes[start..start + stride]) {
         return None;
       }
     }
-    Some(bytes.into_boxed_slice())
+    Some(RunBytes {
+      data: bytes.into_boxed_slice(),
+      links: links.into_boxed_slice(),
+    })
   }
 
   fn ident_type(

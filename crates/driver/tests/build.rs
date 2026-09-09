@@ -2831,3 +2831,27 @@ fn a_constant_a_using_member_imported_is_the_value_it_was_declared_with() {
     "7\n7\n",
   );
 }
+
+#[test]
+fn an_array_literal_assigned_to_a_view_has_storage_of_its_own() {
+  // `b: [] s32 = .[1, 2, 3]` needs somewhere for the elements to live, and a
+  // literal all of whose members fold is read-only data — which is what lets
+  // a view over one outlive the procedure that returned it (**L§5.8**).
+  assert_output(
+    "#import \"Basic\";\n\
+     words :: (odd: bool) -> [] string {\n  \
+       if odd  return .[\"one\", \"three\"];\n  \
+       return .[];\n\
+     }\n\
+     main :: () {\n  \
+       b: [] s32;\n  \
+       b = .[1, 1, 2, 3];\n  \
+       total := 0;\n  \
+       for b  total += it;\n  \
+       put_number(total);\n  \
+       for words(true)  { put(it); put(\"\\n\"); }\n  \
+       put_number(words(false).count);\n\
+     }\n",
+    "7\none\nthree\n0\n",
+  );
+}

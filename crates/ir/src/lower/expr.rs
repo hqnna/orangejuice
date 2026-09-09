@@ -837,10 +837,32 @@ impl Lowering<'_, '_> {
     };
     match literal {
       LiteralValue::Array(array) => {
-        let (element, _) = self.checker.types().array_of(type_id)?;
-        let local = self.new_local(String::from("literal"), type_id);
+        let (element, kind) = self.checker.types().array_of(type_id)?;
+        let count = array.members.len() as u64;
+        // `b: [] s32 = .[1, 2, 3]` needs somewhere for the elements to live:
+        // the literal is laid out as a fixed array and the view points at it
+        // (**L§5.8**, **L§3.3**).
+        let storage = match kind {
+          ArrayKind::Fixed(_) => type_id,
+          _ => self
+            .checker
+            .types_table_mut()
+            .array(element, ArrayKind::Fixed(count)),
+        };
+        // A literal whose members all fold is read-only data rather than a
+        // frame's worth of stores, which is also what lets a `[] T` over one
+        // outlive the procedure that returned it (**L§5.11**).
+        if let Some(constant) = self.checker.constant_at(scope, source, node, storage)
+          && let Some(value) = self.constant_value(&constant, storage)
+        {
+          return match storage == type_id {
+            true => Some(value),
+            false => Some(self.make_view(type_id, value, count)),
+          };
+        }
+        let local = self.new_local(String::from("literal"), storage);
         let address = self.local_address(local);
-        self.clear(address, type_id);
+        self.clear(address, storage);
         let (stride, _) = self.size_align(element);
         for (index, member) in array.members.clone().iter().enumerate() {
           let slot = self.offset(address, index as u64 * stride, element);
@@ -848,11 +870,15 @@ impl Lowering<'_, '_> {
             self.store(slot, value);
           }
         }
-        Some(Val {
+        let value = Val {
           id: address,
-          type_id,
+          type_id: storage,
           indirect: true,
-        })
+        };
+        match storage == type_id {
+          true => Some(value),
+          false => Some(self.make_view(type_id, value, count)),
+        }
       }
       LiteralValue::Struct(literal) => {
         if self.checker.types().is_unknown(type_id) {
