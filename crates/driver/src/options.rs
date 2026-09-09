@@ -94,6 +94,9 @@ pub struct BuildOptions {
   pub compile_time_command_line: Vec<String>,
   /// `remap_import` calls a metaprogram made for this workspace (**C§3.3**).
   pub import_remaps: Vec<oj_scope::ImportRemap>,
+  /// `provide_import` answers a metaprogram gave for imports that failed
+  /// (**C§3.3**).
+  pub provided_imports: Vec<oj_scope::ProvidedImport>,
   /// `-version`, which prints the version and stops when no file follows.
   pub print_version: bool,
   /// `-help` / `-?`, which prints the vendored metaprogram's help text.

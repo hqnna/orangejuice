@@ -137,9 +137,13 @@ type Produced = (PathBuf, Option<String>);
 /// compile (**C§3.1**): those compilations are not this one, so their
 /// diagnostics, the storage their trees are exported into, and whatever the
 /// first of them produced all come back through here.
+///
+/// The diagnostics are kept per workspace and replaced rather than appended,
+/// because a `provide_import` makes a workspace compile again and only the
+/// last attempt is what happened (**C§3.2**).
 #[derive(Clone, Default)]
 struct Watching {
-  diagnostics: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+  diagnostics: std::rc::Rc<std::cell::RefCell<std::collections::BTreeMap<i64, Vec<String>>>>,
   nodes: std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>,
   produced: std::rc::Rc<std::cell::RefCell<Option<Produced>>>,
 }
@@ -174,6 +178,7 @@ fn run_workspace(
   };
   scope_options.import_dirs = options.import_dirs.clone();
   scope_options.import_remaps = options.import_remaps.clone();
+  scope_options.provided_imports = options.provided_imports.clone();
 
   let program = oj_scope::Program::build_input(
     &sources,
@@ -204,6 +209,16 @@ fn run_workspace(
   render(&program.diagnostics(), &mut report);
   if program.has_errors() || program.unit_count() == 0 {
     report.failed = true;
+    // An import that could not be found is what stopped this compilation, and
+    // it is the one a metaprogram most wants to be pointed at (**C§3.2**), so
+    // the `#import`s are exported even though nothing else will be.
+    if let Some(nodes) = &watching {
+      let generation = nodes.borrow_mut().begin_compilation();
+      let mut checker = oj_sema::Checker::new(&program);
+      let mut borrowed = nodes.borrow_mut();
+      let mut exporter = oj_sema::Exporter::new(&mut checker, &mut borrowed, generation);
+      export_failed_imports(&mut exporter, &program, &mut report.compiled);
+    }
     return report;
   }
 
@@ -232,9 +247,13 @@ fn run_workspace(
     state.nodes = nodes.clone();
   }
   // A `Code` value is the address of a node in this storage (**L§13.1**), so
-  // the checker writes into the same arena the metaprogram reads.
-  checker.set_nodes(state.nodes.clone());
+  // the checker writes into the same arena the metaprogram reads. The arena
+  // outlives this compilation — a watched workspace shares the one above it,
+  // and compiles again after a `provide_import` — so what this one exports is
+  // keyed under a number of its own.
   let nodes = state.nodes.clone();
+  let generation = nodes.borrow_mut().begin_compilation();
+  checker.set_nodes(nodes.clone(), generation);
   let watched = Watching {
     nodes: nodes.clone(),
     ..Watching::default()
@@ -254,16 +273,17 @@ fn run_workspace(
   // trees, exported once the checker is done with them (**C§3.2**).
   if watching.is_some() {
     let mut borrowed = nodes.borrow_mut();
-    let mut exporter = oj_sema::Exporter::new(&mut checker, &mut borrowed);
+    let mut exporter = oj_sema::Exporter::new(&mut checker, &mut borrowed, generation);
     report.compiled.typechecked = vec![exporter.program()];
+    export_failed_imports(&mut exporter, &program, &mut report.compiled);
   }
   if let Some(outer) = outer {
     oj_meta::install(outer);
   }
   render(checker.diagnostics(), &mut report);
-  report
-    .diagnostics
-    .extend(watched.diagnostics.borrow_mut().drain(..));
+  for (_, diagnostics) in std::mem::take(&mut *watched.diagnostics.borrow_mut()) {
+    report.diagnostics.extend(diagnostics);
+  }
   report_metaprogram_diagnostics(&meta, &mut report);
   if checker.has_errors() || meta.has_errors() {
     report.failed = true;
@@ -509,10 +529,41 @@ fn describe_program(program: &oj_scope::Program<'_>) -> oj_meta::Compiled {
     })
     .collect();
 
+  // An import that did not happen is one a metaprogram may still answer
+  // (**C§3.2**). The `#import` it names is exported later, once the checker
+  // exists to export it with.
+  let failed_imports = program
+    .failed_imports()
+    .into_iter()
+    .map(|failed| oj_meta::CompiledFailedImport {
+      status: match failed.status {
+        oj_scope::FailedImportStatus::Blocked => oj_meta::ImportStatus::Blocked,
+        oj_scope::FailedImportStatus::NotFound => oj_meta::ImportStatus::NotFound,
+      },
+      host: failed.host,
+      target: failed.target,
+      import_code: 0,
+    })
+    .collect();
+
   oj_meta::Compiled {
     modules: compiled_modules,
     files,
+    failed_imports,
     ..oj_meta::Compiled::default()
+  }
+}
+
+/// Points each failed import at the `#import` that asked for it, which is what
+/// `Message_Failed_Import.import_code` names (**C§3.2**).
+fn export_failed_imports(
+  exporter: &mut oj_sema::Exporter<'_, '_>,
+  program: &oj_scope::Program<'_>,
+  compiled: &mut oj_meta::Compiled,
+) {
+  let failed = program.failed_imports();
+  for (entry, import) in compiled.failed_imports.iter_mut().zip(&failed) {
+    entry.import_code = exporter.node(import.source, import.node) as usize;
   }
 }
 
@@ -535,7 +586,10 @@ fn workspace_compiler(
     let mut compiled = report.compiled;
     compiled.errors = report.diagnostics.len();
     compiled.failed |= report.failed;
-    watching.diagnostics.borrow_mut().extend(report.diagnostics);
+    watching
+      .diagnostics
+      .borrow_mut()
+      .insert(workspace.id, report.diagnostics);
     if let Some(executable) = report.executable
       && watching.produced.borrow().is_none()
     {
@@ -592,6 +646,16 @@ fn workspace_input(
       host: host.clone(),
       import: import.clone(),
       replacement: replacement.clone(),
+    })
+    .collect();
+  nested.provided_imports = workspace
+    .provided_imports
+    .iter()
+    .map(|provided| oj_scope::ProvidedImport {
+      host: provided.host.clone(),
+      import: provided.import.clone(),
+      kind: oj_scope::ProvidedImportKind::from_value(provided.kind),
+      value: provided.value.clone(),
     })
     .collect();
   let input = Input {

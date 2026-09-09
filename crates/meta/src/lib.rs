@@ -40,12 +40,13 @@ pub use code::{
   ContextModification, Location, MessageTypechecked, Nodes, Tree, Typechecked, literal_type,
 };
 pub use message::{
-  ErrorCode, Kind, Message, MessageComplete, MessageFile, MessageImport, MessagePhase, ModuleType,
-  Phase, Stored,
+  ErrorCode, ImportStatus, Kind, Message, MessageComplete, MessageFailedImport, MessageFile,
+  MessageImport, MessagePhase, ModuleType, Phase, Stored,
 };
 pub use state::{
-  BuildOptionsLayout, Compiled, CompiledFile, CompiledModule, Compiler, DuringCompileLayout,
-  Intercept, Meta, Report, ReportMode, TypecheckedBatch, Workspace, WorkspaceStatus,
+  BuildOptionsLayout, Compiled, CompiledFailedImport, CompiledFile, CompiledModule, Compiler,
+  DuringCompileLayout, Intercept, Meta, ProvidedImport, Report, ReportMode, TypecheckedBatch,
+  Workspace, WorkspaceStatus,
 };
 
 thread_local! {

@@ -44,17 +44,22 @@ pub struct Exporter<'c, 'p> {
   /// what `compiler_get_nodes` hands back as `expressions`.
   touched: Vec<*const CodeNode>,
   reached: HashSet<usize>,
+  /// The compilation this export belongs to, which keys everything it places:
+  /// one arena outlives many compilations, and each numbers its sources from
+  /// zero (**C§3.2**).
+  generation: u32,
   parent_block: *const CodeBlock,
   owning_statement: *const CodeNode,
 }
 
 impl<'c, 'p> Exporter<'c, 'p> {
-  pub fn new(checker: &'c mut Checker<'p>, nodes: &'c mut Nodes) -> Self {
+  pub fn new(checker: &'c mut Checker<'p>, nodes: &'c mut Nodes, generation: u32) -> Self {
     Self {
       checker,
       nodes,
       touched: Vec::new(),
       reached: HashSet::new(),
+      generation,
       parent_block: std::ptr::null(),
       owning_statement: std::ptr::null(),
     }
@@ -78,7 +83,7 @@ impl<'c, 'p> Exporter<'c, 'p> {
   /// metaprogram holds may name any node of the program, not only one an
   /// export started at.
   pub fn node(&mut self, source: SourceId, id: NodeId) -> *const CodeNode {
-    let key = (source.0, id.0);
+    let key = (self.generation, source.0, id.0);
     if let Some(existing) = self.nodes.placed(key) {
       self.reach(existing);
       return existing;
@@ -146,7 +151,9 @@ impl<'c, 'p> Exporter<'c, 'p> {
     let file = self.checker.program().sources().file(source);
     let start = file.location(node.span.start);
     let end = file.location(node.span.end);
-    self.nodes.record_path(source.0, file.path().to_path_buf());
+    self
+      .nodes
+      .record_path((self.generation, source.0), file.path().to_path_buf());
     let _ = id;
     CodeNode {
       // A kind of orangejuice's own is not one the reference names, so it
@@ -180,7 +187,7 @@ impl Exporter<'_, '_> {
     id: NodeId,
     node: &oj_syntax::ast::Node,
   ) -> *const CodeNode {
-    let key = (source.0, id.0);
+    let key = (self.generation, source.0, id.0);
     let owning_statement = self.owning_statement;
 
     macro_rules! start {
@@ -964,7 +971,7 @@ impl Exporter<'_, '_> {
     let (Some(declared_in), Some(node)) = (declaration.source, declaration.node) else {
       return std::ptr::null();
     };
-    match self.nodes.placed((declared_in.0, node.0)) {
+    match self.nodes.placed((self.generation, declared_in.0, node.0)) {
       Some(address) => {
         self.reach(address);
         address.cast()
@@ -1056,7 +1063,12 @@ impl Exporter<'_, '_> {
   /// compilation exported has an address. A name written before the
   /// declaration it means could not be pointed at on the first walk.
   pub fn resolve_names(&mut self) {
-    for ((source, node), address) in self.nodes.placed_entries() {
+    for ((generation, source, node), address) in self.nodes.placed_entries() {
+      // Only this compilation's nodes: an earlier one's numbers mean nothing
+      // to the trees this one is walking.
+      if generation != self.generation {
+        continue;
+      }
       let source = SourceId(source);
       let id = NodeId(node);
       let kind = unsafe { (*address).kind };

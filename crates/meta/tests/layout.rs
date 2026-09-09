@@ -22,9 +22,9 @@ use oj_meta::{
   CodeLoopControl, CodeMakeVarargs, CodeNode, CodeNote, CodePointerLiteralInfo, CodeProcedureBody,
   CodeProcedureCall, CodeProcedureHeader, CodePushContext, CodeResolvedOverload, CodeReturn,
   CodeScopeEntry, CodeStruct, CodeStructLiteralInfo, CodeTypeDefinition, CodeTypeInstantiation,
-  CodeTypeQuery, CodeUnaryOperator, CodeUsing, CodeWhile, Message, MessageComplete, MessageFile,
-  MessageImport, MessagePhase, MessageTypechecked, SourceCodeLocation, Str, Typechecked,
-  VersionInfo,
+  CodeTypeQuery, CodeUnaryOperator, CodeUsing, CodeWhile, Message, MessageComplete,
+  MessageFailedImport, MessageFile, MessageImport, MessagePhase, MessageTypechecked,
+  SourceCodeLocation, Str, Typechecked, VersionInfo,
 };
 use oj_scope::{Options, Program};
 use oj_sema::Checker;
@@ -140,10 +140,11 @@ fn the_message_mirrors_match_the_module() {
       "Message_Import",
       "Message_Phase",
       "Message_Complete",
+      "Message_Failed_Import",
     ],
     |layouts| {
-      let [message, file, import, phase, complete] = layouts else {
-        unreachable!("five layouts were asked for");
+      let [message, file, import, phase, complete, failed] = layouts else {
+        unreachable!("six layouts were asked for");
       };
 
       message.assert_size(size_of::<Message>());
@@ -201,6 +202,18 @@ fn the_message_mirrors_match_the_module() {
 
       complete.assert_size(size_of::<MessageComplete>());
       complete.assert_offset("error_code", offset_of!(MessageComplete, error_code));
+
+      failed.assert_size(size_of::<MessageFailedImport>());
+      failed.assert_offset("status", offset_of!(MessageFailedImport, status));
+      failed.assert_offset(
+        "host_module_name",
+        offset_of!(MessageFailedImport, host_module_name),
+      );
+      failed.assert_offset(
+        "target_module_name",
+        offset_of!(MessageFailedImport, target_module_name),
+      );
+      failed.assert_offset("import_code", offset_of!(MessageFailedImport, import_code));
     },
   );
 }

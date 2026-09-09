@@ -70,6 +70,7 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
       get_current_workspace as *const () as usize,
     ),
     ("remap_import", remap_import as *const () as usize),
+    ("provide_import", provide_import as *const () as usize),
     (
       "set_build_options_dc",
       set_build_options_dc as *const () as usize,
@@ -77,6 +78,24 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
     (
       "compile_time_debug_break",
       compile_time_debug_break as *const () as usize,
+    ),
+    (
+      "compiler_set_memory_breakpoint",
+      compiler_set_memory_breakpoint as *const () as usize,
+    ),
+    ("developer_debug", developer_debug as *const () as usize),
+    ("get_type", get_type as *const () as usize),
+    (
+      "compiler_set_type_info_flags",
+      compiler_set_type_info_flags as *const () as usize,
+    ),
+    (
+      "compiler_report_errors_for_unresolved_identifiers",
+      compiler_report_errors_for_unresolved_identifiers as *const () as usize,
+    ),
+    (
+      "compiler_report_errors_for_untyped_declarations_with_these_notes",
+      compiler_report_errors_for_untyped_declarations_with_these_notes as *const () as usize,
     ),
     (
       "compiler_get_nodes",
@@ -227,6 +246,60 @@ fn write_out(text: &str, to_standard_error: bool) {
 /// compile time goes by (`docs/spec.md` §6.5).
 unsafe extern "C" fn compile_time_debug_break() {}
 
+/// `compiler_set_memory_breakpoint :: (pointer: *void)` and
+/// `developer_debug :: (x: *void)`, both hooks for stopping a bytecode
+/// interpreter that orangejuice does not have (`docs/spec.md` §6.5).
+unsafe extern "C" fn compiler_set_memory_breakpoint(_pointer: *mut c_void, _context: *mut c_void) {}
+
+unsafe extern "C" fn developer_debug(_value: *mut c_void, _context: *mut c_void) {}
+
+/// `get_type :: (ti: *Type_Info) -> Type`
+///
+/// A `Type` *is* its `Type_Info`'s address (`docs/spec.md` §10), which is what
+/// makes two of them compare equal exactly when the types are the same, so
+/// this is the identity — as it is in the reference, where the comment says it
+/// is only valid on a `*Type_Info` the compiler made for this workspace.
+unsafe extern "C" fn get_type(info: *const c_void, _context: *mut c_void) -> *const c_void {
+  info
+}
+
+/// `compiler_set_type_info_flags :: (type: Type, flags: Type_Info_Flags)`
+///
+/// Recorded rather than acted on: what the flags leave out of the type table
+/// is an optimization, and orangejuice lays every type it was asked about into
+/// the image (**L§17**, `docs/spec.md` §10).
+unsafe extern "C" fn compiler_set_type_info_flags(
+  type_info: *const c_void,
+  flags: u32,
+  _context: *mut c_void,
+) {
+  with(|meta| meta.type_info_flags.push((type_info as usize, flags)));
+}
+
+/// `compiler_report_errors_for_unresolved_identifiers :: (filename: string, w: Workspace = -1)`
+///
+/// The reference reports here what it was still waiting on; orangejuice
+/// reports an identifier nothing declares as part of the compilation it
+/// belongs to (**L§4.3**), which has already happened by the time a
+/// metaprogram reads a message (`docs/spec.md` §10). Nothing is left to say.
+unsafe extern "C" fn compiler_report_errors_for_unresolved_identifiers(
+  _filename: *const Str,
+  _w: i64,
+  _context: *mut c_void,
+) {
+}
+
+/// `compiler_report_errors_for_untyped_declarations_with_these_notes :: (w: Workspace, labels: ..string)`
+///
+/// As above: a declaration orangejuice could not type has already been
+/// reported by the compilation that could not type it.
+unsafe extern "C" fn compiler_report_errors_for_untyped_declarations_with_these_notes(
+  _w: i64,
+  _labels: *const Slice,
+  _context: *mut c_void,
+) {
+}
+
 /// `get_current_workspace :: () -> Workspace` (Preload)
 unsafe extern "C" fn get_current_workspace(_context: *mut c_void) -> i64 {
   with(|meta| meta.current).unwrap_or(0)
@@ -249,6 +322,23 @@ unsafe extern "C" fn remap_import(
     }
   });
 }
+/// `provide_import :: (w: Workspace, message: *Message_Failed_Import, type: Provided_Import_Type, value: string)`
+///
+/// The reference is holding the import open, waiting for this; orangejuice has
+/// already compiled the workspace by the time the metaprogram reads the
+/// message, so the answer makes it compile again with the import in place and
+/// the message stream starts over (`docs/spec.md` §10).
+unsafe extern "C" fn provide_import(
+  w: i64,
+  message: *const Message,
+  kind: u8,
+  value: *const Str,
+  _context: *mut c_void,
+) {
+  let value = unsafe { read_str(value) };
+  with(|meta| meta.provide_import(w, message as usize, kind, value));
+}
+
 /// `compiler_begin_intercept :: (w: Workspace, flags: Intercept_Flags = 0)`
 unsafe extern "C" fn compiler_begin_intercept(w: i64, flags: u32, _context: *mut c_void) {
   with(|meta| meta.begin_intercept(w, flags));

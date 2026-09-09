@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use crate::abi::{Slice, Str};
 use crate::message::{
-  ErrorCode, Kind, Message, MessageComplete, MessageFile, MessageImport, MessagePhase, ModuleType,
-  Phase, Stored,
+  ErrorCode, ImportStatus, Kind, Message, MessageComplete, MessageFailedImport, MessageFile,
+  MessageImport, MessagePhase, ModuleType, Phase, Stored,
 };
 
 /// How a metaprogram's own diagnostic is reported (**C§3.3**).
@@ -112,6 +112,19 @@ pub struct Workspace {
   /// Whether the metaprogram ran its own link command and said so
   /// (**C§3.3**).
   pub link_command_complete: bool,
+  /// `provide_import` answers a metaprogram gave after it was told an import
+  /// failed (**C§3.3**). The workspace is compiled again with them in place.
+  pub provided_imports: Vec<ProvidedImport>,
+}
+
+/// One `provide_import` (**C§3.3**): the import it answers, and what to import
+/// instead. `kind` is `Provided_Import_Type` as the distribution numbers it.
+#[derive(Clone, Debug)]
+pub struct ProvidedImport {
+  pub host: String,
+  pub import: String,
+  pub kind: u8,
+  pub value: String,
 }
 
 impl Workspace {
@@ -186,6 +199,9 @@ pub struct Compiled {
   /// The `TYPECHECKED` batches the compilation produced (**C§3.2**), already
   /// exported into the nodes a watching metaprogram reads.
   pub typechecked: Vec<TypecheckedBatch>,
+  /// The imports that did not happen, which a metaprogram may answer with
+  /// `provide_import` (**C§3.2**).
+  pub failed_imports: Vec<CompiledFailedImport>,
   /// The metaprogram is the one that links, so the compiler stopped at the
   /// objects and says so with a `READY_FOR_CUSTOM_LINK_COMMAND` phase rather
   /// than the two write-executable ones (**C§3.2**).
@@ -204,6 +220,17 @@ pub struct TypecheckedBatch {
   pub procedure_bodies: Vec<crate::code::Typechecked>,
   pub structs: Vec<crate::code::Typechecked>,
   pub others: Vec<crate::code::Typechecked>,
+}
+
+/// One import a compilation could not make (**C§3.2**), as the message stream
+/// needs it. `import_code` is where the `#import` was exported to, when the
+/// compilation exported it.
+#[derive(Clone, Debug)]
+pub struct CompiledFailedImport {
+  pub status: ImportStatus,
+  pub host: String,
+  pub target: String,
+  pub import_code: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -229,6 +256,9 @@ pub struct Intercept {
   pub compiled: bool,
   /// Whether `COMPLETE` has been handed over, after which waiting is an error.
   pub finished: bool,
+  /// A `provide_import` arrived, so the workspace is compiled again with the
+  /// answer in place and the stream starts over (**C§3.2**).
+  pub recompile: bool,
   pub queue: VecDeque<usize>,
 }
 
@@ -260,10 +290,18 @@ pub struct Meta {
   /// Every message produced so far. A metaprogram keeps the pointers it was
   /// handed, so nothing here is ever dropped before the compilation ends.
   pub messages: Vec<Stored>,
+  /// The failed import each `Message_Failed_Import` stands for, by the address
+  /// the metaprogram was handed, so that `provide_import` knows which import
+  /// it is answering (**C§3.3**).
+  failed_imports: std::collections::HashMap<usize, CompiledFailedImport>,
   /// How a workspace gets compiled, installed by the driver.
   pub compiler: Option<Compiler>,
   /// Directories `compiler_add_library_search_directory` added (**C§3.3**).
   pub library_directories: Vec<PathBuf>,
+  /// `compiler_set_type_info_flags` calls: the `Type` and the flags
+  /// (**C§3.3**). Recorded rather than acted on — what they leave out of the
+  /// type table is an optimization (`docs/spec.md` §10).
+  pub type_info_flags: Vec<(usize, u32)>,
   /// The trees a metaprogram has been handed, and the storage they live in
   /// (**C§5.3**). A metaprogram keeps every pointer it was given, so this
   /// lasts as long as the compilation does.
@@ -359,6 +397,7 @@ impl Meta {
       during_compile: None,
       intercepted: false,
       link_command_complete: false,
+      provided_imports: Vec::new(),
     });
     id
   }
@@ -396,12 +435,44 @@ impl Meta {
     }
   }
 
+  /// Records what a metaprogram answered a failed import with, and asks for
+  /// the workspace to be compiled again with the answer in place (**C§3.2**).
+  /// A message that names no failed import of ours is ignored, the way the
+  /// reference ignores one it did not send.
+  pub fn provide_import(&mut self, workspace: i64, message: usize, kind: u8, value: String) {
+    let Some(failed) = self.failed_imports.get(&message).cloned() else {
+      return;
+    };
+    let provided = ProvidedImport {
+      host: failed.host,
+      import: failed.target,
+      kind,
+      value,
+    };
+    if let Some(target) = self.workspace(workspace) {
+      // An import may be replaced only once (**C§3.2**), which is also what
+      // keeps a metaprogram that answers every failure from asking for the
+      // workspace to be compiled forever.
+      if target
+        .provided_imports
+        .iter()
+        .any(|already| already.host == provided.host && already.import == provided.import)
+      {
+        return;
+      }
+      target.provided_imports.push(provided);
+    }
+    if let Some(intercept) = self.intercept.as_mut() {
+      intercept.recompile = true;
+    }
+  }
+
   /// The workspace that has to be compiled before the next message can be
   /// handed over, if there is one. The caller does the compiling, since it
   /// re-enters the compiler and this state must not be borrowed while it does.
   pub fn workspace_awaiting_compilation(&self) -> Option<Workspace> {
     let intercept = self.intercept.as_ref()?;
-    if intercept.compiled {
+    if intercept.compiled && !intercept.recompile {
       return None;
     }
     self
@@ -420,6 +491,17 @@ impl Meta {
       return;
     };
     let head = |kind: Kind| Message { kind, workspace };
+    // A `provide_import` starts the workspace over, so what is left of the
+    // previous stream is not what happened (**C§3.2**). The messages
+    // themselves stay alive: the metaprogram still holds their pointers.
+    let again = match self.intercept.as_mut() {
+      Some(intercept) => std::mem::take(&mut intercept.recompile),
+      None => false,
+    };
+    if again && let Some(intercept) = self.intercept.as_mut() {
+      intercept.queue.clear();
+      intercept.finished = false;
+    }
 
     let mut imports = Vec::with_capacity(compiled.modules.len());
     for module in &compiled.modules {
@@ -457,6 +539,25 @@ impl Meta {
     // `Code_Node.enclosing_load` is the `Message_File` of the file the node was
     // written in, and those messages exist only now (**C§3.2**).
     self.nodes.borrow_mut().attach_files(&by_path);
+
+    // An import that did not happen is one the metaprogram may still answer,
+    // so it is told before anything else can depend on it (**C§3.2**).
+    self.failed_imports.clear();
+    for failed in &compiled.failed_imports {
+      let host_module_name = self.intern(failed.host.as_bytes());
+      let target_module_name = self.intern(failed.target.as_bytes());
+      let stored = Stored::FailedImport(Box::new(MessageFailedImport {
+        message: head(Kind::FailedImport),
+        status: failed.status,
+        host_module_name,
+        target_module_name,
+        import_code: failed.import_code as *const crate::code::CodeDirectiveImport,
+      }));
+      self
+        .failed_imports
+        .insert(stored.as_ptr() as usize, failed.clone());
+      self.push_message(stored);
+    }
 
     // A batch of things whose typechecking finished, which the reference sends
     // as they come in and orangejuice sends once the compilation it replays is
@@ -568,11 +669,17 @@ impl Meta {
     }
     // A workspace whose compilation failed has failed, whether or not its
     // metaprogram says so: that is what makes the compiler exit non-zero when
-    // the program it was asked to build did not build (**C§2.1**).
-    if compiled.failed
-      && let Some(failed) = self.workspace(workspace)
-    {
-      failed.status = WorkspaceStatus::Failed;
+    // the program it was asked to build did not build (**C§2.1**). A workspace
+    // compiled again after a `provide_import` is judged by that attempt alone,
+    // since the one that failed is not what happened.
+    if compiled.failed || again {
+      let status = match compiled.failed {
+        true => WorkspaceStatus::Failed,
+        false => WorkspaceStatus::Ok,
+      };
+      if let Some(target) = self.workspace(workspace) {
+        target.status = status;
+      }
     }
   }
 

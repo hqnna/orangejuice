@@ -279,6 +279,8 @@ pub struct Checker<'a> {
   /// metaprogram behind it shares this with `oj-meta`, so a `Code` value and
   /// the tree `compiler_get_nodes` answers with are the same storage.
   pub(crate) nodes: Option<std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>>,
+  /// Which compilation this one is, as far as that storage is concerned.
+  pub(crate) nodes_generation: u32,
   /// The answer each `#run` gave, so that a run written once executes once.
   pub(crate) runs: HashMap<(SourceId, NodeId), Expr>,
   /// The runs being worked out right now, which is what makes a `#run` that
@@ -384,6 +386,7 @@ impl<'a> Checker<'a> {
       program,
       interner,
       nodes: None,
+      nodes_generation: 0,
       types: Types::new(),
       names: Names::new(interner),
       states: HashMap::new(),
@@ -433,16 +436,25 @@ impl<'a> Checker<'a> {
   /// Installs the storage the `Code_*` export writes into (**C§5.3**).
   /// Without one a `Code` value has no address to be, which is what a dump
   /// stage and a test without a driver behind it see.
-  pub fn set_nodes(&mut self, nodes: std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>) {
+  /// `generation` is the compilation this one is, which keys what it exports:
+  /// the arena outlives many compilations, and each numbers its sources from
+  /// zero.
+  pub fn set_nodes(
+    &mut self,
+    nodes: std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>,
+    generation: u32,
+  ) {
     self.nodes = Some(nodes);
+    self.nodes_generation = generation;
   }
 
   /// The address a `Code` value has at compile time: the `Code_Node` the
   /// program was written at, exported on demand (**L§13.1**, **C§5.3**).
   pub fn code_address(&mut self, source: SourceId, node: NodeId) -> Option<usize> {
     let nodes = self.nodes.clone()?;
+    let generation = self.nodes_generation;
     let mut nodes = nodes.borrow_mut();
-    let mut exporter = crate::export::Exporter::new(self, &mut nodes);
+    let mut exporter = crate::export::Exporter::new(self, &mut nodes, generation);
     Some(exporter.tree(source, node).root as usize)
   }
 

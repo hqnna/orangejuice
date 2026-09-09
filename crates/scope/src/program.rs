@@ -61,6 +61,68 @@ pub struct Options {
   /// the `#import` is written in, the name it names, and what to import
   /// instead — or nothing at all, which blocks it (**C§3.3**).
   pub import_remaps: Vec<ImportRemap>,
+  /// `provide_import` calls a metaprogram made for a workspace after it was
+  /// told an import failed (**C§3.3**). They are consulted only where an
+  /// import was blocked or could not be found, since that is when the
+  /// reference asks.
+  pub provided_imports: Vec<ProvidedImport>,
+}
+
+/// How a `provide_import` names the replacement (**C§3.3**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProvidedImportKind {
+  /// A module name, searched through the import path the way any `#import`
+  /// name is.
+  ShortName,
+  /// A file, loaded directly.
+  PathToFile,
+  /// A directory, loaded directly.
+  PathToDirectory,
+  /// The text of the replacement module, with no file operations at all.
+  FullText,
+}
+
+impl ProvidedImportKind {
+  /// The values `Provided_Import_Type` gives its members (**C§3.3**).
+  pub fn from_value(value: u8) -> Self {
+    match value {
+      1 => Self::PathToFile,
+      2 => Self::PathToDirectory,
+      3 => Self::FullText,
+      _ => Self::ShortName,
+    }
+  }
+}
+
+/// One `provide_import` (**C§3.3**): the import it answers, and what to import
+/// instead.
+#[derive(Clone, Debug)]
+pub struct ProvidedImport {
+  pub host: String,
+  pub import: String,
+  pub kind: ProvidedImportKind,
+  pub value: String,
+}
+
+/// Why an import did not happen (**C§3.2**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailedImportStatus {
+  /// A `remap_import` sent it nowhere.
+  Blocked,
+  /// Nothing on the import path answers to the name.
+  NotFound,
+}
+
+/// An import a metaprogram may still answer with `provide_import` (**C§3.2**).
+#[derive(Clone, Debug)]
+pub struct FailedImport {
+  pub status: FailedImportStatus,
+  /// The module the `#import` was written in, `""` for the main program.
+  pub host: String,
+  pub target: String,
+  /// The `#import` itself, which the message points a metaprogram at.
+  pub source: SourceId,
+  pub node: NodeId,
 }
 
 /// One `remap_import` (**C§3.3**). `host` is `""` for the main program and
@@ -87,6 +149,7 @@ impl Default for Options {
       follow_imports: true,
       load_preload: true,
       import_remaps: Vec::new(),
+      provided_imports: Vec::new(),
     }
   }
 }
@@ -251,6 +314,12 @@ pub struct Program<'a> {
   /// The `#insert`s whose text the scope tree could not work out on its own:
   /// they need a type or a `#run`, so the typechecker expands them.
   pending_inserts: RefCell<Vec<PendingInsert>>,
+  /// The imports that did not happen, which a metaprogram may still answer
+  /// with `provide_import` (**C§3.2**).
+  failed_imports: RefCell<Vec<FailedImport>>,
+  /// The text a `provide_import` of `FULL_TEXT` supplied, by the path it was
+  /// registered under: the loader reads these rather than the file system.
+  provided_texts: RefCell<HashMap<PathBuf, String>>,
   modules: RefCell<HashMap<ModuleKey, ScopeId>>,
   loaded: RefCell<HashSet<(ScopeId, PathBuf)>>,
   /// The member scope of each struct and enum definition, so that a `using` of
@@ -364,6 +433,8 @@ impl<'a> Program<'a> {
       inserted_of_source: RefCell::default(),
       expansions: RefCell::default(),
       pending_inserts: RefCell::default(),
+      failed_imports: RefCell::default(),
+      provided_texts: RefCell::default(),
       module_records: RefCell::default(),
       modules: RefCell::default(),
       loaded: RefCell::default(),
@@ -638,22 +709,28 @@ impl<'a> Program<'a> {
       return;
     }
 
-    let source = match oj_source::load_file(self.sources, path) {
-      Ok(source) => source,
-      Err(error) => {
-        let message = format!("Could not read '{}': {error}", path.display());
-        match origin {
-          Some((source, span)) => self.error(source, span, message),
-          // The root file has no `#load` or `#import` to point at, so the
-          // unreadable file stands in for itself: an empty source under its own
-          // path, which every diagnostic needs to be renderable.
-          None => {
-            let source = self.sources.add_bytes(path, Vec::new());
-            self.error(source, Span::at(0), message);
+    // A module a metaprogram supplied the text of is not on the file system at
+    // all (**C§3.3**).
+    let provided = self.provided_texts.borrow().get(path).cloned();
+    let source = match provided {
+      Some(text) => self.sources.add_bytes(path, text.into_bytes()),
+      None => match oj_source::load_file(self.sources, path) {
+        Ok(source) => source,
+        Err(error) => {
+          let message = format!("Could not read '{}': {error}", path.display());
+          match origin {
+            Some((source, span)) => self.error(source, span, message),
+            // The root file has no `#load` or `#import` to point at, so the
+            // unreadable file stands in for itself: an empty source under its
+            // own path, which every diagnostic needs to be renderable.
+            None => {
+              let source = self.sources.add_bytes(path, Vec::new());
+              self.error(source, Span::at(0), message);
+            }
           }
+          return;
         }
-        return;
-      }
+      },
     };
 
     self.admit_file(module, source, path);
@@ -1298,25 +1375,38 @@ impl<'a> Program<'a> {
     }
 
     let from = self.path_of(source);
-    let mut name = String::from_utf8_lossy(&import.name).into_owned();
+    let host = self.host_module_name(scope);
+    let written = String::from_utf8_lossy(&import.name).into_owned();
+    let mut name = written.clone();
+    let mut import_type = import.import_type;
     // A metaprogram may have said this import is somebody else, or is nobody
-    // at all (**C§3.3**).
-    if import.import_type == ImportType::ShortName {
-      match self.remapped(scope, &name) {
-        Some(Some(replacement)) => name = replacement,
-        Some(None) => {
+    // at all (**C§3.3**), and — once it has been told the import failed — what
+    // to import instead (**C§3.2**).
+    if import_type == ImportType::ShortName {
+      let blocked = matches!(self.remapped(scope, &name), Some(None));
+      if let Some(Some(replacement)) = self.remapped(scope, &name) {
+        name = replacement;
+      }
+      match self.provided(&host, &written) {
+        Some((kind, value)) => {
+          import_type = kind;
+          name = value;
+        }
+        None if blocked => {
+          self.fail_import(FailedImportStatus::Blocked, &host, &written, source, node);
           self.tree.add_pending(scope, PendingProvider::FailedImport);
           return None;
         }
         None => {}
       }
     }
-    let resolved = match import.import_type {
+    let resolved = match import_type {
       ImportType::ShortName => match oj_source::resolve_module(&name, &self.import_path) {
         Ok(resolved) => resolved,
         Err(error) => {
           self.error(source, span, error.to_string());
           if matches!(error, ModuleError::NotFound { .. }) {
+            self.fail_import(FailedImportStatus::NotFound, &host, &written, source, node);
             self.tree.add_pending(scope, PendingProvider::FailedImport);
           }
           return None;
@@ -1357,14 +1447,11 @@ impl<'a> Program<'a> {
     Some(module)
   }
 
-  /// What `#import "name"` written in `scope` should import instead, if a
-  /// metaprogram remapped it (**C§3.3**). `Some(None)` means the import is
-  /// blocked: the compiler does not even look for it.
-  fn remapped(&self, scope: ScopeId, name: &str) -> Option<Option<String>> {
-    if self.options.import_remaps.is_empty() {
-      return None;
-    }
-    let host = self
+  /// The module an `#import` was written in, which is `""` for the main
+  /// program — the `host_module_name` a remap and a failed import are keyed by
+  /// (**C§3.3**).
+  fn host_module_name(&self, scope: ScopeId) -> String {
+    self
       .tree
       .enclosing_module(scope)
       .and_then(|module| {
@@ -1375,7 +1462,68 @@ impl<'a> Program<'a> {
           .find(|record| record.scope == module)
           .map(|record| record.name.clone())
       })
-      .unwrap_or_default();
+      .unwrap_or_default()
+  }
+
+  /// What a metaprogram answered a failed import with, if it answered this one
+  /// (**C§3.3**). A `FULL_TEXT` answer is registered as a file of its own so
+  /// that the rest of the loader treats it the way it treats any other.
+  fn provided(&self, host: &str, name: &str) -> Option<(ImportType, String)> {
+    let provided = self
+      .options
+      .provided_imports
+      .iter()
+      .find(|provided| provided.host == host && provided.import == name)?;
+    Some(match provided.kind {
+      ProvidedImportKind::ShortName => (ImportType::ShortName, provided.value.clone()),
+      ProvidedImportKind::PathToFile => (ImportType::PathToFile, provided.value.clone()),
+      ProvidedImportKind::PathToDirectory => (ImportType::PathToDirectory, provided.value.clone()),
+      ProvidedImportKind::FullText => {
+        // An absolute path, so that resolving it against the importing file's
+        // directory leaves it alone: there is no file, and there are no file
+        // operations to perform (**C§3.3**).
+        let path = PathBuf::from(format!("/<provided-import>/{name}.jai"));
+        self
+          .provided_texts
+          .borrow_mut()
+          .insert(path.clone(), provided.value.clone());
+        (ImportType::PathToFile, path.display().to_string())
+      }
+    })
+  }
+
+  /// Records an import a metaprogram may still answer (**C§3.2**).
+  fn fail_import(
+    &self,
+    status: FailedImportStatus,
+    host: &str,
+    target: &str,
+    source: SourceId,
+    node: NodeId,
+  ) {
+    self.failed_imports.borrow_mut().push(FailedImport {
+      status,
+      host: host.to_string(),
+      target: target.to_string(),
+      source,
+      node,
+    });
+  }
+
+  /// The imports that did not happen and that a metaprogram may answer
+  /// (**C§3.2**).
+  pub fn failed_imports(&self) -> Vec<FailedImport> {
+    self.failed_imports.borrow().clone()
+  }
+
+  /// What `#import "name"` written in `scope` should import instead, if a
+  /// metaprogram remapped it (**C§3.3**). `Some(None)` means the import is
+  /// blocked: the compiler does not even look for it.
+  fn remapped(&self, scope: ScopeId, name: &str) -> Option<Option<String>> {
+    if self.options.import_remaps.is_empty() {
+      return None;
+    }
+    let host = self.host_module_name(scope);
     let remap = self
       .options
       .import_remaps

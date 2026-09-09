@@ -65,7 +65,11 @@ impl Fixture {
   }
 
   fn write(&self, name: &str, source: &str) -> &Self {
-    std::fs::write(self.directory.path().join(name), source).expect("the fixture is writable");
+    let path = self.directory.path().join(name);
+    if let Some(directory) = path.parent() {
+      std::fs::create_dir_all(directory).expect("the fixture is writable");
+    }
+    std::fs::write(path, source).expect("the fixture is writable");
     self
   }
 
@@ -1041,5 +1045,190 @@ fn a_workspace_with_a_custom_link_command_stops_at_its_objects() {
   assert!(
     !fixture.path("linked_by_hand").exists(),
     "the compiler stops at the object it made; linking is the metaprogram's"
+  );
+}
+
+/// The `Message_Failed_Import` half of the message declarations, plus
+/// `provide_import`, spelled the way `Compiler.jai` spells them.
+const IMPORTS: &str = "\
+Message_Failed_Import :: struct {
+  #as using m: Message;
+  status: enum u8 { UNINITIALIZED :: 0; BLOCKED :: 1; NOT_FOUND :: 2; }
+  host_module_name:   string;
+  target_module_name: string;
+  import_code: *void;
+}
+
+Provided_Import_Type :: enum u8 { SHORT_NAME :: 0; PATH_TO_FILE :: 1; PATH_TO_DIRECTORY :: 2; FULL_TEXT :: 3; }
+provide_import :: (w: Workspace, message: *Message_Failed_Import, type: Provided_Import_Type, value: string) #compiler;
+";
+
+#[test]
+fn a_metaprogram_answers_an_import_the_compiler_could_not_find() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n{IMPORTS}\n\
+       PROGRAM :: #string OJ_DONE\n\
+       #import \"Nowhere\";\n\
+       main :: () {{ }}\n\
+       OJ_DONE\n\
+       REPLACEMENT :: #string OJ_DONE\n\
+       #scope_export\n\
+       answered :: () {{ }}\n\
+       OJ_DONE\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"provided\";\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(PROGRAM, w);\n  \
+         asked := 0;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .FAILED_IMPORT {{\n      \
+             failed := cast(*Message_Failed_Import) message;\n      \
+             if failed.target_module_name != \"Nowhere\"  compiler_report(\"the wrong import was reported\");\n      \
+             if failed.status != .NOT_FOUND  compiler_report(\"the wrong status was reported\");\n      \
+             if failed.import_code == null   compiler_report(\"the #import was not exported\");\n      \
+             asked += 1;\n      \
+             if asked == 1  provide_import(w, failed, .FULL_TEXT, REPLACEMENT);\n    \
+           }}\n    \
+           if message.kind == .COMPLETE {{\n      \
+             complete := cast(*Message_Complete) message;\n      \
+             if complete.error_code != .NONE  compiler_report(\"the workspace failed anyway\");\n      \
+             break;\n    \
+           }}\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if asked != 1  compiler_report(\"the import was reported more than once\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("provided"));
+}
+
+#[test]
+fn a_metaprogram_answers_an_import_it_blocked_itself() {
+  let fixture = Fixture::new();
+  fixture.write("modules/Real.jai", "#scope_export\nreal :: () { }\n");
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n{IMPORTS}\n\
+       remap_import :: (w: Workspace, host_module_name: string, import_name: string, replacement_name: string) #compiler;\n\
+       PROGRAM :: #string OJ_DONE\n\
+       #import \"Real\";\n\
+       main :: () {{ real(); }}\n\
+       OJ_DONE\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"unblocked\";\n  \
+         set_build_options(options, w);\n  \
+         remap_import(w, \"\", \"Real\", \"\");\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(PROGRAM, w);\n  \
+         blocked := false;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .FAILED_IMPORT {{\n      \
+             failed := cast(*Message_Failed_Import) message;\n      \
+             if failed.status == .BLOCKED && !blocked {{\n        \
+               blocked = true;\n        \
+               provide_import(w, failed, .SHORT_NAME, \"Real\");\n      \
+             }}\n    \
+           }}\n    \
+           if message.kind == .COMPLETE  break;\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if !blocked  compiler_report(\"the blocked import was never reported\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("unblocked"));
+}
+
+#[test]
+fn get_type_gives_back_the_type_a_type_info_belongs_to() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "\
+     get_type :: (ti: *Type_Info) -> Type #compiler;\n\
+     compiler_set_memory_breakpoint :: (pointer: *void) #compiler;\n\
+     developer_debug :: (x: *void) #compiler;\n\
+     Type_Info_Flags :: enum u32 { NO_TYPE_INFO :: 0x1; }\n\
+     compiler_set_type_info_flags :: (type: Type, flags: Type_Info_Flags) #compiler;\n\
+     compiler_report_errors_for_unresolved_identifiers :: (filename: string, w: s64 = -1) #compiler;\n\
+     #run {\n  \
+       info := type_info(float64);\n  \
+       if get_type(info) != float64  compiler_report(\"get_type did not give the type back\");\n  \
+       compiler_set_type_info_flags(float64, .NO_TYPE_INFO);\n  \
+       compiler_set_memory_breakpoint(null);\n  \
+       developer_debug(null);\n  \
+       compiler_report_errors_for_unresolved_identifiers(\"nowhere.txt\");\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("main"));
+}
+
+#[test]
+fn an_import_may_be_answered_only_once() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "{MESSAGES}\n{IMPORTS}\n\
+       PROGRAM :: #string OJ_DONE\n\
+       #import \"Nowhere\";\n\
+       main :: () {{ }}\n\
+       OJ_DONE\n\
+       #run {{\n  \
+         w := compiler_create_workspace(\"target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"answered_once\";\n  \
+         set_build_options(options, w);\n  \
+         compiler_begin_intercept(w);\n  \
+         add_build_string(PROGRAM, w);\n  \
+         answers := 0;\n  \
+         while true {{\n    \
+           message := compiler_wait_for_message();\n    \
+           if message.kind == .FAILED_IMPORT {{\n      \
+             failed := cast(*Message_Failed_Import) message;\n      \
+             answers += 1;\n      \
+             provide_import(w, failed, .SHORT_NAME, \"Still_Nowhere\");\n    \
+           }}\n    \
+           if message.kind == .COMPLETE  break;\n  \
+         }}\n  \
+         compiler_end_intercept(w);\n  \
+         if answers < 2  compiler_report(\"the replacement should fail too, and be reported\");\n\
+       }}\n\
+       main :: () {{}}\n"
+    ),
+  ) else {
+    return;
+  };
+  // The workspace never compiles: the replacement is not there either, and a
+  // second answer for the same import is ignored, so this terminates.
+  assert!(report.failed, "the workspace could not be compiled");
+  assert!(
+    report
+      .diagnostics
+      .iter()
+      .any(|diagnostic| diagnostic.contains("Still_Nowhere")),
+    "the replacement is what was looked for the second time:\n{}",
+    report.diagnostics.join("")
   );
 }

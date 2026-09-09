@@ -80,6 +80,26 @@ pub struct MessageImport {
   pub fully_pathed_filename: Str,
 }
 
+/// `Message_Failed_Import.status` (**C§3.2**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ImportStatus {
+  Uninitialized = 0,
+  Blocked = 1,
+  NotFound = 2,
+}
+
+/// `Message_Failed_Import` (**C§3.2**).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MessageFailedImport {
+  pub message: Message,
+  pub status: ImportStatus,
+  pub host_module_name: Str,
+  pub target_module_name: Str,
+  pub import_code: *const crate::code::CodeDirectiveImport,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MessagePhase {
@@ -109,6 +129,7 @@ pub struct MessageComplete {
 pub enum Stored {
   Plain(Box<Message>),
   Typechecked(Box<crate::code::MessageTypechecked>),
+  FailedImport(Box<MessageFailedImport>),
   File(Box<MessageFile>),
   Import(Box<MessageImport>),
   Phase(Box<MessagePhase>),
@@ -121,6 +142,7 @@ impl Stored {
     match self {
       Self::Plain(message) => &raw const **message,
       Self::Typechecked(message) => (&raw const **message).cast(),
+      Self::FailedImport(message) => (&raw const **message).cast(),
       Self::File(message) => (&raw const **message).cast(),
       Self::Import(message) => (&raw const **message).cast(),
       Self::Phase(message) => (&raw const **message).cast(),
@@ -132,6 +154,7 @@ impl Stored {
     match self {
       Self::Plain(message) => message.kind,
       Self::Typechecked(message) => message.message.kind,
+      Self::FailedImport(message) => message.message.kind,
       Self::File(message) => message.message.kind,
       Self::Import(message) => message.message.kind,
       Self::Phase(message) => message.message.kind,

@@ -759,10 +759,18 @@ pub struct Tree {
 pub struct Nodes {
   pub arena: Arena,
   trees: HashMap<usize, Tree>,
-  placed: HashMap<(u32, u32), *mut CodeNode>,
-  paths: HashMap<u32, std::path::PathBuf>,
+  placed: HashMap<Key, *mut CodeNode>,
+  paths: HashMap<(u32, u32), std::path::PathBuf>,
+  generation: u32,
   serial: i64,
 }
+
+/// What identifies an exported node: the compilation it belongs to, and the
+/// `(source, node)` it was written at. The compilation has to be part of it
+/// because one arena outlives many of them — a workspace compiled again after
+/// a `provide_import` numbers its sources from zero just as the first attempt
+/// did (**C§3.2**).
+pub type Key = (u32, u32, u32);
 
 impl Nodes {
   /// Records what `compiler_get_nodes` should answer for a root.
@@ -779,14 +787,22 @@ impl Nodes {
   /// Where a node of the program was exported to, if it was. One AST node has
   /// one exported address for the whole compilation, so a metaprogram that
   /// meets the same declaration twice is handed the same pointer.
-  pub fn placed(&self, key: (u32, u32)) -> Option<*mut CodeNode> {
+  pub fn placed(&self, key: Key) -> Option<*mut CodeNode> {
     self.placed.get(&key).copied()
+  }
+
+  /// Starts a compilation: everything it exports is keyed under a number of
+  /// its own, so that two compilations sharing this arena cannot be mistaken
+  /// for each other.
+  pub fn begin_compilation(&mut self) -> u32 {
+    self.generation += 1;
+    self.generation
   }
 
   /// Reserves storage for the node `key` names and records where it went. The
   /// members are filled in afterwards, so that a tree pointing back at itself
   /// has an address to point at.
-  pub fn place<T: Copy>(&mut self, key: (u32, u32)) -> *mut T {
+  pub fn place<T: Copy>(&mut self, key: Key) -> *mut T {
     let address = self.arena.alloc_zeroed::<T>();
     self.placed.insert(key, address.cast());
     address
@@ -799,10 +815,10 @@ impl Nodes {
     self.serial
   }
 
-  /// Every node exported so far, by the `(source, node)` it came from. A pass
+  /// Every node exported so far, by the compilation, source and node it came from. A pass
   /// that fills in what a first walk could not yet know — a name whose
   /// declaration had not been exported when the name was — reads this.
-  pub fn placed_entries(&self) -> Vec<((u32, u32), *mut CodeNode)> {
+  pub fn placed_entries(&self) -> Vec<(Key, *mut CodeNode)> {
     self
       .placed
       .iter()
@@ -812,16 +828,16 @@ impl Nodes {
 
   /// Which file a source came from, so that the `Message_File` the metaprogram
   /// is handed can be found again once it exists.
-  pub fn record_path(&mut self, source: u32, path: std::path::PathBuf) {
-    self.paths.insert(source, path);
+  pub fn record_path(&mut self, key: (u32, u32), path: std::path::PathBuf) {
+    self.paths.insert(key, path);
   }
 
   /// Points every exported node at the `Message_File` of the file it was
   /// written in (**C§3.2**). The messages are made after the compilation they
   /// describe, so `enclosing_load` is filled in here rather than at export.
   pub fn attach_files(&mut self, by_path: &HashMap<std::path::PathBuf, *const MessageFile>) {
-    for ((source, _), address) in &self.placed {
-      let Some(path) = self.paths.get(source) else {
+    for ((generation, source, _), address) in &self.placed {
+      let Some(path) = self.paths.get(&(*generation, *source)) else {
         continue;
       };
       let Some(message) = by_path.get(path) else {
