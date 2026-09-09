@@ -45,9 +45,24 @@ impl Checker<'_> {
     if let Some(span) = span {
       self.check_cast(source, span, &value, target, cast.cast_flags);
     }
+    // A cast of a numeric constant is a constant (**L§5.11**), which is what
+    // makes `tell(cast(u8) 42.0, …)` bake a `$$x` parameter.
+    let folded = value
+      .constant
+      .as_ref()
+      .filter(|value| {
+        matches!(
+          value.value,
+          crate::constants::Value::Int(_)
+            | crate::constants::Value::Float(_)
+            | crate::constants::Value::Bool(_)
+        )
+      })
+      .and_then(|value| value.convert(self.types(), target));
     Expr {
       explicitly_cast: true,
       autocast: false,
+      constant: folded,
       ..Expr::value(target)
     }
   }

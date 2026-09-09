@@ -642,11 +642,17 @@ impl Checker<'_> {
         return None;
       }
       // A `$x` parameter is a constant of the instantiation, so the argument
-      // has to be one (**L§7.8**).
-      if let Some(decl) = self.baked_parameter_decl(source, signature, index) {
-        let value = argument.value.constant.clone()?;
-        solution.bindings.push((decl, value));
-        continue;
+      // has to be one; a `$$x` takes one when the call site has one and stays
+      // an ordinary parameter otherwise (**L§7.8**).
+      if let Some((decl, required)) = self.baked_parameter_decl(source, signature, index) {
+        match argument.value.constant.clone() {
+          Some(value) => {
+            solution.bindings.push((decl, value));
+            continue;
+          }
+          None if required => return None,
+          None => continue,
+        }
       }
       // A macro's `Code` parameter is the argument itself, unevaluated
       // (**L§13.1**); anything else it was handed a constant for is a constant
@@ -701,7 +707,7 @@ impl Checker<'_> {
       if slots.contains(&index) {
         continue;
       }
-      let Some(decl) = self.baked_parameter_decl(source, signature, index) else {
+      let Some((decl, _)) = self.baked_parameter_decl(source, signature, index) else {
         continue;
       };
       if solution.bindings.iter().any(|(bound, _)| *bound == decl) {
@@ -764,14 +770,16 @@ impl Checker<'_> {
     Some(solution)
   }
 
-  /// The declaration of a `$x` parameter, whose *value* the instantiation
-  /// bakes rather than its type (**L§7.8**).
+  /// The declaration of a `$x` or `$$x` parameter, whose *value* the
+  /// instantiation bakes rather than its type, and whether the bake is
+  /// *required*: `$x` only accepts a constant, while `$$x` takes one when the
+  /// call site has one and stays an ordinary parameter otherwise (**L§7.8**).
   fn baked_parameter_decl(
     &mut self,
     source: SourceId,
     signature: &crate::overload::Signature,
     index: usize,
-  ) -> Option<DeclId> {
+  ) -> Option<(DeclId, bool)> {
     let (_, header) = signature.header?;
     let NodeData::ProcedureHeader(payload) = self.ast(source)?.data(header) else {
       return None;
@@ -786,7 +794,10 @@ impl Checker<'_> {
     {
       return None;
     }
-    self.decl_at(source, parameter)
+    let required = declaration
+      .flags
+      .contains(DeclarationFlags::AUTO_VALUE_BAKE_IS_REQUIRED);
+    Some((self.decl_at(source, parameter)?, required))
   }
 
   /// Whether `actual` is an instantiation of the polymorphic struct `pattern`

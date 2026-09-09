@@ -2404,6 +2404,12 @@ impl Lowering<'_, '_> {
       return Some(view);
     }
 
+    // `cast(bool) x` is a truth test whatever `x` is, and a `string` or a view
+    // is true when its count is (**L§5.9**).
+    if matches!(to_kind, TypeKind::Bool) {
+      return self.truth(source, node, value);
+    }
+
     if !self.is_scalar(from) || !self.is_scalar(to) {
       self.unsupported(source, node, "this conversion", "M7");
       return None;

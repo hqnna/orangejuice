@@ -2357,3 +2357,35 @@ fn a_polymorphic_procedure_passed_as_an_argument_decides_no_type_variable() {
     "81\n",
   );
 }
+
+#[test]
+fn a_cast_to_bool_is_a_truth_test_whatever_it_casts() {
+  // `cast(bool) s` on a string is `s.count != 0` (**L§5.9**).
+  assert_output(
+    "convert :: (arg: $T) -> bool { return cast(bool) arg; }\n\
+     main :: () {\n  \
+       if convert(\"hi\")  put(\"string true\\n\");\n  \
+       if !convert(\"\")   put(\"empty false\\n\");\n  \
+       if convert(3)     put(\"int true\\n\");\n  \
+       if !convert(0.0)  put(\"float false\\n\");\n\
+     }\n",
+    "string true\nempty false\nint true\nfloat false\n",
+  );
+}
+
+#[test]
+fn an_optionally_baked_parameter_takes_a_runtime_value_too() {
+  // `$$x` bakes when the call site has a constant and stays an ordinary
+  // parameter otherwise; a cast of a numeric constant is one (**L§5.11**,
+  // **L§7.8**).
+  assert_output(
+    "tell :: ($$x: $T) -> int { #if is_constant(x)  return 1; return 0; }\n\
+     main :: () {\n  \
+       put_number(tell(3));\n  \
+       put_number(tell(cast(u8) 42.0));\n  \
+       y := 5;\n  \
+       put_number(tell(y));\n\
+     }\n",
+    "1\n1\n0\n",
+  );
+}
