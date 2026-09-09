@@ -775,6 +775,8 @@ impl Checker<'_> {
     }
     added.sort_by(|left, right| left.0.cmp(&right.0));
 
+    let mut defaults: Vec<MemberDefault> = Vec::new();
+
     for (_, source, node, scope) in added {
       let Some(NodeData::Declaration(declaration)) = self.ast(source).map(|ast| ast.data(node))
       else {
@@ -798,6 +800,21 @@ impl Checker<'_> {
       // members after it would then sit on top of each other.
       let layout = self.layout_of(member_type).unwrap_or(Layout::new(0, 1));
       let offset = builder.place(layout, None);
+      // `#add_context random_state := Random_State.{1, 0};` gives the member a
+      // default, which a fresh context takes like any other (**L§10.2**).
+      if let Some(expression) = declaration.expression
+        && !declaration
+          .flags
+          .contains(DeclarationFlags::IS_UNINITIALIZED)
+      {
+        defaults.push(MemberDefault {
+          member: members.len(),
+          path: Vec::new(),
+          from_statement: false,
+          source,
+          node: expression,
+        });
+      }
       members.push(StructMember {
         name: member_name,
         type_id: member_type,
@@ -806,6 +823,7 @@ impl Checker<'_> {
         imported_through: None,
       });
     }
+    self.record_member_defaults(definition, defaults);
 
     // The context is padded out to `context_size_max` so that its size does not
     // depend on which modules a program imports (**L§10.1**).

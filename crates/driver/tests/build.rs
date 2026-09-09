@@ -2890,3 +2890,17 @@ fn an_added_context_member_is_laid_out_after_the_ones_before_it() {
     "apart\nff\n",
   );
 }
+
+#[test]
+fn an_added_context_member_takes_the_default_it_was_declared_with() {
+  // `#add_context random_state := Random_State.{1, 0};` is what makes the
+  // first `random_get()` of a program the number it is (**L§10.2**).
+  assert_output_with_file(
+    "seeded.jai",
+    "#add_context seed := 41;\n\
+     bump :: () -> int { context.seed += 1; return context.seed; }\n",
+    "#load \"seeded.jai\";\n\
+     main :: () { put_number(bump()); }\n",
+    "42\n",
+  );
+}
