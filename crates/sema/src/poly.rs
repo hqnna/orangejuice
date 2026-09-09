@@ -32,6 +32,11 @@ pub(crate) type InstanceKey = (
   NodeId,
   Option<(SourceId, NodeId, Option<InstanceId>)>,
   Vec<(DeclId, TypeId, ConstKey)>,
+  // The last is the types the call gave parameters the header could not name:
+  // a header whose only variable is a parameter typed by a polymorphic struct
+  // *family* binds no constants at all, and two tables are still two
+  // specializations (**L§7.8**, **L§8.5**).
+  Vec<(DeclId, TypeId)>,
 );
 
 /// A [`Const`] projected onto something hashable, so that instantiations can be
@@ -313,7 +318,13 @@ impl Checker<'_> {
     for (parameter, expression) in parameters.iter().zip(given) {
       let declared = self.decl_type(*parameter).value;
       let value = match expression {
-        Some(expression) => self.expression_type(scope, source, expression).constant?,
+        Some(expression) => {
+          // A procedure name is a constant like any other declared with `::`
+          // (**L§5.11**), so `Thing(main)` bakes one.
+          let written = self.expression_type(scope, source, expression);
+          let named = self.named_procedure(&written);
+          written.constant.or(named)?
+        }
         // A parameter the instantiation left out takes its default.
         None => self.parameter_default(*parameter)?,
       };
@@ -369,6 +380,7 @@ impl Checker<'_> {
         .iter()
         .map(|(id, value)| (*id, value.type_id, const_key(value)))
         .collect(),
+      Vec::new(),
     );
     let instance = match self.instance_cache.get(&key) {
       Some(existing) => *existing,
@@ -680,6 +692,7 @@ impl Checker<'_> {
         .iter()
         .map(|(id, value)| (*id, value.type_id, const_key(value)))
         .collect(),
+      solution.overrides.clone(),
     );
     if let Some(existing) = self.instance_cache.get(&key) {
       return Some(*existing);
@@ -956,7 +969,7 @@ impl Checker<'_> {
   /// (**L§5.11**). A polymorphic one has no value until a call site
   /// instantiates it, and a name that stands for a whole overload set has none
   /// until one is chosen (**L§7.5**, **L§7.8**).
-  fn named_procedure(&mut self, value: &Expr) -> Option<Const> {
+  pub(crate) fn named_procedure(&mut self, value: &Expr) -> Option<Const> {
     let [only] = value.overloads[..] else {
       return None;
     };

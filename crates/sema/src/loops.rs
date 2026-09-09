@@ -254,6 +254,7 @@ impl Checker<'_> {
     None
   }
 
+  /// A backticked declaration one instantiation's body holds, by name.
   fn exported_declaration(&self, instance: InstanceId, name: &[u8]) -> Option<DeclId> {
     let name = self.interned().intern(name);
     let root = self.instance(instance).body_root();

@@ -3398,3 +3398,39 @@ fn a_string_literal_casts_to_a_fixed_array_of_bytes_constantly() {
     "72\n101\n108\n108\n111\n",
   );
 }
+
+#[test]
+fn a_family_parameter_makes_one_specialization_per_instantiation() {
+  // A header whose only variable is a parameter typed by a polymorphic struct
+  // family binds no constants at all, so what tells two specializations apart
+  // is the types the call gave those parameters (**L§7.8**, **L§8.5**).
+  assert_output(
+    "Box :: struct (T: Type) { x: T; }\n\
+     first :: (b: *Box) -> b.T { return b.x; }\n\
+     main :: () {\n  \
+       a: Box(int);\n  \
+       a.x = 7;\n  \
+       s: Box(string);\n  \
+       s.x = \"hi\\n\";\n  \
+       put_number(first(*a));\n  \
+       put(first(*s));\n\
+     }\n",
+    "7\nhi\n",
+  );
+}
+
+#[test]
+fn a_polymorphic_struct_takes_a_procedure_as_an_argument() {
+  // A procedure name is a constant, so it bakes like any other (**L§8.5**).
+  assert_output(
+    "Thing :: struct (x: $T) { y := x; }\n\
+     greet :: () { put(\"hi\\n\"); }\n\
+     main :: () {\n  \
+       a: Thing(\"hello\\n\");\n  \
+       b: Thing(greet);\n  \
+       put(a.y);\n  \
+       b.y();\n\
+     }\n",
+    "hello\nhi\n",
+  );
+}
