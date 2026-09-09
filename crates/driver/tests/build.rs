@@ -2950,3 +2950,16 @@ fn a_return_may_name_the_values_it_gives() {
     "1\n2\n10\n2\n30\n20\n1\n40\n",
   );
 }
+
+#[test]
+fn a_parameter_defaulted_to_an_overloaded_name_takes_the_first_overload() {
+  // Nothing at the declaration says which one is wanted (**L§7.5**).
+  assert_output(
+    "#import \"Basic\";\n\
+     pick :: () -> int { return 1; }\n\
+     pick :: (x: int) -> int { return x; }\n\
+     Holder :: struct { p: (a: int, c := pick) -> int; }\n\
+     main :: () { put(tprint(\"%\\n\", type_of(Holder.p))); }\n",
+    "procedure (s64, procedure () -> s64) -> s64\n",
+  );
+}

@@ -376,6 +376,15 @@ impl Checker<'_> {
             return (TypeId::UNKNOWN, false);
           };
           let value = self.expression_type(outer, source, expression);
+          // A name that stands for a whole overload set has no type of its
+          // own, and nothing here says which one is wanted; a parameter typed
+          // by such a default takes the first, as the reference does
+          // (**L§7.5**).
+          if let Some(first) = value.overloads.first().copied()
+            && self.types().is_unknown(self.harden(value.type_id))
+          {
+            return (self.decl_type(first).value, false);
+          }
           return (self.harden(value.type_id), false);
         };
         let varargs = self.is_varargs(source, type_inst);
