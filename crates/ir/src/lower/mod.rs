@@ -332,6 +332,12 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let Some(id) = self.type_table_global else {
       return;
     };
+    // The image begins with the `Runtime_Info` the program reads through
+    // `__runtime_info`, and ends with the `[] *Type_Info` that struct points
+    // at (**C§3.3**).
+    let mut table = std::mem::take(&mut self.type_table);
+    table.finish(self.checker);
+    self.type_table = table;
     let bytes: Box<[u8]> = Box::from(self.type_table.bytes());
     let relocations: Box<[(u64, u64)]> = Box::from(self.type_table.relocations());
     let global = &mut self.globals[id.0 as usize];
@@ -690,11 +696,20 @@ impl<'c, 'p> Lowering<'c, 'p> {
     if let Some(id) = self.global_ids.get(&decl) {
       return *id;
     }
-    let id = GlobalId(self.globals.len() as u32);
-    self.global_ids.insert(decl, id);
-
     let info = self.checker.program().tree().decl(decl);
     let name = self.text(info.name);
+    // `__runtime_info` is the compiler's, not somebody else's: the type table
+    // image *is* that struct, so the `#elsewhere` declaration
+    // `get_runtime_info` reads through resolves to it rather than to a symbol
+    // nothing defines (**C§3.3**).
+    if info.flags.contains(DeclarationFlags::ELSEWHERE) && name == RUNTIME_INFO_SYMBOL {
+      let table = self.type_table_id();
+      self.global_ids.insert(decl, table);
+      return table;
+    }
+
+    let id = GlobalId(self.globals.len() as u32);
+    self.global_ids.insert(decl, id);
     let type_id = self.checker.decl_type(decl).value;
     let (size, alignment) = self.size_align(type_id);
     let imported = info.flags.contains(DeclarationFlags::ELSEWHERE);
@@ -1021,6 +1036,11 @@ const GLOBAL_INIT_SYMBOL: &str = "__oj_global_init";
 
 /// The symbol the `Type_Info` image takes (**L§17**).
 const TYPE_TABLE_SYMBOL: &str = "__oj_type_table";
+
+/// The `Runtime_Info` the distribution reads the type table through, which
+/// `get_runtime_info` declares `#elsewhere` and the compiler defines: the type
+/// table image begins with it (**C§3.3**).
+const RUNTIME_INFO_SYMBOL: &str = "__runtime_info";
 
 /// The symbol the program's own entry point gets, so that the generated `main`
 /// the C runtime calls is free (**C§13**).

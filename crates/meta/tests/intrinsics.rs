@@ -117,11 +117,16 @@ fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
 
   // `add_build_string_scoped_by_message` splices into a scope a `Code` names,
   // which needs a `#run` that can stall; `add_global_data`/`add_data_segment`
-  // and `get_runtime_info` need the `Runtime_Info` image nothing builds yet;
+  // need `Global_Data_Info`, which nothing fills in yet;
   // `compiler_modify_procedure`/`compiler_make_procedure_live` need the
   // `Code_*` export read back into the AST; and `compiler_get_struct_location`
   // needs a `*Type_Info` followed back to the declaration it came from
   // (`docs/spec.md` §9, the M8 row).
+  //
+  // `get_runtime_info` is here for a different reason: it is declared
+  // `#compiler` but *has a body*, which reads `__runtime_info: Runtime_Info
+  // #elsewhere`. Nothing binds that symbol — the compiler defines the data
+  // instead, as the head of the type table image — so the body is what runs.
   assert_eq!(
     unanswered,
     [

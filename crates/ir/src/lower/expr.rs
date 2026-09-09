@@ -698,7 +698,14 @@ impl Lowering<'_, '_> {
           return None;
         }
         let id = self.global_id(decl);
-        let global_type = self.globals[id.0 as usize].type_id;
+        // A `#elsewhere` declaration reads a symbol somebody else laid out —
+        // `__runtime_info` is the type table image — so the type the *name*
+        // was declared with is what the storage holds, not whatever the
+        // global's own type says (**L§4.8**).
+        let global_type = match info.flags.contains(DeclarationFlags::ELSEWHERE) {
+          true => type_id,
+          false => self.globals[id.0 as usize].type_id,
+        };
         let pointer = self.pointer_to(global_type);
         let dest = self.value(pointer);
         self.emit(Inst::GlobalAddress { dest, global: id });

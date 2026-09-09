@@ -1895,3 +1895,31 @@ fn a_case_over_strings_compares_their_bytes() {
     "a debug build\na release build\nsomething else\nsomething else\n",
   );
 }
+
+#[test]
+fn the_type_table_is_reachable_through_runtime_info() {
+  // `get_runtime_info` is declared `#compiler` but has a body that reads
+  // `__runtime_info: Runtime_Info #elsewhere` (**C§3.3**); the compiler
+  // defines that symbol as the head of the type table image, so walking the
+  // table is what the program does rather than what the compiler answers.
+  assert_output(
+    "Runtime_Info :: struct {\n\
+       type_table: [] *Type_Info;\n\
+       global_data_info: *void;\n\
+     }\n\
+     get_runtime_info :: () -> Runtime_Info {\n  \
+       __runtime_info: Runtime_Info #elsewhere;\n  \
+       return __runtime_info;\n\
+     }\n\
+     Point :: struct { x: float; y: float; }\n\
+     main :: () {\n  \
+       wanted := type_info(Point);\n  \
+       table := get_runtime_info().type_table;\n  \
+       found := 0;\n  \
+       for table  if it == wanted  found += 1;\n  \
+       put_number(found);\n  \
+       put_number(cast(int) (table.count > 0));\n\
+     }\n",
+    "1\n1\n",
+  );
+}

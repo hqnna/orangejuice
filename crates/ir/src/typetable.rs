@@ -20,6 +20,7 @@ use oj_types::{ArrayKind, ProcedureFlags, StructId, TypeId, TypeKind};
 /// The size of a `string` and of a `[] T`: a count and a pointer
 /// (**L§3.3**, **L§3.4**).
 const VIEW_SIZE: u64 = 16;
+const VIEW_COUNT: u64 = 0;
 const VIEW_DATA: u64 = 8;
 
 /// A pointer's size on the one target orangejuice has (`docs/spec.md` §2).
@@ -36,7 +37,16 @@ pub(crate) struct TypeTable {
   /// Character data, shared between every name that spells the same thing.
   data: HashMap<Vec<u8>, u64>,
   records: Option<Records>,
+  /// Whether the `Runtime_Info` header has been reserved at offset 0. The
+  /// image *is* `__runtime_info`, so the struct the program reads has to be
+  /// the first thing in it (**C§3.3**).
+  reserved: bool,
 }
+
+/// The size of the `Runtime_Info` the image begins with when the program does
+/// not declare one to measure: a `[] *Type_Info` and a `*Global_Data_Info`,
+/// which is what this target's ABI makes of them (**C§3.3**).
+const RUNTIME_INFO_FALLBACK: u64 = 24;
 
 /// The `Type_Info*` structs Preload declares, and the tag values it gives
 /// them. Everything the image knows about its own shape comes from here.
@@ -84,9 +94,53 @@ impl TypeTable {
     &self.relocations
   }
 
+  /// Reserves the `Runtime_Info` the image begins with, whose `type_table` is
+  /// what `get_type_table` reads at runtime (**C§3.3**). The size comes from
+  /// the program's own declaration when it imports `Compiler`, since the
+  /// compiler never writes a distribution struct's layout down.
+  fn reserve_header(&mut self, checker: &mut Checker) {
+    if self.reserved {
+      return;
+    }
+    self.reserved = true;
+    let size = checker
+      .type_named("Runtime_Info")
+      .and_then(|type_id| checker.layout(type_id))
+      .map_or(RUNTIME_INFO_FALLBACK, |layout| {
+        layout.size.max(RUNTIME_INFO_FALLBACK)
+      });
+    let at = self.place(size, POINTER_SIZE);
+    debug_assert_eq!(at, 0, "the header is the first thing placed");
+  }
+
+  /// Closes the image: every type it holds gets a slot in the `[] *Type_Info`
+  /// the header points at, which is the table a program walks (**L§17**).
+  pub(crate) fn finish(&mut self, checker: &mut Checker) {
+    self.reserve_header(checker);
+    let mut placed = self.placements();
+    placed.sort_unstable_by_key(|(_, offset)| *offset);
+    let (data, count) = self.pointer_array(&placed);
+    self.write_i64(VIEW_COUNT, count as i64);
+    self.write_pointer(VIEW_DATA, data);
+  }
+
+  /// An array of `*Type_Info`, one per type in the image, each pointing at
+  /// that type's record.
+  fn pointer_array(&mut self, placed: &[(TypeId, u64)]) -> (u64, usize) {
+    if placed.is_empty() {
+      return (0, 0);
+    }
+    let at = self.place(placed.len() as u64 * POINTER_SIZE, POINTER_SIZE);
+    for (index, (_, offset)) in placed.iter().enumerate() {
+      self.write_pointer(at + index as u64 * POINTER_SIZE, *offset);
+    }
+    (at, placed.len())
+  }
+
   /// Where a type's `Type_Info` sits in the image, laying it — and whatever it
   /// points at — out the first time it is asked for.
   pub(crate) fn offset_of(&mut self, checker: &mut Checker, type_id: TypeId) -> u64 {
+    self.reserve_header(checker);
     if let Some(offset) = self.offsets.get(&type_id) {
       return *offset;
     }

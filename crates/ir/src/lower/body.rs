@@ -468,6 +468,20 @@ impl Lowering<'_, '_> {
     if kind != DeclKind::Variable || declaration.flags.contains(DeclarationFlags::IS_CONSTANT) {
       return;
     }
+    // `x: T #elsewhere;` declares no storage of its own wherever it is
+    // written: it names a symbol somebody else defines — the compiler, for
+    // `__runtime_info` — so there is nothing here to lay out or clear
+    // (**L§4.8**).
+    if self
+      .checker
+      .program()
+      .tree()
+      .decl(decl)
+      .flags
+      .contains(DeclarationFlags::ELSEWHERE)
+    {
+      return;
+    }
     let type_id = self.checker.decl_type(decl).value;
     if self.mentions_unknown(type_id) {
       self.unsupported(source, node, "a declaration of unknown type", "M7");
