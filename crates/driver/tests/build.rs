@@ -2303,3 +2303,57 @@ fn an_import_in_a_procedure_body_is_not_a_value() {
     "7\n",
   );
 }
+
+#[test]
+fn a_polymorphic_struct_named_without_arguments_bakes_with_their_defaults() {
+  // `a: A_Struct;` on a family whose parameters all have defaults is the
+  // instantiation those defaults make, and its parameters are reachable
+  // through it (**L§8.5**).
+  assert_output(
+    "A_Struct :: struct (param := 7) { x := 5; y := param; }\n\
+     Holder :: struct (T: Type = int, N: int = 10) { array: [N] T; }\n\
+     main :: () {\n  \
+       a: A_Struct;\n  \
+       put_number(a.x);\n  \
+       put_number(a.y);\n  \
+       put_number(a.param);\n  \
+       floats: Holder(float, 5);\n  \
+       put_number(floats.N);\n  \
+       h: Holder;\n  \
+       put_number(h.array.count);\n\
+     }\n",
+    "5\n7\n7\n5\n10\n",
+  );
+}
+
+#[test]
+fn a_type_variable_is_solved_through_a_procedure_typed_parameter() {
+  // `f: (T) -> $S` decides `S` by unifying the argument's own procedure type
+  // with the pattern; a part of the pattern with no variable in it decides
+  // nothing (**L§7.8**).
+  assert_output(
+    "call :: (f: (int) -> $S, x: int) -> S { return f(x); }\n\
+     both :: (f: ($T) -> $S, x: T) -> S { return f(x); }\n\
+     double :: (x: int) -> int { return x + x; }\n\
+     main :: () {\n  \
+       put_number(call(double, 4));\n  \
+       put_number(both(double, 5));\n\
+     }\n",
+    "8\n10\n",
+  );
+}
+
+#[test]
+fn a_polymorphic_procedure_passed_as_an_argument_decides_no_type_variable() {
+  // `square :: (x: $T) -> T` handed to `(f: (x: X) -> X, x: $X)` takes the
+  // shape the *other* argument decides (**L§7.8**).
+  assert_output(
+    "square :: (x: $T) -> T { return x * x; }\n\
+     apply :: (f: (x: X) -> X, x: $X, count: int) -> X {\n  \
+       for 1..count x = f(x);\n  \
+       return x;\n\
+     }\n\
+     main :: () { put_number(apply(square, 3, 2)); }\n",
+    "81\n",
+  );
+}

@@ -234,12 +234,7 @@ impl Checker<'_> {
       return None;
     }
     let members = self.struct_scope(definition)?;
-    let (body_source, body) = self.aggregate_owner(members)?;
     let arguments_scope = self.program().tree().parent(members)?;
-    let outer_scope = self.program().tree().parent(arguments_scope)?;
-
-    // Every argument has to be a constant, since the members are laid out
-    // against them (**L§8.5**).
     let parameters = self.program().tree().declarations(arguments_scope);
     // Struct arguments may be given by name, in any order, and two
     // instantiations that agree on them are one type (**L§8.5**).
@@ -257,6 +252,56 @@ impl Checker<'_> {
       };
       *given.get_mut(index)? = Some(argument.expression);
     }
+    self.bake_struct(family, definition, &given, scope, source)
+  }
+
+  /// A polymorphic struct named without an argument list at all: it bakes with
+  /// every parameter's default, which is what `a: A_Struct;` means for a family
+  /// whose parameters all have one (**L§8.5**). A parameter written as a bare
+  /// family is a *pattern* rather than a type, so it never comes through here.
+  pub(crate) fn bake_family_defaults(&mut self, family: TypeId) -> Option<TypeId> {
+    let definition = self.types().struct_of(family)?;
+    if !self
+      .types()
+      .struct_info(definition)
+      .nontextual_flags
+      .contains(oj_types::StructNontextualFlags::POLYMORPHIC)
+    {
+      return None;
+    }
+    let members = self.struct_scope(definition)?;
+    let arguments_scope = self.program().tree().parent(members)?;
+    let count = self.program().tree().declarations(arguments_scope).len();
+    let (source, _) = self.aggregate_owner(members)?;
+    self.bake_struct(
+      family,
+      definition,
+      &vec![None; count],
+      arguments_scope,
+      source,
+    )
+  }
+
+  /// Bakes one instantiation of a polymorphic struct: `given` holds the
+  /// argument each parameter was written with, in declaration order, and the
+  /// ones left out take their defaults (**L§8.5**).
+  fn bake_struct(
+    &mut self,
+    family: TypeId,
+    definition: oj_types::StructId,
+    given: &[Option<NodeId>],
+    scope: ScopeId,
+    source: SourceId,
+  ) -> Option<TypeId> {
+    let members = self.struct_scope(definition)?;
+    let (body_source, body) = self.aggregate_owner(members)?;
+    let arguments_scope = self.program().tree().parent(members)?;
+    let outer_scope = self.program().tree().parent(arguments_scope)?;
+
+    // Every argument has to be a constant, since the members are laid out
+    // against them (**L§8.5**).
+    let parameters = self.program().tree().declarations(arguments_scope);
+    let given = given.iter().copied();
     let mut bindings = Vec::with_capacity(parameters.len());
     for (parameter, expression) in parameters.iter().zip(given) {
       let declared = self.decl_type(*parameter).value;
@@ -835,6 +880,12 @@ impl Checker<'_> {
     actual: TypeId,
     substitution: &mut HashMap<PolymorphId, TypeId>,
   ) -> bool {
+    // A part of the pattern with no variable in it decides nothing; whether
+    // the argument fits there is what scoring answers (**L§7.8**). This is
+    // what lets `(int) -> $S` unify with `(int) -> string`.
+    if !self.is_polymorphic_type(pattern) {
+      return true;
+    }
     if self.types().is_unknown(actual) {
       return false;
     }
@@ -847,6 +898,12 @@ impl Checker<'_> {
       // argument only has to convert to it, which scoring checks
       // (**L§7.8**).
       (TypeKind::Polymorph(definition), _) => {
+        // An argument that is itself polymorphic — `square :: (x: $T) -> T`
+        // passed where `(x: X) -> X` is wanted — decides nothing; it takes the
+        // shape of whatever else does (**L§7.8**).
+        if self.is_polymorphic_type(actual) {
+          return true;
+        }
         substitution.entry(definition).or_insert(actual);
         true
       }

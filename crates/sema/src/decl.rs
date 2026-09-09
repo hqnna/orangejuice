@@ -119,7 +119,16 @@ impl Checker<'_> {
     }
 
     if let Some(type_inst) = declaration.type_inst {
-      let declared = self.type_from_node(decl_scope, source, type_inst);
+      let mut declared = self.type_from_node(decl_scope, source, type_inst);
+      // `a: A_Struct;` on a polymorphic struct whose parameters all have
+      // defaults is the instantiation those defaults make (**L§8.5**). A
+      // *parameter* written the same way stays a pattern, and takes whichever
+      // instantiation the call passed (**L§7.8**).
+      if self.program().tree().decl(id).kind != oj_scope::DeclKind::Parameter
+        && let Some(baked) = self.bake_family_defaults(declared)
+      {
+        declared = baked;
+      }
       // `T : Type : s32;` declares a type constant with its type spelled out.
       if declared == TypeId::TYPE
         && declaration.flags.contains(DeclarationFlags::IS_CONSTANT)

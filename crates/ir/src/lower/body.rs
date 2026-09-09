@@ -1671,6 +1671,12 @@ impl Lowering<'_, '_> {
     let Some(definition) = self.checker.types().struct_of(underlying) else {
       return;
     };
+    // A baked struct's defaults may name its parameters, which are constants
+    // of the instantiation (**L§8.5**).
+    let entered = self
+      .checker
+      .struct_instance_of(definition)
+      .map(|instance| self.checker.enter_instance(Some(instance)));
     let defaults = self.checker.member_defaults(definition);
     let nested: Vec<(u64, TypeId)> = self
       .checker
@@ -1716,6 +1722,9 @@ impl Lowering<'_, '_> {
       }
       self.body_source = previous_source;
       self.body_scope = previous_scope;
+    }
+    if let Some(previous) = entered {
+      self.checker.enter_instance(previous);
     }
   }
 

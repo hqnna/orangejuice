@@ -125,6 +125,20 @@ impl Checker<'_> {
         if !found.is_unknown() {
           return found;
         }
+        // A baked struct's *parameters* are reachable through it too:
+        // `floats.N` reads the `N` of `Holder(float, 5)`, which lives in the
+        // arguments scope above the members (**L§8.5**). Nothing above that is,
+        // which is what stops `a.OUTER_VALUE` (**L§8.3**).
+        if let Some(instance) = instance
+          && let Some(arguments) = self.program().tree().parent(scope)
+        {
+          let found = self.with_instance(Some(instance), |checker| {
+            checker.member_in_scope(arguments, name)
+          });
+          if !found.is_unknown() {
+            return found;
+          }
+        }
       }
       // A constant a `using` member imported is only in the flattened list.
       self.complete_type(underlying);

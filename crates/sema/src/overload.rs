@@ -494,6 +494,14 @@ impl Checker<'_> {
       oj_types::TypeKind::Polymorph(_) | oj_types::TypeKind::Unknown => true,
       oj_types::TypeKind::Pointer(pointee) => self.is_polymorphic_type(*pointee),
       oj_types::TypeKind::Array { element, .. } => self.is_polymorphic_type(*element),
+      // `f: (T) -> $S` is polymorphic even though nothing outside the
+      // signature mentions `S`: unifying the argument's procedure type with
+      // this one is what decides it (**L§7.8**).
+      oj_types::TypeKind::Procedure(signature) => signature
+        .arguments
+        .iter()
+        .chain(signature.returns.iter())
+        .any(|member| self.is_polymorphic_type(*member)),
       // A parameter written as the polymorphic struct *family* rather than as
       // one of its instantiations — `tc: Typechecked` where `Typechecked ::
       // struct (T: Type)` — takes whichever instantiation the call passes,

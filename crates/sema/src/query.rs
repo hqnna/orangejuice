@@ -195,6 +195,13 @@ impl Checker<'_> {
       .collect()
   }
 
+  /// The instantiation a baked polymorphic struct came from (**L§8.5**). A
+  /// member default that names one of the struct's parameters — `y := param;`
+  /// — only folds inside it.
+  pub fn struct_instance_of(&self, definition: oj_types::StructId) -> Option<InstanceId> {
+    self.struct_instance(definition)
+  }
+
   /// The scope an expression was written in.
   pub fn scope_for(&self, source: SourceId, node: NodeId, fallback: ScopeId) -> ScopeId {
     self.scope_at(source, node, fallback)
@@ -717,6 +724,18 @@ impl Checker<'_> {
     let Some(definition) = self.types().struct_of(type_id) else {
       return;
     };
+    // A default of a baked struct may name one of its parameters, which only
+    // folds under the instantiation (**L§8.5**).
+    if let Some(instance) = self.struct_instance(definition) {
+      let previous = self.enter_instance(Some(instance));
+      self.write_defaults_in(definition, at, bytes);
+      self.enter_instance(previous);
+      return;
+    }
+    self.write_defaults_in(definition, at, bytes);
+  }
+
+  fn write_defaults_in(&mut self, definition: oj_types::StructId, at: usize, bytes: &mut [u8]) {
     let members: Vec<(usize, TypeId, u64, bool)> = self
       .types()
       .struct_info(definition)
