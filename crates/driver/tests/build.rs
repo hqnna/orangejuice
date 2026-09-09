@@ -2499,3 +2499,50 @@ fn a_static_ifx_lowers_only_the_branch_it_chose() {
     "elsewhere\n6\n",
   );
 }
+
+#[test]
+fn a_literal_converts_to_a_variant_of_the_type_it_is_a_literal_of() {
+  // `a: Handle = 5` and `"Hello"` passed where a `#type,distinct string` is
+  // wanted; a value the program computed still does not (**L§3.11**).
+  assert_output(
+    "Handle :: #type,distinct u32;\n\
+     Filename :: #type,distinct string;\n\
+     name :: (n: Filename) -> int { return n.count; }\n\
+     main :: () {\n  \
+       a: Handle = 5;\n  \
+       put_number(cast(int)(3 * a + 2));\n  \
+       put_number(name(\"Hello\"));\n\
+     }\n",
+    "17\n5\n",
+  );
+}
+
+#[test]
+fn a_macros_varargs_slot_is_the_array_rather_than_its_first_argument() {
+  // A macro binds a constant argument into the expansion, but the `..T` slot
+  // is the array the call site builds and binds nothing (**L§7.3**).
+  assert_output(
+    "count :: (args: .. int) -> int { return args.count; }\n\
+     forward :: (args: .. int) -> int #expand { return count(..args); }\n\
+     main :: () {\n  \
+       put_number(forward(1, 2, 3));\n  \
+       put_number(forward());\n\
+     }\n",
+    "3\n0\n",
+  );
+}
+
+#[test]
+fn a_positional_argument_skips_a_slot_a_named_one_claimed() {
+  // `f(i = 5, s = "x", v = 1, 2, 3)` puts the trailing arguments in `v`,
+  // since `s` and `i` are spoken for (**L§7.3**).
+  assert_output(
+    "gather :: (s: string, i: int, v: .. int) -> int {\n  \
+       total := i;\n  \
+       for v  total += it;\n  \
+       return total;\n\
+     }\n\
+     main :: () { put_number(gather(i = 5, s = \"x\", v = 1, 2, 3)); }\n",
+    "11\n",
+  );
+}

@@ -233,8 +233,24 @@ impl Checker<'_> {
     arguments: &[CallArgument],
   ) -> Option<Vec<usize>> {
     let mut slots = Vec::with_capacity(arguments.len());
+    // A slot a named argument claimed is not one a positional argument can
+    // land in: `f(i = 5, s = "How", v = "are", "you")` puts `"you"` in `v`,
+    // since `s` and `i` are spoken for (**L§7.3**).
+    let claimed: Vec<usize> = arguments
+      .iter()
+      .filter_map(|argument| argument.name)
+      .filter_map(|name| {
+        signature
+          .parameters
+          .iter()
+          .position(|parameter| parameter.name == Some(name))
+      })
+      .collect();
     let mut next = 0usize;
     for argument in arguments {
+      while argument.name.is_none() && claimed.contains(&next) {
+        next += 1;
+      }
       let index = match argument.name {
         Some(name) => signature
           .parameters

@@ -99,6 +99,17 @@ impl Checker<'_> {
       return Some(LITERAL);
     }
 
+    // A literal converts to a variant of the type it is a literal of, which is
+    // the point of `a: Handle = 5` and of passing `"Hello"` where a
+    // `#type,distinct string` is wanted (**L§3.11**). A value the program
+    // computed does not, which is what makes the variant worth having.
+    if value.constant.is_some()
+      && matches!(self.types().kind(target), TypeKind::Variant(_))
+      && self.types().underlying(target) == from
+    {
+      return Some(LITERAL);
+    }
+
     // Two procedure types that a call site cannot tell apart are the same
     // here: `-> void` returns one void value where a header with no returns
     // returns none (**L§3.1**), and where the procedure *came from* —

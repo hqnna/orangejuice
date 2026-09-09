@@ -598,7 +598,7 @@ Implicit conversions (in the fixed-target case), each recorded as a `Code_Cast` 
 12. Polymorphic procedure / quick lambda → concrete procedure type (7.8).
 13. Struct literal `Vector4.{...}` → variant of that struct.
 
-No implicit conversions exist between distinct structs, between enums, from enum to integer variables, from integer to bool (use `cast(bool)`, `!`, or a condition), from `bool` to integer, from a runtime `string` to `*u8`, or from any type to a `#type,distinct` variant.
+No implicit conversions exist between distinct structs, between enums, from enum to integer variables, from integer to bool (use `cast(bool)`, `!`, or a condition), from `bool` to integer, from a runtime `string` to `*u8`, or from a *computed value* to a `#type,distinct` variant. A **literal** does convert to a variant of the type it is a literal of — `a: Handle = 5` on `Handle :: #type,distinct u32`, and `"Hello"` passed where a `#type,distinct string` is wanted — which is the point of the variant: the type safety is against values the program computed.
 
 **Downward flow exceptions** (types pushed from the root to the leaves after bottom-up fails): integer literals; unary-dot enum identifiers (an "unknown enum" placeholder type propagates through `|`, `&`, `~`, `ifx`, binary operators and is resolved in a post-pass — `d = .WEST | .EAST;`, `d &= ~.SOUTH`, `flags = ifx c then .A else .B`); `.{}`/`.[]` literals; `null`.
 

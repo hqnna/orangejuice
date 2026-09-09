@@ -657,7 +657,10 @@ impl Checker<'_> {
       // A macro's `Code` parameter is the argument itself, unevaluated
       // (**L§13.1**); anything else it was handed a constant for is a constant
       // of the expansion, which is what lets `#assert` and `#if` read it.
+      // The `..T` slot is the array the call site builds, not any one of the
+      // arguments that went into it, so it binds nothing (**L§7.3**).
       if signature.is_macro
+        && vararg_slot != Some(index)
         && let Some(decl) = self.header_parameter_decl(source, signature, index)
       {
         if parameter.type_id == TypeId::CODE
