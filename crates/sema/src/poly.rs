@@ -744,6 +744,15 @@ impl Checker<'_> {
         && let Some(decl) = self.header_parameter_decl(source, signature, index)
       {
         solution.overrides.push((decl, concrete));
+      }
+      // A polymorphic procedure handed to a procedure pattern takes the shape
+      // the pattern asks for before it decides anything (**L§7.9**).
+      else if let Some(matched) =
+        self.unify_polymorphic_procedure(target, argument, &mut substitution)
+      {
+        if !matched {
+          return None;
+        }
       } else if !self.unify_polymorph(target, &argument.value, &mut substitution) {
         return None;
       }
@@ -1128,6 +1137,58 @@ impl Checker<'_> {
       }
       _ => type_id,
     }
+  }
+
+  /// A polymorphic procedure written where a procedure pattern goes — a quick
+  /// lambda, or a `$`-marked header passed by name — is instantiated to the
+  /// shape the pattern asks for, and what that instantiation returns is what
+  /// decides the rest of the pattern: `map(strings, x => x.count)` solves `$S`
+  /// from the lambda once `$T` has made the lambda's own parameter a `string`
+  /// (**L§7.8**, **L§7.9**).
+  ///
+  /// `None` when this is not that case at all, so the ordinary unification
+  /// still gets its turn.
+  fn unify_polymorphic_procedure(
+    &mut self,
+    pattern: TypeId,
+    argument: &CallArgument,
+    substitution: &mut HashMap<PolymorphId, TypeId>,
+  ) -> Option<bool> {
+    let wanted = self.types().procedure_of(pattern)?.clone();
+    let signature = match self.polymorphic_procedure(&argument.value) {
+      Some(decl) => self.signature_of(decl),
+      None => match argument.written {
+        Some((source, node, scope))
+          if matches!(
+            self.ast(source).map(|ast| ast.data(node)),
+            Some(NodeData::ProcedureHeader(_))
+          ) =>
+        {
+          self.signature_of_header(source, node, scope)
+        }
+        _ => None,
+      },
+    };
+    let signature = signature.filter(|signature| signature.polymorphic)?;
+    // Only what the pattern already knows can shape it; a parameter still
+    // waiting on a variable of its own is not something to instantiate with.
+    let arguments: Vec<TypeId> = wanted
+      .arguments
+      .iter()
+      .map(|type_id| self.substitute(*type_id, substitution))
+      .collect();
+    if arguments
+      .iter()
+      .any(|type_id| self.is_polymorphic_type(*type_id))
+    {
+      return None;
+    }
+    let arguments: Vec<CallArgument> = arguments
+      .into_iter()
+      .map(|type_id| CallArgument::positional(Expr::value(type_id)))
+      .collect();
+    let specialized = self.specialize(&signature, &arguments)?;
+    Some(self.unify_types(pattern, specialized.type_id, substitution))
   }
 
   /// Matches a parameter type against the type of what a call site passes,

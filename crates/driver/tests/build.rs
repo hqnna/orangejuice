@@ -3087,3 +3087,22 @@ fn a_procedure_written_where_a_value_goes_is_its_own_address() {
     "42\n",
   );
 }
+
+#[test]
+fn a_quick_lambda_takes_the_shape_a_polymorphic_parameter_asks_for() {
+  // `$S` is decided by what the lambda returns once `$T` has said what its
+  // own parameter is (**L§7.8**, **L§7.9**).
+  assert_output(
+    "#import \"Basic\";\n\
+     map :: (array: [] $T, f: (T) -> $S) -> [..] S {\n  \
+       results: [..] S;\n  \
+       for array  array_add(*results, f(it));\n  \
+       return results;\n\
+     }\n\
+     main :: () {\n  \
+       words :: string.[\"aa\", \"bbb\", \"cccc\"];\n  \
+       for map(words, x => x.count)  put_number(it);\n\
+     }\n",
+    "2\n3\n4\n",
+  );
+}
