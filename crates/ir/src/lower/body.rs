@@ -899,6 +899,8 @@ impl Lowering<'_, '_> {
       break_block: join,
       continue_block: join,
       depth: self.defers.len(),
+      label: None,
+      removal: None,
     };
     self.loops.push(breaks);
     for (index, case) in cases.iter().enumerate() {
@@ -920,6 +922,12 @@ impl Lowering<'_, '_> {
     self.current = join;
   }
 
+  /// A `for` is reached by a labelled `break` through its iterator's name
+  /// (**L§6.5**).
+  fn loop_label(&self, it: Option<DeclId>) -> Option<Symbol> {
+    Some(self.checker.program().tree().decl(it?).name)
+  }
+
   fn while_statement(&mut self, condition: NodeId, block: NodeId) {
     let source = self.body_source;
     let head = self.new_block();
@@ -929,7 +937,24 @@ impl Lowering<'_, '_> {
 
     self.current = head;
     let scope = self.checker.scope_for(source, condition, self.body_scope);
-    match self.condition(scope, source, condition) {
+    // `while name := expression` names the loop after the variable it declares
+    // for the condition, which is what a labelled `break` reaches it by
+    // (**L§6.4**). The variable is written each time round.
+    let (label, test) = match self.checker.tree_of(source).map(|ast| ast.data(condition)) {
+      Some(NodeData::Declaration(_)) => {
+        self.declaration_statement(condition);
+        let name = self.checker.name_at(source, condition);
+        let value = self
+          .checker
+          .decl_at(source, condition)
+          .and_then(|decl| self.declaration_place(decl))
+          .and_then(|place| self.truth(source, condition, place))
+          .map(|value| self.scalar(value));
+        (name, value)
+      }
+      _ => (None, self.condition(scope, source, condition)),
+    };
+    match test {
       Some(value) => self.terminate(Terminator::Branch {
         condition: value,
         then_block: body,
@@ -943,6 +968,8 @@ impl Lowering<'_, '_> {
       break_block: exit,
       continue_block: head,
       depth: self.defers.len(),
+      label,
+      removal: None,
     });
     self.statement(block);
     self.loops.pop();
@@ -953,16 +980,35 @@ impl Lowering<'_, '_> {
 
   fn loop_control(&mut self, node: NodeId, control: LoopControlType, target: Option<NodeId>) {
     let source = self.body_source;
-    if target.is_some() {
-      self.unsupported(source, node, "a labelled 'break' or 'continue'", "M7");
-      return;
-    }
-    let Some(entry) = self.loops.last() else {
+    // `break label;` names a `while`'s condition variable or a `for`'s
+    // iterator, and leaves *that* loop (**L§6.4**, **L§6.5**).
+    let entry = match target.and_then(|target| self.checker.name_at(source, target)) {
+      Some(label) => self
+        .loops
+        .iter()
+        .rev()
+        .find(|entry| entry.label == Some(label)),
+      None => self.loops.last(),
+    };
+    let Some(entry) = entry else {
+      if let Some(target) = target {
+        let name = self
+          .checker
+          .name_at(source, target)
+          .map(|name| self.text(name))
+          .unwrap_or_default();
+        self.error(source, node, format!("No loop named '{name}' is in scope."));
+        return;
+      }
       self.error(source, node, "'break' is not inside a loop.");
       return;
     };
-    let (break_block, continue_block, depth) =
-      (entry.break_block, entry.continue_block, entry.depth);
+    let (break_block, continue_block, depth, removal) = (
+      entry.break_block,
+      entry.continue_block,
+      entry.depth,
+      entry.removal,
+    );
     match control {
       LoopControlType::Break => {
         self.run_defers_to(depth);
@@ -972,9 +1018,14 @@ impl Lowering<'_, '_> {
         self.run_defers_to(depth);
         self.terminate(Terminator::Jump(continue_block));
       }
-      LoopControlType::Remove => {
-        self.unsupported(source, node, "'remove'", "M7");
-      }
+      LoopControlType::Remove => match removal {
+        Some(removal) => self.remove_statement(node, removal),
+        None => self.error(
+          source,
+          node,
+          "'remove' is only for a 'for' over an array whose count can change.",
+        ),
+      },
     }
   }
 
@@ -1346,9 +1397,10 @@ impl Lowering<'_, '_> {
     it_decl: Option<DeclId>,
   ) {
     let source = self.body_source;
-    if reverse {
-      // The reference warns and iterates forwards; orangejuice reports it
-      // (`docs/spec.md` §10).
+    // `for #v2 < a..b` visits the numbers of `a..b` in reverse (**L§6.5**).
+    // Without `#v2` the reference warns and iterates forwards; orangejuice
+    // reports it instead (`docs/spec.md` §10).
+    if reverse && !payload.for_flags.contains(ForFlags::TEMPORARY_V2) {
       self.error(
         source,
         node,
@@ -1374,6 +1426,12 @@ impl Lowering<'_, '_> {
       return;
     };
 
+    // A reverse range starts at its far end and walks down to the near one.
+    let (first, last) = match reverse {
+      true => (end, start),
+      false => (start, end),
+    };
+
     let it_local = self.new_local(String::from("it"), it_type);
     if let Some(id) = it_decl {
       {
@@ -1382,13 +1440,13 @@ impl Lowering<'_, '_> {
       }
     }
     let it_address = self.local_address(it_local);
-    self.store(it_address, start);
+    self.store(it_address, first);
     let index_address = self.local_address(index_local);
     let zero = self.constant(Constant::Int(0), TypeId::S64);
     self.store(index_address, zero);
     let limit_local = self.new_local(String::from("limit"), it_type);
     let limit_address = self.local_address(limit_local);
-    self.store(limit_address, end);
+    self.store(limit_address, last);
 
     let head = self.new_block();
     let body = self.new_block();
@@ -1409,14 +1467,11 @@ impl Lowering<'_, '_> {
       type_id: it_type,
       indirect: true,
     };
-    match self.binary_values(
-      source,
-      node,
-      crate::ir::BinaryOp::LessOrEqual,
-      current,
-      limit,
-      TypeId::BOOL,
-    ) {
+    let test = match reverse {
+      true => crate::ir::BinaryOp::GreaterOrEqual,
+      false => crate::ir::BinaryOp::LessOrEqual,
+    };
+    match self.binary_values(source, node, test, current, limit, TypeId::BOOL) {
       Some(condition) => {
         let condition = self.scalar(condition);
         self.terminate(Terminator::Branch {
@@ -1433,13 +1488,15 @@ impl Lowering<'_, '_> {
       break_block: exit,
       continue_block: step,
       depth: self.defers.len(),
+      label: self.loop_label(it_decl),
+      removal: None,
     });
     self.statement(payload.block);
     self.loops.pop();
     self.terminate(Terminator::Jump(step));
 
     self.current = step;
-    self.increment(it_local, it_type, 1);
+    self.increment(it_local, it_type, if reverse { -1 } else { 1 });
     self.increment(index_local, TypeId::S64, 1);
     self.terminate(Terminator::Jump(head));
 
@@ -1609,10 +1666,25 @@ impl Lowering<'_, '_> {
     };
     self.store(it_address, source_value);
 
+    // `remove` is legal on a `[] T` and a `[..] T`, whose count it decrements;
+    // a fixed array has no count to change (**L§6.5**).
+    let removal = match kind {
+      ArrayKind::Fixed(_) => None,
+      _ => Some(crate::lower::Removal {
+        index: index_local,
+        count: count_local,
+        data: data_local,
+        element,
+        array_count: self.offset(subject.id, 0, TypeId::S64),
+        reverse,
+      }),
+    };
     self.loops.push(Loop {
       break_block: exit,
       continue_block: step,
       depth: self.defers.len(),
+      label: self.loop_label(it_decl),
+      removal,
     });
     self.statement(payload.block);
     self.loops.pop();
@@ -1623,6 +1695,80 @@ impl Lowering<'_, '_> {
     self.terminate(Terminator::Jump(head));
 
     self.current = exit;
+  }
+
+  /// `remove it;`: the last element takes the current one's slot and the count
+  /// comes down by one, so the loop visits the slot again (**L§6.5**).
+  fn remove_statement(&mut self, node: NodeId, removal: crate::lower::Removal) {
+    let source = self.body_source;
+    let count_address = self.local_address(removal.count);
+    let count = self.value(TypeId::S64);
+    self.emit(Inst::Load {
+      dest: count,
+      address: count_address,
+    });
+    let one = self.value(TypeId::S64);
+    self.emit(Inst::Const {
+      dest: one,
+      value: Constant::Int(1),
+    });
+    let last = self.value(TypeId::S64);
+    self.emit(Inst::Binary {
+      dest: last,
+      operator: crate::ir::BinaryOp::Subtract,
+      left: count,
+      right: one,
+    });
+    self.emit(Inst::Store {
+      address: count_address,
+      value: last,
+    });
+    self.emit(Inst::Store {
+      address: removal.array_count,
+      value: last,
+    });
+
+    let pointer = self.pointer_to(removal.element);
+    let data_address = self.local_address(removal.data);
+    let base = self.value(pointer);
+    self.emit(Inst::Load {
+      dest: base,
+      address: data_address,
+    });
+    let index_address = self.local_address(removal.index);
+    let index = self.value(TypeId::S64);
+    self.emit(Inst::Load {
+      dest: index,
+      address: index_address,
+    });
+    let (stride, _) = self.size_align(removal.element);
+    let hole = self.value(pointer);
+    self.emit(Inst::Index {
+      dest: hole,
+      base,
+      index,
+      stride,
+    });
+    let tail = self.value(pointer);
+    self.emit(Inst::Index {
+      dest: tail,
+      base,
+      index: last,
+      stride,
+    });
+    let moved = Val {
+      id: tail,
+      type_id: removal.element,
+      indirect: true,
+    };
+    self.store(hole, moved);
+    let _ = (source, node);
+
+    // The step will advance past this slot, so a forward loop steps back to
+    // visit what has just been moved into it.
+    if !removal.reverse {
+      self.increment(removal.index, TypeId::S64, -1);
+    }
   }
 
   fn increment(&mut self, local: LocalId, type_id: TypeId, by: i64) {

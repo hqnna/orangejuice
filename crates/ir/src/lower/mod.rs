@@ -43,6 +43,31 @@ struct Loop {
   break_block: BlockId,
   continue_block: BlockId,
   depth: usize,
+  /// The name a labelled `break` or `continue` reaches this loop by: the
+  /// variable a `while` declared for its condition, or a `for`'s iterator
+  /// (**L§6.4**, **L§6.5**). A `case`'s break target has none.
+  label: Option<Symbol>,
+  /// What `remove` needs, when the loop is a `for` over an array that admits
+  /// one (**L§6.5**).
+  removal: Option<Removal>,
+}
+
+/// The pieces an unordered `remove` works on: the last element is moved into
+/// the current slot and the count comes down by one (**L§6.5**).
+#[derive(Clone, Copy)]
+struct Removal {
+  /// The loop's index, which is also its `it_index`.
+  index: LocalId,
+  /// The loop's own copy of the count, which its head tests against.
+  count: LocalId,
+  /// The loop's copy of the array's data pointer.
+  data: LocalId,
+  element: TypeId,
+  /// The array's own count word, so that the container shrinks too.
+  array_count: ValueId,
+  /// Whether the loop runs downwards, in which case the element moved in has
+  /// already been visited and the index needs no adjustment.
+  reverse: bool,
 }
 
 /// One macro expanded into the procedure being lowered (**L§7.13**): where a

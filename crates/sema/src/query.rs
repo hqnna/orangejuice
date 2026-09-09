@@ -208,7 +208,12 @@ impl Checker<'_> {
   }
 
   pub fn name_at(&self, source: SourceId, node: NodeId) -> Option<Symbol> {
-    self.ident_name(source, node)
+    match self.ast(source)?.data(node) {
+      NodeData::Declaration(declaration) => {
+        self.ident_name(source, declaration.name.or(declaration.expression)?)
+      }
+      _ => self.ident_name(source, node),
+    }
   }
 
   /// Whether a value converts to a target implicitly (**L§5.10**).

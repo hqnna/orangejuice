@@ -2389,3 +2389,71 @@ fn an_optionally_baked_parameter_takes_a_runtime_value_too() {
     "1\n1\n0\n",
   );
 }
+
+#[test]
+fn a_labelled_break_leaves_the_loop_its_condition_variable_names() {
+  // `while name := expression` names the loop after the variable it declares,
+  // and `break name;` leaves that one (**L§6.4**).
+  assert_output(
+    "main :: () {\n  \
+       j := 0;\n  \
+       while j_loop := j < 4 {\n    \
+         defer j += 1;\n    \
+         i := 0;\n    \
+         while i_loop := i < 4 {\n      \
+           defer i += 1;\n      \
+           put_number(i * 10 + j);\n      \
+           if i == 1 && j == 1  break j_loop;\n    \
+         }\n  \
+       }\n  \
+       put_number(99);\n\
+     }\n",
+    "0\n10\n20\n30\n1\n11\n99\n",
+  );
+}
+
+#[test]
+fn a_labelled_continue_names_a_for_by_its_iterator() {
+  assert_output(
+    "main :: () {\n  \
+       total := 0;\n  \
+       for outer: 1..3 {\n    \
+         for inner: 1..3 {\n      \
+           if inner == 2  continue outer;\n      \
+           total += outer * inner;\n    \
+         }\n  \
+       }\n  \
+       put_number(total);\n\
+     }\n",
+    "6\n",
+  );
+}
+
+#[test]
+fn a_reverse_range_loop_marked_v2_counts_down() {
+  // `for #v2 < a..b` visits the numbers of `a..b` in reverse (**L§6.5**).
+  assert_output(
+    "main :: () {\n  \
+       for #v2 < 10..15  put_number(it);\n  \
+       for #v2 < 15..10  put_number(0);\n\
+     }\n",
+    "15\n14\n13\n12\n11\n10\n",
+  );
+}
+
+#[test]
+fn remove_takes_the_last_element_into_the_hole_it_leaves() {
+  // Unordered removal: the count comes down and the slot is visited again
+  // (**L§6.5**).
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       numbers: [..] int;\n  \
+       for 1..10  array_add(*numbers, it);\n  \
+       for numbers  if (it & 1) == 0  remove it;\n  \
+       for numbers  put_number(it);\n  \
+       put_number(numbers.count);\n\
+     }\n",
+    "1\n9\n3\n7\n5\n5\n",
+  );
+}

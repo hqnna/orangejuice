@@ -550,7 +550,7 @@ impl Lowering<'_, '_> {
     Some(self.scalar(boolean))
   }
 
-  fn truth(&mut self, source: SourceId, node: NodeId, value: Val) -> Option<Val> {
+  pub(super) fn truth(&mut self, source: SourceId, node: NodeId, value: Val) -> Option<Val> {
     if self.checker.types().underlying(value.type_id) == TypeId::BOOL {
       return Some(value);
     }
@@ -683,6 +683,18 @@ impl Lowering<'_, '_> {
     Some(Val {
       id: slot,
       type_id: used.member.type_id,
+      indirect: true,
+    })
+  }
+
+  /// The storage a local declaration stands for, once the statement that
+  /// declared it has run.
+  pub(super) fn declaration_place(&mut self, decl: DeclId) -> Option<Val> {
+    let local = self.local_of_decl.get(&self.local_key(decl)).copied()?;
+    let address = self.local_address(local);
+    Some(Val {
+      id: address,
+      type_id: self.locals[local.0 as usize].type_id,
       indirect: true,
     })
   }

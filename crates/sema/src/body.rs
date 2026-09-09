@@ -548,6 +548,27 @@ impl Checker<'_> {
   /// `if`, `while` and `!` accept any value with a truth value (**L§5.9**).
   fn check_condition(&mut self, context: &Context, node: NodeId) {
     let (scope, source) = (context.scope, context.source);
+    // `while name := expression` declares the loop's name and tests the value
+    // it takes (**L§6.4**).
+    if let Some(NodeData::Declaration(_)) = self.ast(source).map(|ast| ast.data(node)) {
+      self.check_statement(context, node);
+      let declared = self
+        .decl_at(source, node)
+        .map(|decl| self.decl_type(decl).value)
+        .unwrap_or(TypeId::UNKNOWN);
+      if !self.has_truth_value(declared) && !self.mentions_unknown(declared) {
+        let span = self
+          .ast(source)
+          .map_or(Span::at(0), |ast| ast.node(node).span);
+        let given = self.type_name(declared);
+        self.error(
+          source,
+          span,
+          format!("Type {given} cannot implicitly coerce to bool."),
+        );
+      }
+      return;
+    }
     let value = self.expression_type(scope, source, node);
     if self.has_truth_value(value.type_id) {
       return;
