@@ -3464,3 +3464,21 @@ fn this_names_the_procedure_or_type_that_contains_it() {
     "120\n24\ntrue true\n",
   );
 }
+
+#[test]
+fn a_call_through_a_type_of_annotation_takes_that_headers_defaults() {
+  // The type is the other procedure's either way; what the annotation carries
+  // is its parameter names and defaults, which is what the reference does
+  // — and calls strange (**L§7.2**).
+  assert_output(
+    "with_defaults :: (a := 1, b := 2) -> int { return a * 10 + b; }\n\
+     without :: (a: int, b: int) -> int { return a * 10 + b; }\n\
+     main :: () {\n  \
+       f: type_of(with_defaults);\n  \
+       f = without;\n  \
+       put_number(f());\n  \
+       put_number(f(7));\n\
+     }\n",
+    "12\n72\n",
+  );
+}

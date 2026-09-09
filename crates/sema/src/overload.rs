@@ -376,8 +376,24 @@ impl Checker<'_> {
     }
     let is_macro = header.is_some_and(|(source, node)| self.is_macro_header(source, node));
 
-    let parameters = match header {
-      Some((source, node)) => self.header_parameters(source, node, &signature.arguments),
+    // The defaults live on the *annotation*: `other: type_of(f);` is `f`'s type
+    // written out, and a call through `other` takes `f`'s defaults with it —
+    // which the reference calls strange and inconsistent, and does (**L§7.2**).
+    let annotated = header.or_else(|| self.annotated_header(candidate));
+    let parameters = match annotated {
+      Some((source, node)) => {
+        let mut parameters = self.header_parameters(source, node, &signature.arguments);
+        // A default written on another declaration's header lives in that
+        // file, not in whichever one this signature came from.
+        if header.is_none() {
+          for parameter in &mut parameters {
+            if parameter.default.is_some() {
+              parameter.default_source = Some(source);
+            }
+          }
+        }
+        parameters
+      }
       None => signature
         .arguments
         .iter()
@@ -413,6 +429,44 @@ impl Checker<'_> {
     };
     let signature = self.signature_of(only)?;
     signature.polymorphic.then_some(only)
+  }
+
+  /// The procedure header a declaration's *type slot* named, when it was
+  /// written `x: type_of(f)`. The type is `f`'s either way; what this finds is
+  /// the parameter names and defaults written on it (**L§7.2**).
+  fn annotated_header(&mut self, candidate: DeclId) -> Option<(SourceId, NodeId)> {
+    let info = self.program().tree().decl(candidate);
+    let (source, node) = (info.source?, info.node?);
+    let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
+      return None;
+    };
+    let NodeData::TypeInstantiation(inst) = self.ast(source)?.data(declaration.type_inst?) else {
+      return None;
+    };
+    let NodeData::ExpressionQuery {
+      query_kind: oj_syntax::ast::ExpressionQueryKind::TypeOf,
+      expression_to_query,
+    } = self.ast(source)?.data(inst.type_valued_expression?)
+    else {
+      return None;
+    };
+    let queried = *expression_to_query;
+    let scope = self.scope_at(source, queried, info.scope);
+    let named = self.expression_type(scope, source, queried);
+    let [only] = named.overloads[..] else {
+      return None;
+    };
+    let other = self.program().tree().decl(only);
+    let (other_source, other_node) = (other.source?, other.node?);
+    let NodeData::Declaration(other) = self.ast(other_source)?.data(other_node) else {
+      return None;
+    };
+    let expression = other.expression?;
+    matches!(
+      self.ast(other_source)?.data(expression),
+      NodeData::ProcedureHeader(_)
+    )
+    .then_some((other_source, expression))
   }
 
   /// Says that a header is polymorphic after all, so that everything written
