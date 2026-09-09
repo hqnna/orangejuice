@@ -100,8 +100,24 @@ impl Checker<'_> {
     let Some(expression) = inst.type_valued_expression else {
       return TypeId::UNKNOWN;
     };
+    let must_implement = inst.must_implement;
+    let interface = inst.inst_flags.contains(InstFlags::INTERFACE);
 
-    self.type_from_node(scope, source, expression)
+    let type_id = self.type_from_node(scope, source, expression);
+    // `$T/Entity` restricts what the variable may be solved as: the argument's
+    // type has to be `Entity` or something that reaches it through `using`/`#as`
+    // (**L§7.8**).
+    if let Some(restriction) = must_implement
+      && matches!(self.types().kind(type_id), TypeKind::Polymorph(_))
+    {
+      let restriction = self.type_from_node(scope, source, restriction);
+      if let TypeKind::Polymorph(definition) = *self.types().kind(type_id) {
+        let info = self.types_mut().polymorph_info_mut(definition);
+        info.restriction = Some(restriction);
+        info.interface = interface;
+      }
+    }
+    type_id
   }
 
   /// Declares the polymorph variable `name` written at `node`, once per site.
@@ -117,6 +133,7 @@ impl Checker<'_> {
     let (_, type_id) = self.types_mut().new_polymorph(PolymorphInfo {
       name,
       restriction: None,
+      interface: false,
     });
     self.record_aggregate_type(source, node, type_id);
     type_id

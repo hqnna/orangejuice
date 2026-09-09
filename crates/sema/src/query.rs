@@ -169,7 +169,7 @@ impl Checker<'_> {
     let defaults = self.member_defaults_of(definition).to_vec();
     defaults
       .into_iter()
-      .filter(|default| default.path.is_empty() != paths)
+      .filter(|default| default.from_statement == paths)
       .filter_map(|default| {
         let member = self
           .types()
@@ -780,7 +780,7 @@ impl Checker<'_> {
     let defaults: Vec<(usize, SourceId, NodeId)> = self
       .member_defaults_of(definition)
       .iter()
-      .filter(|default| default.path.is_empty())
+      .filter(|default| !default.from_statement)
       .map(|default| (default.member, default.source, default.node))
       .collect();
     let scope = self.struct_scope(definition);

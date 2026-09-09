@@ -452,4 +452,7 @@ pub struct PolymorphInfo {
   pub name: Symbol,
   /// The `$T/Restriction` a candidate must satisfy, if one was written.
   pub restriction: Option<TypeId>,
+  /// Whether the restriction was written `$T/interface R`, which asks for the
+  /// *members* of `R` rather than for `R` itself (**L§7.8**).
+  pub interface: bool,
 }

@@ -252,6 +252,7 @@ fn untyped_and_polymorphic_types_have_no_layout() {
   let (_, variable) = types.new_polymorph(PolymorphInfo {
     name: interner.intern(b"T"),
     restriction: None,
+    interface: false,
   });
   for id in [
     TypeId::UNTYPED_INT,

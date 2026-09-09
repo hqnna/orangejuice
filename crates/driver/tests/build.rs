@@ -2652,3 +2652,47 @@ fn a_procedure_nested_in_a_polymorphic_body_sees_that_specialization() {
     "1\n2\n",
   );
 }
+
+#[test]
+fn a_type_restriction_says_what_a_variable_may_be_solved_as() {
+  // `$T/Entity` takes an `Entity` or something that reaches one through
+  // `using`/`#as`; `$T/interface R` takes any struct with R's members
+  // (**L§7.8**).
+  assert_output(
+    "Entity :: struct { id: int; }\n\
+     Tree :: struct { #as using base: Entity; seeds: int; }\n\
+     Other :: struct { id: int; colour: int; }\n\
+     take :: (x: $T/Entity) -> int { return x.id; }\n\
+     take :: (x: $T/Other) -> int { return x.colour; }\n\
+     shape :: (x: $T/interface Other) -> int { return x.colour; }\n\
+     main :: () {\n  \
+       t: Tree;\n  \
+       t.id = 1;\n  \
+       o: Other;\n  \
+       o.colour = 2;\n  \
+       put_number(take(t));\n  \
+       put_number(take(o));\n  \
+       Backward :: struct { colour: int; id: int; extra: int; }\n  \
+       b: Backward;\n  \
+       b.colour = 3;\n  \
+       put_number(shape(b));\n\
+     }\n",
+    "1\n2\n3\n",
+  );
+}
+
+#[test]
+fn a_struct_body_defaults_a_member_a_using_brought_in() {
+  // `type = Tree;` in a body whose `#as using base: Entity` declared `type`
+  // sets that member's default (**L§8.1**, **L§8.4**).
+  assert_output(
+    "Entity :: struct { id: int; kind: int; }\n\
+     Tree :: struct { #as using base: Entity; kind = 7; }\n\
+     main :: () {\n  \
+       t: Tree;\n  \
+       put_number(t.kind);\n  \
+       put_number(t.id);\n\
+     }\n",
+    "7\n0\n",
+  );
+}

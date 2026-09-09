@@ -129,9 +129,13 @@ impl Expr {
 pub(crate) struct MemberDefault {
   /// The index of the member the path starts at.
   pub member: usize,
-  /// The names after that member, empty for a default written on the
-  /// declaration itself.
+  /// The names after that member, empty when the statement named the member
+  /// itself.
   pub path: Vec<Symbol>,
+  /// Whether the default was written as a `member… = value;` statement rather
+  /// than on the member's own declaration. Those are applied last, since they
+  /// may reach past a member the declaration defaults have just filled in.
+  pub from_statement: bool,
   pub source: SourceId,
   pub node: NodeId,
 }

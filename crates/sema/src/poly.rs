@@ -361,6 +361,64 @@ impl Checker<'_> {
     Some(baked)
   }
 
+  /// Whether an actual type satisfies a `$T/Base` restriction (**L§7.8**): it
+  /// is the base, a variant of it, or reaches it through a `using` or `#as`
+  /// member.
+  fn satisfies_restriction(
+    &mut self,
+    actual: TypeId,
+    restriction: TypeId,
+    interface: bool,
+  ) -> bool {
+    if self.types().is_unknown(restriction) {
+      return true;
+    }
+    // `$T/interface R` asks for R's *members* rather than for R itself: any
+    // struct that declares all of them, of the same types, in any order
+    // (**L§7.8**).
+    if interface {
+      return self.implements_interface(actual, restriction);
+    }
+    if actual == restriction || self.types().underlying(actual) == restriction {
+      return true;
+    }
+    // `$T/Blentity` on a polymorphic struct means any instantiation of it.
+    if self.instantiation_passed(restriction, actual).is_some() {
+      return true;
+    }
+    self.as_conversion(actual, restriction, 0).is_some()
+  }
+
+  /// Whether `actual` declares every member the interface struct does, with
+  /// the same name and type (**L§7.8**). Position and the members it has
+  /// besides do not matter.
+  fn implements_interface(&mut self, actual: TypeId, interface: TypeId) -> bool {
+    let underlying = self.types().underlying(actual);
+    self.complete_type(underlying);
+    self.complete_type(interface);
+    let (Some(wanted), Some(given)) = (
+      self.types().struct_of(interface),
+      self.types().struct_of(underlying),
+    ) else {
+      return false;
+    };
+    let required: Vec<(Symbol, TypeId)> = self
+      .types()
+      .struct_info(wanted)
+      .members
+      .iter()
+      .filter(|member| !member.is_constant())
+      .map(|member| (member.name, member.type_id))
+      .collect();
+    required.into_iter().all(|(name, type_id)| {
+      self
+        .types()
+        .struct_info(given)
+        .member(name)
+        .is_some_and(|member| member.type_id == type_id)
+    })
+  }
+
   /// The value a struct parameter takes when the instantiation left it out
   /// (**L§8.5**). A struct's parameters are constants even though they are
   /// written `N: int = 10`, so the default is a constant too — which is what
@@ -922,6 +980,15 @@ impl Checker<'_> {
         // shape of whatever else does (**L§7.8**).
         if self.is_polymorphic_type(actual) {
           return true;
+        }
+        // `$T/Entity` only takes an `Entity` or something that reaches one
+        // through `using`/`#as` (**L§7.8**).
+        let info = self.types().polymorph_info(definition);
+        let (restriction, interface) = (info.restriction, info.interface);
+        if let Some(restriction) = restriction
+          && !self.satisfies_restriction(actual, restriction, interface)
+        {
+          return false;
         }
         substitution.entry(definition).or_insert(actual);
         true

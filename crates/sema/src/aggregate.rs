@@ -305,7 +305,7 @@ impl Checker<'_> {
     let Some(mut path) = self.member_path(state.source, left) else {
       return;
     };
-    if path.len() < 2 {
+    if path.is_empty() {
       return;
     }
     let root = path.remove(0);
@@ -315,6 +315,7 @@ impl Checker<'_> {
     state.defaults.push(MemberDefault {
       member,
       path,
+      from_statement: true,
       source: state.source,
       node: right,
     });
@@ -419,6 +420,7 @@ impl Checker<'_> {
       state.defaults.push(MemberDefault {
         member: index,
         path: Vec::new(),
+        from_statement: false,
         source,
         node: expression,
       });

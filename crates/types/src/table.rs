@@ -215,6 +215,10 @@ impl Types {
     &self.polymorphs[id.0 as usize]
   }
 
+  pub fn polymorph_info_mut(&mut self, id: PolymorphId) -> &mut PolymorphInfo {
+    &mut self.polymorphs[id.0 as usize]
+  }
+
   pub fn finish_struct(&mut self, id: StructId, size: u64, alignment: u64) {
     let info = self.struct_info_mut(id);
     info.size = size;
