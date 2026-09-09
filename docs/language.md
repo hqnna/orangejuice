@@ -1156,7 +1156,7 @@ Empty :: struct {}                  // zero-sized; used for opaque handle types 
 
 Defaults participate in `.{}` literals (unmentioned members take their default), in `New(T)`, in declarations without initializers, and in `#run` results. Types for `.{}` come from context. See 5.7.
 
-A struct body may also set a default *through a member*, with an assignment statement written after that member's declaration: `default_format_absolute_pointer.base = 16;` in `Basic`'s `Print_Style` gives the member's own `FormatInt` a base of 16. The left side is a dotted path of member names rooted at a member of this struct; the assignment is applied after the member has taken the defaults of its own type, so a path default overrides them.
+A struct body may also set a default *through a member*, with an assignment statement written after that member's declaration: `default_format_absolute_pointer.base = 16;` in `Basic`'s `Print_Style` gives the member's own `FormatInt` a base of 16. The left side is a path rooted at a member of this struct: a dotted chain of member names, and `[i]` to reach one element of a fixed array, whose index has to be a constant — `elements[0] = 1;` is how a generated identity matrix writes its diagonal. The assignment is applied after the member has taken the defaults of its own type, so a path default overrides them.
 
 ### 8.3 Nested declarations and constants
 
@@ -1453,7 +1453,8 @@ E :: enum { #insert "A; B; C :: 5;"; }           // enum bodies
 ```
 
 - `#insert` works in data scopes (file, struct, enum), imperative scopes and expression positions; at toplevel it obeys the active `#scope_*` directive. Inserted strings are lexed with the location of the `#insert`; `#load`/`#library` paths inside resolve relative to the file containing the `#insert`. Extra junk after the last statement of an inserted string is an error. Nested `#insert`s inside inserted strings work.
-- Inserted Code is hygienic relative to its origin scope by default (identifiers resolve where the `#code` was written); `,scope()` overrides. Loop controls in inserted code apply to the loop containing the insertion point unless remapped. A `return` inside inserted Code belongs to the procedure containing the insertion (or the macro, if inserted in a macro — a macro's `#insert code` treats `return` as the macro's).
+- Inserted Code is hygienic relative to its origin scope by default (identifiers resolve where the `#code` was written); `,scope()` overrides. Code that a `#run` handed back is the exception: it was built where nothing of the program is in scope, so `#insert #run …` and its `#insert -> Code { … }` short form resolve the names of what comes back at the insertion point.
+- An `#insert` written inside a polymorphic body or a polymorphic struct expands once per instantiation, since its text is whatever the constants make it — and so does a `#run` written inside one. The names one expansion declares belong to that instantiation: a sibling specialization neither sees them nor collides with them. Loop controls in inserted code apply to the loop containing the insertion point unless remapped. A `return` inside inserted Code belongs to the procedure containing the insertion (or the macro, if inserted in a macro — a macro's `#insert code` treats `return` as the macro's).
 - Nodes added by `#insert` are exported to metaprograms via `Code_Directive_Insert.expansion` and `Typechecked.subexpressions`. `Code_Directive_Insert { expression; scope_redirection; break_replacement; continue_replacement; remove_replacement; expansion; is_internal }`.
 - Name-lookup interaction: see 11.7 and 11.8.
 

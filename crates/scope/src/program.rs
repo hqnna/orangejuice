@@ -239,7 +239,15 @@ pub struct Insertion {
   pub path: PathBuf,
   pub scope: ScopeId,
   pub parsed: Arc<Parsed>,
+  /// Which expansion of its `#insert` this is, so that a name one
+  /// instantiation declared is not one another can see (**L§13.2**).
+  pub variant: InsertVariant,
 }
+
+/// Which expansion of one `#insert` a program is: zero for one written outside
+/// every polymorphic body, and the instantiation it belongs to for one written
+/// inside, since that one expands once per specialization (**L§13.2**).
+pub type InsertVariant = u32;
 
 /// An `#insert` the scope tree left for the typechecker, and where its
 /// program goes once the text is known (**L§13.2**).
@@ -360,7 +368,10 @@ pub struct Program<'a> {
   /// built: this is the mutable program of **L§13.2**.
   inserted: boxcar::Vec<Insertion>,
   inserted_of_source: RefCell<HashMap<SourceId, usize>>,
-  expansions: RefCell<HashMap<(SourceId, NodeId), Expansion>>,
+  expansions: RefCell<HashMap<(SourceId, NodeId, InsertVariant), Expansion>>,
+  /// The scope each `#code` was written in, which is where the names in it
+  /// resolve when it is spliced back into the program (**L§13.1**).
+  code_scopes: RefCell<HashMap<(SourceId, NodeId), ScopeId>>,
   /// Every module instantiation, in the order it was made, so that a
   /// metaprogram can be told about each one (**C§3.2**).
   module_records: RefCell<Vec<Module>>,
@@ -486,6 +497,7 @@ impl<'a> Program<'a> {
       inserted: boxcar::Vec::new(),
       inserted_of_source: RefCell::default(),
       expansions: RefCell::default(),
+      code_scopes: RefCell::default(),
       pending_inserts: RefCell::default(),
       failed_imports: RefCell::default(),
       provided_texts: RefCell::default(),
@@ -2241,9 +2253,49 @@ impl<'a> Program<'a> {
     self.pending_inserts.borrow().clone()
   }
 
+  /// The scope an `#insert` was written in, which is the one the walker put it
+  /// in rather than whatever a caller holds when it asks for the expansion: a
+  /// `#insert` in a procedure body belongs to that body's block (**L§13.2**).
+  pub fn insert_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
+    self
+      .pending_inserts
+      .borrow()
+      .iter()
+      .find(|insert| insert.source == source && insert.node == node)
+      .map(|insert| insert.scope)
+  }
+
+  /// The scope a `#code` was written in: the names it quotes resolve there
+  /// unless it is handed somewhere else to be inserted (**L§13.1**).
+  pub fn code_scope(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
+    self.code_scopes.borrow().get(&(source, node)).copied()
+  }
+
+  /// Which expansion of an `#insert` a piece of program came from: zero for a
+  /// file the compiler read and for an `#insert` outside every polymorphic
+  /// body, and the instantiation for one inside (**L§13.2**).
+  pub fn insert_variant(&self, source: SourceId) -> InsertVariant {
+    let Some(index) = self.inserted_of_source.borrow().get(&source).copied() else {
+      return 0;
+    };
+    self.inserted[index].variant
+  }
+
   /// The program an `#insert` expanded to, when one has expanded (**L§13.2**).
-  pub fn expansion_of(&self, source: SourceId, node: NodeId) -> Option<Expansion> {
-    self.expansions.borrow().get(&(source, node)).copied()
+  /// The variant is part of the key: an `#insert` written in a polymorphic body
+  /// expands once per instantiation, and each expansion is a program of its own
+  /// (**L§13.2**).
+  pub fn expansion_of(
+    &self,
+    source: SourceId,
+    node: NodeId,
+    variant: InsertVariant,
+  ) -> Option<Expansion> {
+    self
+      .expansions
+      .borrow()
+      .get(&(source, node, variant))
+      .copied()
   }
 
   /// Parses `text` as the statements an `#insert` stands for and admits its
@@ -2259,7 +2311,7 @@ impl<'a> Program<'a> {
     &self,
     scope: ScopeId,
     kind: InsertKind,
-    at: (SourceId, NodeId),
+    at: (SourceId, NodeId, InsertVariant),
     text: &[u8],
   ) -> Option<Expansion> {
     self.splice(scope, kind, Some(at), self.path_of(at.0), text)
@@ -2287,12 +2339,12 @@ impl<'a> Program<'a> {
     &self,
     scope: ScopeId,
     kind: InsertKind,
-    at: Option<(SourceId, NodeId)>,
+    at: Option<(SourceId, NodeId, InsertVariant)>,
     path: PathBuf,
     text: &[u8],
   ) -> Option<Expansion> {
     if let Some(at) = at
-      && let Some(existing) = self.expansion_of(at.0, at.1)
+      && let Some(existing) = self.expansion_of(at.0, at.1, at.2)
     {
       return Some(existing);
     }
@@ -2313,6 +2365,7 @@ impl<'a> Program<'a> {
       path,
       scope,
       parsed: Arc::clone(&parsed),
+      variant: at.map_or(0, |at| at.2),
     });
 
     let expansion = Expansion {
@@ -2384,7 +2437,7 @@ impl<'a> Program<'a> {
     };
     let expression = insert.expression;
     if let Some(ConstValue::String(text)) = self.fold(scope, source, expression) {
-      self.insert_source(scope, kind, (source, node), &text);
+      self.insert_source(scope, kind, (source, node, 0), &text);
       return;
     }
     // An `#insert` may declare anything; without a `#placeholder` the
@@ -2657,9 +2710,17 @@ impl Program<'_> {
           source,
         );
       }
-      NodeData::DirectiveCode { .. } => {
+      NodeData::DirectiveCode { expression, .. } => {
         // Quoted code is typechecked where it is inserted, not here
-        // (**L§13.1**).
+        // (**L§13.1**) — but which scope "here" is has to be written down,
+        // since nothing in it is a lookup this scope will ever record. Both the
+        // directive and the program under it are remembered, since a `Code`
+        // value may name either.
+        let mut scopes = self.code_scopes.borrow_mut();
+        scopes.insert((source, node), scope);
+        if let Some(expression) = expression {
+          scopes.insert((source, *expression), scope);
+        }
       }
       NodeData::DirectiveBake { procedure_call, .. } => {
         let procedure_call = *procedure_call;

@@ -292,7 +292,7 @@ impl Lowering<'_, '_> {
     self.terminate(Terminator::Return(direct));
   }
 
-  fn mentions_unknown(&mut self, type_id: TypeId) -> bool {
+  pub(super) fn mentions_unknown(&mut self, type_id: TypeId) -> bool {
     match self.checker.types().kind(type_id).clone() {
       TypeKind::Unknown | TypeKind::Polymorph(_) | TypeKind::OverloadSet => true,
       TypeKind::Pointer(pointee) => self.mentions_unknown(pointee),

@@ -2963,3 +2963,127 @@ fn a_parameter_defaulted_to_an_overloaded_name_takes_the_first_overload() {
     "procedure (s64, procedure () -> s64) -> s64\n",
   );
 }
+
+#[test]
+fn an_insert_in_a_procedure_body_reads_the_blocks_own_locals() {
+  // The scope an `#insert` expands in is the one it was written in, which for
+  // one written among statements is that block (**L§13.2**).
+  assert_output(
+    "main :: () {\n  \
+       x := 1;\n  \
+       #insert #code x = 7;\n  \
+       put_number(x);\n  \
+       #insert \"x = 9;\";\n  \
+       put_number(x);\n\
+     }\n",
+    "7\n9\n",
+  );
+}
+
+#[test]
+fn code_a_run_hands_back_is_spliced_where_the_insert_stands() {
+  // `#insert -> Code { … }` builds its program somewhere that is not part of
+  // the program, so its names mean everything at the `#insert` (**L§13.1**).
+  assert_output(
+    "main :: () {\n  \
+       x := 3;\n  \
+       #insert -> Code { return #code x = (x * 10) + 4; }\n  \
+       put_number(x);\n\
+     }\n",
+    "34\n",
+  );
+}
+
+#[test]
+fn a_macros_code_parameter_is_the_program_the_call_site_quoted() {
+  // The `#code` directive is how the program was quoted, not part of it, so
+  // what an `#insert` splices is what stands under it (**L§13.1**).
+  assert_output(
+    "twice :: (code: Code) #expand {\n  \
+       #insert code;\n  \
+       #insert code;\n\
+     }\n\
+     main :: () {\n  \
+       x := 1;\n  \
+       twice(#code { x *= 3; put_number(x); });\n\
+     }\n",
+    "3\n9\n",
+  );
+}
+
+#[test]
+fn an_insert_in_a_polymorphic_body_expands_once_per_instantiation() {
+  // The text is whatever the constants make it, and the names one expansion
+  // declares are not ones another can see (**L§13.2**).
+  assert_output(
+    "bookend :: ($body: string, n: int) {\n  \
+       #insert \"counter := 0;\";\n  \
+       for 1..n  #insert body;\n  \
+       put_number(counter);\n\
+     }\n\
+     main :: () {\n  \
+       bookend(\"counter += 1;\", 2);\n  \
+       bookend(\"counter += 10;\", 3);\n\
+     }\n",
+    "2\n30\n",
+  );
+}
+
+#[test]
+fn a_run_in_a_polymorphic_struct_runs_for_every_instantiation() {
+  // One `#run` per specialization, and the members it inserts are laid out
+  // with the ones written by hand (**L§12.1**, **L§13.2**).
+  assert_output(
+    "gen :: (n: int) -> string {\n  \
+       if n == 2  return \"a := 20;\";\n  \
+       return \"a := 30;\";\n\
+     }\n\
+     Holder :: struct (N: int) {\n  \
+       xs: [N] int;\n  \
+       #insert #run gen(N);\n\
+     }\n\
+     main :: () {\n  \
+       two: Holder(2);\n  \
+       three: Holder(3);\n  \
+       put_number(two.a);\n  \
+       put_number(three.a);\n\
+     }\n",
+    "20\n30\n",
+  );
+}
+
+#[test]
+fn a_struct_body_defaults_one_element_of_an_array_member() {
+  // A designator may subscript as well as name: the default lands at the
+  // element's own offset (**L§8.1**).
+  assert_output(
+    "#import \"Basic\";\n\
+     Matrix :: struct (N: int) {\n  \
+       elements: [N * N] int;\n  \
+       #insert #run diagonal(N);\n\
+     }\n\
+     diagonal :: (n: int) -> string {\n  \
+       out := \"\";\n  \
+       for 0..n-1  out = tprint(\"%1elements[%2] = 1;\\n\", out, it * n + it);\n  \
+       return out;\n\
+     }\n\
+     main :: () {\n  \
+       m: Matrix(3);\n  \
+       for m.elements  put_number(it);\n\
+     }\n",
+    "1\n0\n0\n0\n1\n0\n0\n0\n1\n",
+  );
+}
+
+#[test]
+fn a_procedure_written_where_a_value_goes_is_its_own_address() {
+  // An anonymous procedure is generated like any other, and the expression it
+  // was written as is a pointer to it (**L§7.9**).
+  assert_output(
+    "main :: () {\n  \
+       f := (a: int, b: int) -> int { return a * b; };\n  \
+       put_number(f(6, 7));\n\
+     }\n",
+    "42\n",
+  );
+}

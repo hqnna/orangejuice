@@ -124,14 +124,18 @@ impl Checker<'_> {
       NodeData::DirectiveCode {
         expression: Some(expression),
         ..
-      } => Expr::constant(Const::new(
-        TypeId::CODE,
-        Value::Code {
-          source,
-          node: *expression,
-          scope,
-        },
-      )),
+      } => {
+        let expression = *expression;
+        let scope = self.program().code_scope(source, node).unwrap_or(scope);
+        Expr::constant(Const::new(
+          TypeId::CODE,
+          Value::Code {
+            source,
+            node: expression,
+            scope,
+          },
+        ))
+      }
       NodeData::DirectiveCode { .. } => Expr::value(TypeId::CODE),
       NodeData::DirectiveRun(_) => self.run_type(scope, source, node),
       // A block in expression position is an `ifx` branch: its value is its
@@ -458,6 +462,7 @@ impl Checker<'_> {
   /// without types; a condition that needed one — a `size_of`, a `#run` — is
   /// only decidable here.
   pub(crate) fn live_candidates(&mut self, candidates: &[DeclId]) -> Vec<DeclId> {
+    let candidates = &self.candidates_of_this_instantiation(candidates);
     if !candidates
       .iter()
       .any(|id| self.program().tree().decl(*id).branch.is_some())
@@ -481,6 +486,38 @@ impl Checker<'_> {
     match live.is_empty() {
       true => candidates.to_vec(),
       false => live,
+    }
+  }
+
+  /// Drops the candidates another instantiation declared. An `#insert` written
+  /// inside a polymorphic body expands once per specialization, and every
+  /// expansion declares its names into the one scope the body has, so a name a
+  /// sibling instantiation made is not one this one can see (**L§13.2**).
+  fn candidates_of_this_instantiation(&self, candidates: &[DeclId]) -> Vec<DeclId> {
+    let inserted = |id: &DeclId| {
+      let decl = self.program().tree().decl(*id);
+      decl
+        .source
+        .map_or(0, |source| self.program().insert_variant(source))
+    };
+    if !candidates.iter().any(|id| inserted(id) != 0) {
+      return candidates.to_vec();
+    }
+    let mine: Vec<DeclId> = candidates
+      .iter()
+      .copied()
+      .filter(|id| {
+        let variant = inserted(id);
+        variant == 0
+          || Some(variant)
+            == self
+              .instance_of_scope(self.program().tree().decl(*id).scope)
+              .map(|instance| instance.0 + 1)
+      })
+      .collect();
+    match mine.is_empty() {
+      true => candidates.to_vec(),
+      false => mine,
     }
   }
 

@@ -9,7 +9,7 @@ use oj_types::{
   StructInfo, StructMember, StructNontextualFlags, StructTextualFlags, TypeId,
 };
 
-use crate::checker::{Checker, DeclType, MemberDefault};
+use crate::checker::{Checker, DeclType, MemberDefault, PathStep};
 use crate::constants::{Const, Value};
 
 /// `Build_Options.context_size_max`'s default, which is what `size_of(#Context)`
@@ -290,6 +290,9 @@ impl Checker<'_> {
         let Some(expansion) = self.expand_insert(scope, source, statement) else {
           return;
         };
+        // The members it declares arrived after this body read the scope, which
+        // is the whole point of an `#insert` in a struct: they are live now.
+        state.live.extend(self.live_declarations(scope));
         let previous = std::mem::replace(&mut state.source, expansion.source);
         self.struct_statements(state, expansion.root);
         state.source = previous;
@@ -302,13 +305,16 @@ impl Checker<'_> {
   /// path into it. A left side that is not a dotted chain of names, or that
   /// starts at a member this body has not declared yet, is not a default.
   fn struct_path_default(&mut self, state: &mut Members, left: NodeId, right: NodeId) {
-    let Some(mut path) = self.member_path(state.source, left) else {
+    let scope = state.scope;
+    let Some(mut path) = self.member_path(scope, state.source, left) else {
       return;
     };
     if path.is_empty() {
       return;
     }
-    let root = path.remove(0);
+    let PathStep::Member(root) = path.remove(0) else {
+      return;
+    };
     let Some(member) = state.members.iter().position(|member| member.name == root) else {
       return;
     };
@@ -321,17 +327,41 @@ impl Checker<'_> {
     });
   }
 
-  fn member_path(&self, source: SourceId, node: NodeId) -> Option<Vec<Symbol>> {
+  /// `floats[2].x` as the steps from the member `floats`, or `None` when the
+  /// left of a `=` is not a path into a member at all (**L§8.1**).
+  fn member_path(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<Vec<PathStep>> {
     match self.ast(source)?.data(node) {
-      NodeData::Ident(_) => Some(vec![self.ident_name(source, node)?]),
+      NodeData::Ident(_) => Some(vec![PathStep::Member(self.ident_name(source, node)?)]),
       NodeData::BinaryOperator {
         operator: OperatorType::DOT,
         left,
         right,
         ..
       } => {
-        let mut path = self.member_path(source, *left)?;
-        path.push(self.ident_name(source, *right)?);
+        let (left, right) = (*left, *right);
+        let mut path = self.member_path(scope, source, left)?;
+        path.push(PathStep::Member(self.ident_name(source, right)?));
+        Some(path)
+      }
+      NodeData::BinaryOperator {
+        operator: OperatorType::ARRAY_SUBSCRIPT,
+        left,
+        right,
+        ..
+      } => {
+        let (left, right) = (*left, *right);
+        let mut path = self.member_path(scope, source, left)?;
+        let index = self
+          .expression(scope, source, right)
+          .constant?
+          .value
+          .as_int()?;
+        path.push(PathStep::Element(u64::try_from(index).ok()?));
         Some(path)
       }
       _ => None,

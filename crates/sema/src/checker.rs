@@ -122,6 +122,15 @@ impl Expr {
   }
 }
 
+/// One step of the path a `member.field[2].x = value;` statement walks from the
+/// member it starts at (**L§8.1**). An index is folded where the statement was
+/// written, since that is the only place its names mean anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PathStep {
+  Member(Symbol),
+  Element(u64),
+}
+
 /// One default a struct body wrote for one of its members (**L§8.1**): either
 /// the `= expression` on the member's own declaration, or a later
 /// `member.field = expression;` statement, which reaches a member of a member.
@@ -129,9 +138,9 @@ impl Expr {
 pub(crate) struct MemberDefault {
   /// The index of the member the path starts at.
   pub member: usize,
-  /// The names after that member, empty when the statement named the member
+  /// The steps after that member, empty when the statement named the member
   /// itself.
-  pub path: Vec<Symbol>,
+  pub path: Vec<PathStep>,
   /// Whether the default was written as a `member… = value;` statement rather
   /// than on the member's own declaration. Those are applied last, since they
   /// may reach past a member the declaration defaults have just filled in.
@@ -313,11 +322,17 @@ pub struct Checker<'a> {
   pub(crate) type_info_flags: HashMap<TypeId, u32>,
   /// Which compilation this one is, as far as that storage is concerned.
   pub(crate) nodes_generation: u32,
-  /// The answer each `#run` gave, so that a run written once executes once.
-  pub(crate) runs: HashMap<(SourceId, NodeId), Expr>,
+  /// Where each `Code` value the back end asked for ended up, so that one a
+  /// `#run` hands back as a pointer is the piece of program it names again
+  /// (**L§13.1**).
+  code_addresses: HashMap<usize, (SourceId, NodeId, ScopeId)>,
+  /// The answer each `#run` gave, so that a run written once executes once —
+  /// once per instantiation for one written inside a polymorphic body, which
+  /// is why the instance is part of the key (**L§12.1**).
+  pub(crate) runs: HashMap<(Option<InstanceId>, SourceId, NodeId), Expr>,
   /// The runs being worked out right now, which is what makes a `#run` that
   /// depends on itself an error rather than a hang.
-  pub(crate) runs_in_flight: HashSet<(SourceId, NodeId)>,
+  pub(crate) runs_in_flight: HashSet<(Option<InstanceId>, SourceId, NodeId)>,
   run_index: usize,
   /// How many static `#if`s nobody could decide the checker is inside. The
   /// reference never typechecks a rejected branch (**L§6.10**); orangejuice
@@ -383,6 +398,7 @@ impl<'a> Checker<'a> {
       interner,
       nodes: None,
       nodes_generation: 0,
+      code_addresses: HashMap::new(),
       type_info_flags: HashMap::new(),
       types: Types::new(),
       names: Names::new(interner),
@@ -516,12 +532,22 @@ impl<'a> Checker<'a> {
 
   /// The address a `Code` value has at compile time: the `Code_Node` the
   /// program was written at, exported on demand (**L§13.1**, **C§5.3**).
-  pub fn code_address(&mut self, source: SourceId, node: NodeId) -> Option<usize> {
+  pub fn code_address(&mut self, source: SourceId, node: NodeId, scope: ScopeId) -> Option<usize> {
     let nodes = self.nodes.clone()?;
     let generation = self.nodes_generation;
-    let mut nodes = nodes.borrow_mut();
-    let mut exporter = crate::export::Exporter::new(self, &mut nodes, generation);
-    Some(exporter.tree(source, node).root as usize)
+    let address = {
+      let mut nodes = nodes.borrow_mut();
+      let mut exporter = crate::export::Exporter::new(self, &mut nodes, generation);
+      exporter.tree(source, node).root as usize
+    };
+    self.code_addresses.insert(address, (source, node, scope));
+    Some(address)
+  }
+
+  /// The piece of program a `Code` address names, for a value a `#run` handed
+  /// back (**L§13.1**).
+  pub fn code_at_address(&self, address: usize) -> Option<(SourceId, NodeId, ScopeId)> {
+    self.code_addresses.get(&address).copied()
   }
 
   pub(crate) fn next_run_index(&mut self) -> usize {

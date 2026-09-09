@@ -82,7 +82,11 @@ pub trait CompileTime {
 impl Checker<'_> {
   /// The type and value of a `#run` or `#assert` expression (**L§12.1**).
   pub(crate) fn run_type(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
-    if let Some(cached) = self.runs.get(&(source, node)) {
+    // A `#run` written inside a polymorphic body is a different run in every
+    // instantiation, since what it computes is whatever the constants make it
+    // (**L§12.1**).
+    let key = (self.instance_of_scope(scope), source, node);
+    if let Some(cached) = self.runs.get(&key) {
       return cached.clone();
     }
     // A run in a branch nobody could decide has not been reached at all, so it
@@ -93,10 +97,10 @@ impl Checker<'_> {
     }
     // A `#run` in a polymorphic body runs once per instantiation (**L§12.1**),
     // so there is nothing to run until there is one.
-    if self.program().is_uninstantiated(scope) {
+    if self.program().is_uninstantiated(scope) && key.0.is_none() {
       return Expr::UNKNOWN;
     }
-    if !self.runs_in_flight.insert((source, node)) {
+    if !self.runs_in_flight.insert(key) {
       let span = self
         .ast(source)
         .map_or(Span::at(0), |ast| ast.node(node).span);
@@ -104,8 +108,8 @@ impl Checker<'_> {
       return Expr::UNKNOWN;
     }
     let result = self.run_type_uncached(scope, source, node);
-    self.runs_in_flight.remove(&(source, node));
-    self.runs.insert((source, node), result.clone());
+    self.runs_in_flight.remove(&key);
+    self.runs.insert(key, result.clone());
     result
   }
 

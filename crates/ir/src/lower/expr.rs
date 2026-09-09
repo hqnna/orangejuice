@@ -115,8 +115,12 @@ impl Lowering<'_, '_> {
     // which is what a metaprogram is handed and what `compiler_get_nodes`
     // answers for (**L§13.1**, **C§5.3**). It means nothing outside compile
     // time, where the compiler that exported it is still alive.
-    if let Value::Code { source, node, .. } = constant.value
-      && let Some(address) = self.checker.code_address(source, node)
+    if let Value::Code {
+      source,
+      node,
+      scope,
+    } = constant.value
+      && let Some(address) = self.checker.code_address(source, node, scope)
     {
       let dest = self.value(target);
       self.emit(Inst::Const {
@@ -462,10 +466,11 @@ impl Lowering<'_, '_> {
         }
         None => None,
       },
-      NodeData::ProcedureHeader(_) | NodeData::ProcedureBody { .. } => {
-        self.unsupported(source, node, "an anonymous procedure", "M7");
-        None
-      }
+      // A procedure written where a value goes is one the program has, named
+      // by nothing: it is generated like any other and its address is the
+      // value (**L§7.9**).
+      NodeData::ProcedureBody { header, .. } => self.anonymous_procedure(scope, source, header),
+      NodeData::ProcedureHeader(_) => self.anonymous_procedure(scope, source, node),
       // An `#insert` where a value goes is the one expression its text parsed
       // into, read in the scope the `#insert` was written in (**L§13.2**).
       NodeData::DirectiveInsert(_) => {
@@ -539,6 +544,38 @@ impl Lowering<'_, '_> {
         None
       }
     }
+  }
+
+  /// The address of a procedure written where a value goes (**L§7.9**), which
+  /// is generated once per header the way a `#run` block's body is.
+  fn anonymous_procedure(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    header: NodeId,
+  ) -> Option<Val> {
+    let scope = self.checker.scope_for(source, header, scope);
+    let type_id = self.checker.procedure_type_at(source, header, scope);
+    if self.mentions_unknown(type_id) {
+      self.unsupported(source, header, "an anonymous procedure", "M7");
+      return None;
+    }
+    let key = crate::lower::ProcKey::Node(source, header);
+    let id = match self.procedure_ids.get(&key) {
+      Some(id) => *id,
+      None => self.declare_procedure(key, None, type_id, None),
+    };
+    let procedure_type = self.procedures[id.0 as usize].type_id;
+    let dest = self.value(procedure_type);
+    self.emit(Inst::ProcedureAddress {
+      dest,
+      procedure: id,
+    });
+    Some(Val {
+      id: dest,
+      type_id: procedure_type,
+      indirect: false,
+    })
   }
 
   /// A place: storage the program can read from and write to (**L§7.6**).

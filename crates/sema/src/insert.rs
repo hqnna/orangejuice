@@ -75,9 +75,6 @@ impl Checker<'_> {
     node: NodeId,
     kind: Option<InsertKind>,
   ) -> Option<Expansion> {
-    if let Some(existing) = self.program().expansion_of(source, node) {
-      return Some(existing);
-    }
     let ast = self.ast(source)?;
     let NodeData::DirectiveInsert(insert) = ast.data(node) else {
       return None;
@@ -86,9 +83,25 @@ impl Checker<'_> {
     let span = ast.node(node).span;
 
     // The text is worked out where the operand was written; the program it
-    // stands for joins the scope the `#insert` itself is in.
-    let target = self.scope_at(source, node, scope);
+    // stands for joins the scope the `#insert` itself is in — the one the
+    // walker recorded, since a caller holding only a body-wide fallback cannot
+    // work out that an `#insert` in a procedure body belongs to that block. A
+    // macro is the exception: its body is spliced into whoever expanded it, so
+    // an `#insert` inside one belongs to the scope that expansion is going to.
+    let written = self
+      .program()
+      .insert_scope(source, node)
+      .filter(|scope| !self.program().is_in_macro(*scope));
+    let target = written.unwrap_or_else(|| self.scope_at(source, node, scope));
     let operand_scope = self.scope_at(source, expression, target);
+    // One written in a polymorphic body expands once per instantiation: the
+    // text is whatever the constants make it (**L§13.2**).
+    let variant = self
+      .instance_of_scope(operand_scope)
+      .map_or(0, |instance| instance.0 + 1);
+    if let Some(existing) = self.program().expansion_of(source, node, variant) {
+      return Some(existing);
+    }
     // A `#placeholder` nothing has filled stands for no program at all. The
     // reference stalls the `#insert` until a metaprogram declares the name;
     // orangejuice compiles a `#run` before it executes, so the fill can never
@@ -97,7 +110,7 @@ impl Checker<'_> {
       let kind = kind.unwrap_or_else(|| insert_kind(self, target));
       return self
         .program()
-        .insert_source(target, kind, (source, node), b"");
+        .insert_source(target, kind, (source, node, variant), b"");
     }
     let value = self
       .expression(operand_scope, source, expression)
@@ -108,19 +121,41 @@ impl Checker<'_> {
         let kind = kind.unwrap_or_else(|| insert_kind(self, target));
         self
           .program()
-          .insert_source(target, kind, (source, node), &text)
+          .insert_source(target, kind, (source, node, variant), &text)
       }
       // `#insert code` names a piece of program that was parsed where it was
       // written, so nothing has to be parsed here: it is spliced as it stands.
+      //
+      // Code a `#run` made — `#insert -> Code { … }` is the short way of
+      // writing one — was built somewhere that is not part of the program, so
+      // its names mean nothing there and everything at the `#insert`: that is
+      // the whole point of handing a piece of program back (**L§13.1**).
       Value::Code {
         source: code_source,
         node: code,
         scope: code_scope,
-      } => Some(Expansion {
-        source: code_source,
-        root: code,
-        scope: code_scope,
-      }),
+      } => {
+        // A value that names the `#code` itself stands for the program under
+        // it: the directive is how the program was quoted, not part of it.
+        let root = match self.ast(code_source).map(|ast| ast.data(code)) {
+          Some(NodeData::DirectiveCode {
+            expression: Some(inner),
+            ..
+          }) => *inner,
+          _ => code,
+        };
+        Some(Expansion {
+          source: code_source,
+          root,
+          scope: match matches!(ast.data(expression), NodeData::DirectiveRun(_)) {
+            true => target,
+            false => self
+              .program()
+              .code_scope(code_source, code)
+              .unwrap_or(code_scope),
+          },
+        })
+      }
       _ => {
         self.error(
           source,

@@ -177,18 +177,33 @@ impl Checker<'_> {
           .members
           .get(default.member)?;
         let (mut offset, mut type_id) = (member.offset, member.type_id);
-        for name in &default.path {
+        for step in &default.path {
           let underlying = self.types().underlying(type_id);
           self.complete_type(underlying);
-          let inner = self.types().struct_of(underlying)?;
-          let member = self
-            .types()
-            .struct_info(inner)
-            .members
-            .iter()
-            .find(|member| member.name == *name)?;
-          offset += member.offset;
-          type_id = member.type_id;
+          match step {
+            crate::checker::PathStep::Member(name) => {
+              let inner = self.types().struct_of(underlying)?;
+              let member = self
+                .types()
+                .struct_info(inner)
+                .members
+                .iter()
+                .find(|member| member.name == *name)?;
+              offset += member.offset;
+              type_id = member.type_id;
+            }
+            // Only a fixed array has elements the initializer can reach: a
+            // view or a resizable one owns no storage of its own (**L§8.6**).
+            crate::checker::PathStep::Element(index) => {
+              let (element, oj_types::ArrayKind::Fixed(_)) = self.types().array_of(underlying)?
+              else {
+                return None;
+              };
+              let stride = self.layout(element)?.size;
+              offset += index * stride;
+              type_id = element;
+            }
+          }
         }
         Some((offset, type_id, default.source, default.node))
       })

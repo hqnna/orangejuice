@@ -152,6 +152,32 @@ impl Engine {
         )),
       };
     }
+    // A `Code` a run produced is the address of the `Code_Node` the compiler
+    // exported, which is the piece of program it names (**L§13.1**).
+    if checker.types().underlying(request.result) == TypeId::CODE {
+      let bytes = buffer.as_slice();
+      let address = match bytes.len() >= 8 {
+        true => usize::from_ne_bytes(bytes[..8].try_into().expect("eight bytes")),
+        false => 0,
+      };
+      return match checker.code_at_address(address) {
+        Some((source, node, scope)) => Ok(RunOutcome::Value(oj_sema::Const::new(
+          request.result,
+          oj_sema::Value::Code {
+            source,
+            node,
+            scope,
+          },
+        ))),
+        None if address == 0 => Ok(RunOutcome::Value(oj_sema::Const::new(
+          request.result,
+          oj_sema::Value::Null,
+        ))),
+        None => Err(String::from(
+          "orangejuice cannot bring this kind of value back from compile time yet",
+        )),
+      };
+    }
     match read_value(checker.types(), request.result, buffer.as_slice()) {
       Some(value) => Ok(RunOutcome::Value(value)),
       None => Err(String::from(
