@@ -1307,7 +1307,13 @@ impl Parser<'_> {
       ));
     }
 
-    let expression = self.parse_expression()?;
+    // In a type slot a `(` opens a procedure type whether or not its parameters
+    // are named and whether or not it returns anything: `sa_handler: (sig: s32)
+    // #c_call;` and `f: (T)` (**L§3.7**).
+    let expression = match self.at(TokenKind::OPEN_PAREN) {
+      true => self.parse_procedure(start)?,
+      false => self.parse_expression()?,
+    };
     inst.type_valued_expression = Some(expression);
 
     Some(self.push(

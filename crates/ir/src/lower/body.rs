@@ -373,11 +373,32 @@ impl Lowering<'_, '_> {
         let (control_type, target) = (*control_type, *target_ident);
         self.loop_control(node, control_type, target);
       }
-      NodeData::Defer { block, .. } => {
-        let block = *block;
+      NodeData::Defer {
+        block,
+        is_backticked,
+      } => {
+        let (block, backticked) = (*block, *is_backticked);
         let scope = self.checker.scope_for(source, block, self.body_scope);
-        if let Some(frame) = self.defers.last_mut() {
-          frame.push((scope, source, block));
+        // `` `defer `` belongs to the block the macro was expanded into, not to
+        // the expansion, so it runs when the caller's scope ends (**L§7.13**).
+        let frame = match backticked {
+          true => self
+            .expansions
+            .last()
+            .map(|expansion| expansion.defers)
+            .filter(|depth| *depth > 0)
+            .map(|depth| depth - 1),
+          false => None,
+        }
+        .unwrap_or(self.defers.len().saturating_sub(1));
+        let instance = self.active_instance();
+        if let Some(frame) = self.defers.get_mut(frame) {
+          frame.push(crate::lower::Deferred {
+            scope,
+            source,
+            node: block,
+            instance,
+          });
         }
       }
       // `using c: Ice_Cream;` declares `c` as well as widening the scope, so
@@ -471,20 +492,29 @@ impl Lowering<'_, '_> {
     }
   }
 
-  pub(super) fn run_defers(&mut self, frame: &[(ScopeId, SourceId, NodeId)]) {
-    for (scope, source, node) in frame.iter().rev() {
+  pub(super) fn run_defers(&mut self, frame: &[crate::lower::Deferred]) {
+    for deferred in frame.iter().rev() {
       let (previous_scope, previous_source) = (self.body_scope, self.body_source);
-      self.body_scope = *scope;
-      self.body_source = *source;
-      self.statement(*node);
+      let previous_instance = self.checker.enter_instance(deferred.instance);
+      self.body_scope = deferred.scope;
+      self.body_source = deferred.source;
+      self.statement(deferred.node);
+      self.checker.enter_instance(previous_instance);
       self.body_scope = previous_scope;
       self.body_source = previous_source;
     }
   }
 
+  /// The instantiation the lowering is reading its answers under right now.
+  fn active_instance(&mut self) -> Option<InstanceId> {
+    let previous = self.checker.enter_instance(None);
+    self.checker.enter_instance(previous);
+    previous
+  }
+
   /// Everything a jump out of `depth` scopes has to run first (**L§6.6**).
   fn run_defers_to(&mut self, depth: usize) {
-    let frames: Vec<Vec<(ScopeId, SourceId, NodeId)>> =
+    let frames: Vec<Vec<crate::lower::Deferred>> =
       self.defers[depth..].iter().rev().cloned().collect();
     for frame in frames {
       self.run_defers(&frame);

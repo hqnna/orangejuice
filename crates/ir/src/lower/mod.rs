@@ -52,6 +52,15 @@ struct InsertControls {
   remove_replacement: Option<NodeId>,
 }
 
+/// One deferred statement (**L§6.6**).
+#[derive(Clone, Copy, Debug)]
+struct Deferred {
+  scope: ScopeId,
+  source: SourceId,
+  node: NodeId,
+  instance: Option<InstanceId>,
+}
+
 struct Loop {
   break_block: BlockId,
   continue_block: BlockId,
@@ -214,7 +223,10 @@ struct Lowering<'c, 'p> {
   /// macros whose bodies are being spliced in. `#caller_location` is the top
   /// of this (**L§7.13**).
   call_sites: Vec<(SourceId, NodeId)>,
-  defers: Vec<Vec<(ScopeId, SourceId, NodeId)>>,
+  /// The deferred statements of each open scope, with the instantiation each
+  /// was written under: a `` `defer `` a macro left in its caller's block still
+  /// names the expansion's locals (**L§7.13**).
+  defers: Vec<Vec<Deferred>>,
   returns: Vec<TypeId>,
   /// The declarations of the named return values, so that a `return` that
   /// leaves one out can take its default (**L§7.2**).

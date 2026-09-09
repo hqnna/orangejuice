@@ -3544,3 +3544,54 @@ fn a_constant_array_of_procedures_is_data_the_back_end_fills_in() {
     "one\ntwo\n2\ntwo\none\n",
   );
 }
+
+#[test]
+fn a_procedure_type_in_a_type_slot_needs_no_arrow() {
+  // `f: (T)` is a procedure taking a `T` and returning nothing, not a
+  // parenthesized `T` (**L§3.7**).
+  assert_output(
+    "call_with :: (arg: $T, f: (T)) { f(arg); }\n\
+     named :: (x: int) { put_number(x); }\n\
+     main :: () {\n  \
+       call_with(6, named);\n  \
+       call_with(7, x => { put_number(x * 10); });\n\
+     }\n",
+    "6\n70\n",
+  );
+}
+
+#[test]
+fn a_backticked_defer_belongs_to_the_block_the_macro_expanded_into() {
+  // It runs when the caller's scope ends, and still names the expansion's own
+  // locals (**L§7.13**).
+  assert_output(
+    "trace :: (n: int) #expand {\n  \
+       mine := n * 10;\n  \
+       put_number(mine);\n  \
+       `defer put_number(mine + 1);\n\
+     }\n\
+     work :: () {\n  \
+       trace(1);\n  \
+       trace(2);\n  \
+       put_number(999);\n\
+     }\n\
+     main :: () { work(); }\n",
+    "10\n20\n999\n21\n11\n",
+  );
+}
+
+#[test]
+fn this_names_the_procedure_a_macro_expanded_into() {
+  // A macro is spliced into whoever expanded it, so `#this` inside one is the
+  // caller's, and `#location(#this)` is where that procedure was written
+  // (**L§5.11**, **L§7.13**).
+  assert_output(
+    "#import \"Basic\";\n\
+     Profile :: () #expand {\n  \
+       put(tprint(\"in % at line %\\n\", type_of(#this), #location(#this).line_number));\n\
+     }\n\
+     watched :: () { Profile(); }\n\
+     main :: () { watched(); }\n",
+    "in procedure () at line 40\n",
+  );
+}

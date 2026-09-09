@@ -505,6 +505,16 @@ impl Checker<'_> {
         // `::` can hold; an anonymous procedure — a quick lambda calling
         // itself — is only the address the back end generates for it.
         let Some(decl) = self.procedure_declared_at(source, header, id) else {
+          // Inside an instantiation of it the shape is that specialization's:
+          // a quick lambda's header is still `$T`-shaped (**L§7.9**).
+          let mut current = self.current_instance;
+          while let Some(id) = current {
+            let instance = self.instance(id);
+            if instance.source == source && instance.header == header {
+              return Expr::value(instance.type_id);
+            }
+            current = instance.parent;
+          }
           return Expr::value(self.procedure_type(source, header, outer));
         };
         let type_id = self.decl_type(decl).value;

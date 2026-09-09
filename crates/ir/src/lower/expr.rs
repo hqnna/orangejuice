@@ -255,6 +255,32 @@ impl Lowering<'_, '_> {
     }
   }
 
+  /// The header a procedure-valued expression names, when it names one: what
+  /// `#location` of a procedure reports is where that procedure was written
+  /// rather than where the name was (**L§5.14**).
+  fn procedure_written_at(
+    &mut self,
+    source: SourceId,
+    expression: NodeId,
+  ) -> Option<(SourceId, NodeId)> {
+    let scope = self.checker.scope_for(source, expression, self.body_scope);
+    let oj_sema::Value::Procedure(decl) = self
+      .checker
+      .expression(scope, source, expression)
+      .constant?
+      .value
+    else {
+      return None;
+    };
+    let declared = self.checker.program().tree().decl(decl);
+    let (declared_source, node) = (declared.source?, declared.node?);
+    let ast::NodeData::Declaration(declaration) = self.checker.tree_of(declared_source)?.data(node)
+    else {
+      return None;
+    };
+    Some((declared_source, declaration.expression?))
+  }
+
   /// `#location(x)`: the `Source_Code_Location` of where `x` was written, with
   /// the 1-based line and character the reference reports (**L§5.14**).
   fn source_location(&mut self, source: SourceId, at: NodeId, type_id: TypeId) -> Option<Val> {
@@ -579,7 +605,17 @@ impl Lowering<'_, '_> {
       // default supplies (**L§7.13**); `#location` is this one's.
       NodeData::DirectiveLocation(location) if !location.is_caller_location => {
         let at = location.expression.unwrap_or(node);
-        self.source_location(source, at, info.type_id)
+        // `#location(x)` where `x` names a procedure is where that procedure
+        // was written, which is what `#location(#this)` asks for (**L§5.14**).
+        let declared = location
+          .expression
+          .and_then(|expression| self.procedure_written_at(source, expression));
+        match declared {
+          Some((declared_source, declared)) => {
+            self.source_location(declared_source, declared, info.type_id)
+          }
+          None => self.source_location(source, at, info.type_id),
+        }
       }
       // `#caller_location` is the site of the call whose arguments are being
       // evaluated, or of the macro being expanded (**L§7.13**).

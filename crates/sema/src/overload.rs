@@ -528,9 +528,17 @@ impl Checker<'_> {
       returns: signature.returns.clone(),
       vararg_slot: signature.vararg_index.map(|index| index as usize),
       hidden: Vec::new(),
+      // A specialization of a polymorphic header keeps the flag its header was
+      // written with, but a signature with nothing left to solve is one a call
+      // site can use (**L§7.8**).
       polymorphic: signature
         .flags
-        .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC),
+        .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC)
+        && signature
+          .arguments
+          .iter()
+          .chain(&signature.returns)
+          .any(|type_id| self.is_polymorphic_type(*type_id)),
       is_macro: false,
       decl: None,
       header: None,
