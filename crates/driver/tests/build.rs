@@ -2855,3 +2855,38 @@ fn an_array_literal_assigned_to_a_view_has_storage_of_its_own() {
     "7\none\nthree\n0\n",
   );
 }
+
+#[test]
+fn a_using_declaration_still_declares_its_own_variable() {
+  // `using cream: Ice_Cream;` widens the scope *and* declares `cream`, which
+  // starts life with its type's defaults (**L§6.8**, **L§4.6**).
+  assert_output(
+    "Ice_Cream :: struct { flavour := 7; scoops := 2; }\n\
+     main :: () {\n  \
+       using cream: Ice_Cream;\n  \
+       put_number(flavour);\n  \
+       put_number(scoops);\n  \
+       put_number(cream.scoops);\n\
+     }\n",
+    "7\n2\n2\n",
+  );
+}
+
+#[test]
+fn an_added_context_member_is_laid_out_after_the_ones_before_it() {
+  // Every `#add_context` member takes its own storage, so a module's cannot
+  // land on top of another's (**L§10.2**).
+  assert_output(
+    "#import \"Basic\";\n\
+     Random :: #import \"Random\";\n\
+     main :: () {\n  \
+       base := cast(s64) cast(*u8) *context;\n  \
+       style := (cast(s64) cast(*u8) *context.print_style) - base;\n  \
+       state := (cast(s64) cast(*u8) *context.random_state) - base;\n  \
+       if state >= style + size_of(type_of(context.print_style))  put(\"apart\\n\");\n  \
+       context.print_style.default_format_int.base = 16;\n  \
+       put(tprint(\"%\\n\", 255));\n\
+     }\n",
+    "apart\nff\n",
+  );
+}

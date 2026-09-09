@@ -226,6 +226,10 @@ pub struct Unit {
   pub path: PathBuf,
   pub scope: ScopeId,
   pub parsed: Arc<Parsed>,
+  /// The `#if` branch the `#load` that brought the file in was written in,
+  /// when the scope tree could not decide it. What the file declares is
+  /// conditional on that branch being the taken one (**L§6.10**).
+  pub branch: Option<crate::tree::Branch>,
 }
 
 /// A parsed `#insert` string: the program it stands for, and where it went.
@@ -908,6 +912,7 @@ impl<'a> Program<'a> {
       path: path.to_path_buf(),
       scope,
       parsed: Arc::clone(&parsed),
+      branch: self.branch.get(),
     });
 
     let mut target = DataTarget {

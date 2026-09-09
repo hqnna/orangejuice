@@ -793,10 +793,10 @@ impl Checker<'_> {
           None => TypeId::UNKNOWN,
         },
       };
-      let layout = self
-        .types()
-        .layout(member_type)
-        .unwrap_or(Layout::new(0, 1));
+      // The member's own type has to be laid out before it can be placed;
+      // asking the table for a layout it has not built yet gives none, and the
+      // members after it would then sit on top of each other.
+      let layout = self.layout_of(member_type).unwrap_or(Layout::new(0, 1));
       let offset = builder.place(layout, None);
       members.push(StructMember {
         name: member_name,
@@ -820,14 +820,40 @@ impl Checker<'_> {
   }
 
   /// Every `#add_context` declaration in the program, in file order.
-  fn added_context_declarations(&self) -> Vec<(SourceId, NodeId, ScopeId)> {
+  fn added_context_declarations(&mut self) -> Vec<(SourceId, NodeId, ScopeId)> {
+    let units: Vec<(
+      SourceId,
+      ScopeId,
+      Option<oj_scope::Branch>,
+      std::sync::Arc<oj_syntax::Parsed>,
+    )> = self
+      .program()
+      .units()
+      .map(|unit| {
+        (
+          unit.source,
+          unit.scope,
+          unit.branch,
+          std::sync::Arc::clone(&unit.parsed),
+        )
+      })
+      .collect();
     let mut found = Vec::new();
-    for unit in self.program().units() {
-      let ast = &unit.parsed.ast;
+    for (source, scope, branch, parsed) in units {
+      // A file the scope tree loaded from a `#if` branch it could not decide
+      // contributes nothing when the checker can decide against it — which is
+      // what keeps `Memory_Debugger`'s `#add_context` out of `#Context`
+      // (**L§6.10**, **L§10.2**).
+      if let Some(branch) = branch
+        && !self.branch_is_live(branch, scope)
+      {
+        continue;
+      }
+      let ast = &parsed.ast;
       for index in 0..ast.len() {
         let id = NodeId(index as u32);
-        if let NodeData::DirectiveAddContext { expression } = ast.data(id) {
-          found.push((unit.source, *expression, unit.scope));
+        if let NodeData::DirectiveAddContext { expression } = ast.data(id).clone() {
+          found.push((source, expression, scope));
         }
       }
     }

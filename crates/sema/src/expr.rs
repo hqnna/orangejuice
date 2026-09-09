@@ -464,6 +464,15 @@ impl Checker<'_> {
     }
   }
 
+  /// Whether the checker can still believe a `#if` branch the scope tree could
+  /// not decide: `false` once the condition folds the other way (**L§6.10**).
+  pub(crate) fn branch_is_live(&mut self, branch: oj_scope::Branch, scope: ScopeId) -> bool {
+    match self.taken_branch(branch, scope) {
+      Some(taken) => taken == branch.block,
+      None => true,
+    }
+  }
+
   /// Which of a static `#if`'s two blocks its condition selects, or `None`
   /// when the condition still does not fold.
   fn taken_branch(&mut self, branch: oj_scope::Branch, scope: ScopeId) -> Option<NodeId> {

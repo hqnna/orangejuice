@@ -849,6 +849,18 @@ impl Lowering<'_, '_> {
             .types_table_mut()
             .array(element, ArrayKind::Fixed(count)),
         };
+        // An empty literal names nothing at all: `.[]` as a view is a null
+        // `data` and a zero `count` (**L§5.11**).
+        if count == 0 && storage != type_id {
+          let local = self.new_local(String::from("literal"), type_id);
+          let address = self.local_address(local);
+          self.clear(address, type_id);
+          return Some(Val {
+            id: address,
+            type_id,
+            indirect: true,
+          });
+        }
         // A literal whose members all fold is read-only data rather than a
         // frame's worth of stores, which is also what lets a `[] T` over one
         // outlive the procedure that returned it (**L§5.11**).
@@ -1703,6 +1715,9 @@ impl Lowering<'_, '_> {
     }
     if name == data {
       return match kind {
+        // An empty array literal's `data` is guaranteed null, so that whoever
+        // frees it frees nothing (**L§5.11**).
+        ArrayKind::Fixed(0) => Some(self.constant(Constant::Null, pointer)),
         ArrayKind::Fixed(_) => {
           let address = self.address_of(base);
           Some(Val {
@@ -2835,7 +2850,19 @@ impl Lowering<'_, '_> {
       .unwrap_or(TypeId::U8);
     let pointer = self.pointer_to(element);
     let data_slot = self.offset(address, 8, pointer);
-    let data = self.address_of(value);
+    // An empty array's `data` is guaranteed null (**L§5.11**), so that whoever
+    // frees a view over one frees nothing.
+    let data = match count {
+      0 => {
+        let null = self.value(pointer);
+        self.emit(Inst::Const {
+          dest: null,
+          value: Constant::Null,
+        });
+        null
+      }
+      _ => self.address_of(value),
+    };
     self.emit(Inst::Store {
       address: data_slot,
       value: data,

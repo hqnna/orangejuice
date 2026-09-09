@@ -379,11 +379,21 @@ impl Lowering<'_, '_> {
           frame.push((scope, source, block));
         }
       }
+      // `using c: Ice_Cream;` declares `c` as well as widening the scope, so
+      // the declaration is lowered like any other (**L§6.8**).
+      NodeData::Using(using) => {
+        let expression = using.expression;
+        if matches!(
+          self.checker.tree_of(source).map(|ast| ast.data(expression)),
+          Some(NodeData::Declaration(_))
+        ) {
+          self.declaration_statement(expression);
+        }
+      }
       // An `#import` or a `#load` in a body brings names into the block; it is
       // the scope tree's business, and the executable holds nothing for it
       // (**L§11.2**).
-      NodeData::Using(_)
-      | NodeData::Note { .. }
+      NodeData::Note { .. }
       | NodeData::DirectiveScope { .. }
       | NodeData::DirectiveImport(_)
       | NodeData::DirectiveLoad { .. } => {}
