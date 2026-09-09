@@ -44,8 +44,8 @@ impl Types {
         let info = self.struct_info(*definition);
         match info.name {
           Some(name) => out.push_str(&interner.resolve_lossy(name)),
-          None if info.is_union() => out.push_str("union"),
-          None => out.push_str("struct"),
+          None if info.is_union() => out.push_str("(anonymous union)"),
+          None => out.push_str("(anonymous struct)"),
         }
       }
       TypeKind::Enum(definition) => match self.enum_info(*definition).name {

@@ -447,10 +447,15 @@ impl Checker<'_> {
     let mut text = self.symbol_text(base);
     text.push('(');
     let bindings = self.instance(instance).bindings.clone();
-    for (index, (_, value)) in bindings.iter().enumerate() {
+    for (index, (parameter, value)) in bindings.iter().enumerate() {
       if index > 0 {
         text.push_str(", ");
       }
+      // The reference names each argument: `Holder(T=float32, N=5)`
+      // (**L§8.5**).
+      let name = self.program().tree().decl(*parameter).name;
+      text.push_str(&self.symbol_text(name));
+      text.push('=');
       match value.as_type() {
         Some(type_id) => text.push_str(&self.type_name(type_id)),
         None => match &value.value {

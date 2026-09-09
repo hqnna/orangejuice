@@ -271,11 +271,12 @@ fn a_polymorphic_struct_is_baked_per_argument_set() {
     ",
     |checker| {
       assert!(errors(checker).is_empty(), "{:?}", errors(checker));
-      assert_eq!(type_of(checker, "floats"), "Holder(float32, 5)");
-      assert_eq!(type_of(checker, "ints"), "Holder(s64, 3)");
+      // The reference names each argument: `Holder(T=float32, N=5)`.
+      assert_eq!(type_of(checker, "floats"), "Holder(T=float32, N=5)");
+      assert_eq!(type_of(checker, "ints"), "Holder(T=s64, N=3)");
       // The same arguments in another order are the same type (**L§8.5**).
-      assert_eq!(type_of(checker, "named"), "Holder(float32, 5)");
-      assert_eq!(type_of(checker, "same"), "Holder(float32, 5)");
+      assert_eq!(type_of(checker, "named"), "Holder(T=float32, N=5)");
+      assert_eq!(type_of(checker, "same"), "Holder(T=float32, N=5)");
     },
   );
 }
