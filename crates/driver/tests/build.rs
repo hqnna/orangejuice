@@ -3482,3 +3482,27 @@ fn a_call_through_a_type_of_annotation_takes_that_headers_defaults() {
     "12\n72\n",
   );
 }
+
+#[test]
+fn a_name_reached_through_an_instantiation_resolves_under_it() {
+  // `proc :: #bake_constants printer(T=#this)` in a polymorphic struct's body
+  // bakes the specialization, not the family, so the call site has to resolve
+  // it under the instantiation it reached it through (**L§8.5**).
+  assert_output(
+    "#import \"Basic\";\n\
+     printer :: (x: $T) { put(tprint(\"% %\\n\", T, x.values)); }\n\
+     Poly :: struct (E: Type) {\n  \
+       values: E;\n  \
+       proc :: #bake_constants printer(T=#this);\n\
+       }\n\
+     main :: () {\n  \
+       a: Poly(float32);\n  \
+       a.values = 1.5;\n  \
+       a.proc(a);\n  \
+       b: Poly(int);\n  \
+       b.values = 7;\n  \
+       b.proc(b);\n\
+     }\n",
+    "Poly(E=float32) 1.5\nPoly(E=s64) 7\n",
+  );
+}

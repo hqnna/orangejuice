@@ -495,6 +495,7 @@ impl Checker<'_> {
         let type_id = self.decl_type(decl).value;
         return Expr {
           overloads: vec![decl],
+          overload_instance: None,
           constant: Some(Const::new(type_id, Value::Procedure(decl))),
           ..Expr::value(type_id)
         };
@@ -675,6 +676,7 @@ impl Checker<'_> {
       }
       return Expr {
         overloads: real,
+        overload_instance: None,
         ..Expr::value(TypeId::OVERLOAD_SET)
       };
     };
@@ -684,6 +686,7 @@ impl Checker<'_> {
     if let Some(value) = self.bound_constant(only) {
       return Expr {
         overloads: vec![only],
+        overload_instance: None,
         ..Expr::constant(value)
       };
     }
@@ -700,6 +703,7 @@ impl Checker<'_> {
       if let Some(value) = self.decl_constant(only) {
         return Expr {
           overloads: vec![only],
+          overload_instance: None,
           ..Expr::constant(value)
         };
       }
@@ -715,16 +719,19 @@ impl Checker<'_> {
         };
         return Expr {
           overloads: aliased,
+          overload_instance: None,
           ..Expr::value(type_id)
         };
       }
       return Expr {
         overloads: vec![only],
+        overload_instance: None,
         ..Expr::value(resolved.value)
       };
     }
     Expr {
       overloads: vec![only],
+      overload_instance: None,
       ..Expr::place(resolved.value)
     }
   }
@@ -783,6 +790,7 @@ impl Checker<'_> {
           constant: Some(Const::new(TypeId::UNTYPED_ENUM, Value::EnumName(name))),
           lvalue: false,
           overloads: Vec::new(),
+          overload_instance: None,
           explicitly_cast: false,
           autocast: false,
         },

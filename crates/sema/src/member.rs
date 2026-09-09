@@ -65,6 +65,7 @@ impl Checker<'_> {
           constant: None,
           lvalue,
           overloads: Vec::new(),
+          overload_instance: None,
           explicitly_cast: false,
           autocast: false,
         };
@@ -123,7 +124,13 @@ impl Checker<'_> {
           None => self.member_in_scope(scope, name),
         };
         if !found.is_unknown() {
-          return found;
+          // Whatever a call site does with the overloads it found has to be
+          // done under the same instantiation: a `#bake_constants` written in
+          // the body reads `#this` as that specialization (**L§8.5**).
+          return Expr {
+            overload_instance: instance.or(found.overload_instance),
+            ..found
+          };
         }
         // A baked struct's *parameters* are reachable through it too:
         // `floats.N` reads the `N` of `Holder(float, 5)`, which lives in the
@@ -204,6 +211,7 @@ impl Checker<'_> {
           constant: None,
           lvalue,
           overloads: Vec::new(),
+          overload_instance: None,
           explicitly_cast: false,
           autocast: false,
         },
@@ -219,6 +227,7 @@ impl Checker<'_> {
         constant: None,
         lvalue: lvalue && !matches!(kind, ArrayKind::Fixed(_)),
         overloads: Vec::new(),
+        overload_instance: None,
         explicitly_cast: false,
         autocast: false,
       });

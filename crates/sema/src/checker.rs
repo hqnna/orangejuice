@@ -55,6 +55,10 @@ pub struct Expr {
   /// overload set is not a type, so only a call site can narrow it
   /// (**L§7.5**).
   pub overloads: Vec<DeclId>,
+  /// The instantiation the overloads were reached under, when a name was
+  /// looked up inside one: a constant of a baked polymorphic struct is that
+  /// specialization's, so a call site has to resolve it there (**L§8.5**).
+  pub overload_instance: Option<InstanceId>,
   /// The expression is an explicit `cast(T)`. A bitwise operator whose left
   /// operand was cast keeps the cast's type rather than widening (**L§5.2**).
   pub explicitly_cast: bool,
@@ -70,6 +74,7 @@ impl Expr {
     constant: None,
     lvalue: false,
     overloads: Vec::new(),
+    overload_instance: None,
     explicitly_cast: false,
     autocast: false,
   };
@@ -81,6 +86,7 @@ impl Expr {
       constant: None,
       lvalue: false,
       overloads: Vec::new(),
+      overload_instance: None,
       explicitly_cast: false,
       autocast: false,
     }
@@ -100,6 +106,7 @@ impl Expr {
       constant: Some(value),
       lvalue: false,
       overloads: Vec::new(),
+      overload_instance: None,
       explicitly_cast: false,
       autocast: false,
     }
@@ -112,6 +119,7 @@ impl Expr {
       constant: Some(Const::type_value(denoted)),
       lvalue: false,
       overloads: Vec::new(),
+      overload_instance: None,
       explicitly_cast: false,
       autocast: false,
     }

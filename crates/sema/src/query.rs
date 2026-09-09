@@ -534,7 +534,13 @@ impl Checker<'_> {
         false => return None,
       }
     } else {
-      match self.resolve_overload(&callee.overloads.clone(), &arguments) {
+      // A name reached through an instantiated struct is resolved under that
+      // instantiation, since what its body says depends on it (**L§8.5**).
+      let candidates = callee.overloads.clone();
+      let previous = self.enter_instance(callee.overload_instance.or(self.current_instance));
+      let resolved = self.resolve_overload(&candidates, &arguments);
+      self.enter_instance(previous);
+      match resolved {
         Resolved::One(signature) => signature,
         Resolved::Ambiguous | Resolved::None => return None,
       }

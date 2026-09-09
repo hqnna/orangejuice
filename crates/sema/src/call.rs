@@ -100,7 +100,13 @@ impl Checker<'_> {
         false => Resolved::None,
       }
     } else {
-      self.resolve_overload(&callee.overloads.clone(), &arguments)
+      // A name reached through an instantiated struct is resolved under that
+      // instantiation, since what its body says depends on it (**L§8.5**).
+      let candidates = callee.overloads.clone();
+      let previous = self.enter_instance(callee.overload_instance.or(self.current_instance));
+      let resolved = self.resolve_overload(&candidates, &arguments);
+      self.enter_instance(previous);
+      resolved
     };
 
     match resolved {
