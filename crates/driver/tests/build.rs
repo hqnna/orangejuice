@@ -2457,3 +2457,45 @@ fn remove_takes_the_last_element_into_the_hole_it_leaves() {
     "1\n9\n3\n7\n5\n5\n",
   );
 }
+
+#[test]
+fn an_ifx_with_no_branches_written_takes_the_value_its_condition_tested() {
+  // `ifx cond` is worth what the condition tested — one level of boolean
+  // operator down — and the branch that was not written is the default value
+  // of that type, struct defaults and all (**L§5.13**).
+  assert_output(
+    "is_odd :: (value: int) -> bool { return cast(bool)(value & 1); }\n\
+     Car :: struct { seats := 4; }\n\
+     main :: () {\n  \
+       x := 5;\n  \
+       put_number(ifx x > 3);\n  \
+       put_number(ifx is_odd(x));\n  \
+       put_number(ifx is_odd(x + 1));\n  \
+       car: *Car;\n  \
+       taken := ifx car then car.*;\n  \
+       put_number(taken.seats);\n\
+     }\n",
+    "5\n5\n0\n4\n",
+  );
+}
+
+#[test]
+fn a_static_ifx_lowers_only_the_branch_it_chose() {
+  // `#ifx` picks at compile time, and each branch is a block whose earlier
+  // statements are work the program does (**L§5.13**, **L§6.10**).
+  assert_output(
+    "main :: () {\n  \
+       value := #ifx OS == .WINDOWS {\n    \
+         put(\"windows\\n\");\n    \
+         1;\n  \
+       } else {\n    \
+         put(\"elsewhere\\n\");\n    \
+         k := 2;\n    \
+         k *= 3;\n    \
+         k;\n  \
+       }\n  \
+       put_number(value);\n\
+     }\n",
+    "elsewhere\n6\n",
+  );
+}

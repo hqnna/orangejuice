@@ -16,9 +16,17 @@ impl Lowering<'_, '_> {
     let info = self.checker.expression(scope, source, node);
     let want = want.filter(|type_id| !self.checker.types().is_unknown(*type_id));
 
-    // Anything the front end folded is emitted as data rather than walked
+    // A block in expression position is worth its last statement, but the
+    // statements before it are work the program does; folding the block to
+    // that last value would skip them (**L§5.13**).
+    let is_block = matches!(
+      self.checker.tree_of(source).map(|ast| ast.data(node)),
+      Some(NodeData::Block(_))
+    );
+
+    // Anything else the front end folded is emitted as data rather than walked
     // again (**L§5.11**).
-    if let Some(constant) = info.constant.clone() {
+    if let Some(constant) = info.constant.clone().filter(|_| !is_block) {
       let target = want.unwrap_or_else(|| self.checker.hardened(info.type_id));
       // A constant that is being boxed into an `Any` becomes a value of its
       // own type first, since that is the type the `Any` records (**L§3.8**);
@@ -435,11 +443,15 @@ impl Lowering<'_, '_> {
         })
       }
       NodeData::If(payload) => self.ifx_value(scope, source, node, &payload, info),
-      // A block in expression position is its last statement, and takes the
-      // type whatever asked for the block wanted (**L§5.13**).
-      NodeData::Block(block) => match block.statements.last() {
-        Some(last) => {
-          let last = *last;
+      // A block in expression position is worth its last statement, and takes
+      // the type whatever asked for the block wanted (**L§5.13**). The
+      // statements before it are the work that produced it, so they run.
+      NodeData::Block(block) => match block.statements.split_last() {
+        Some((last, before)) => {
+          let (last, before) = (*last, before.to_vec());
+          for statement in before {
+            self.statement(statement);
+          }
           self.expression(scope, source, last, want)
         }
         None => None,
@@ -1684,7 +1696,33 @@ impl Lowering<'_, '_> {
       self.unsupported(source, node, "this 'ifx'", "M7");
       return None;
     }
+    // `#ifx` picks its branch at compile time, so only that one is lowered
+    // (**L§6.10**).
+    if payload.if_flags.contains(ast::IfFlags::IS_STATIC)
+      && let Some(truth) = self
+        .checker
+        .expression(scope, source, payload.condition)
+        .constant
+        .and_then(|value| value.value.truth())
+    {
+      let taken = match truth {
+        true => payload.then_block,
+        false => payload.else_block,
+      };
+      return match taken {
+        Some(taken) => self.expression(scope, source, taken, Some(type_id)),
+        None => None,
+      };
+    }
+
     let result = self.new_local(String::from("ifx"), type_id);
+    // A branch the `ifx` did not write is worth the *default value* of the
+    // type the other one gave it, struct defaults and all (**L§5.13**).
+    let address = self.local_address(result);
+    match payload.then_block.is_none() || payload.else_block.is_none() {
+      true => self.default_initialize(address, type_id),
+      false => self.clear(address, type_id),
+    }
     let condition = self.condition(scope, source, payload.condition)?;
     let then_block = self.new_block();
     let else_block = self.new_block();
@@ -1695,10 +1733,11 @@ impl Lowering<'_, '_> {
       else_block,
     });
 
-    for (block, branch) in [
-      (then_block, payload.then_block),
-      (else_block, payload.else_block),
-    ] {
+    // `ifx cond` with no `then` is worth what the condition tested.
+    let then_written = payload
+      .then_block
+      .or_else(|| Some(self.checker.ifx_then_value(source, payload.condition)));
+    for (block, branch) in [(then_block, then_written), (else_block, payload.else_block)] {
       self.current = block;
       if let Some(branch) = branch
         && let Some(value) = self.expression(scope, source, branch, Some(type_id))

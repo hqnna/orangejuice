@@ -884,10 +884,32 @@ impl Checker<'_> {
     source: SourceId,
     payload: &oj_syntax::ast::IfNode,
   ) -> Expr {
-    self.expression_type(scope, source, payload.condition);
-    let then_value = payload
+    let condition = self.expression_type(scope, source, payload.condition);
+    // `#ifx` picks one branch at compile time; only that one has a type, and
+    // only that one is lowered (**L§6.10**).
+    if payload
+      .if_flags
+      .contains(oj_syntax::ast::IfFlags::IS_STATIC)
+      && let Some(truth) = condition.constant.and_then(|value| value.value.truth())
+    {
+      let taken = match truth {
+        true => payload.then_block,
+        false => payload.else_block,
+      };
+      return match taken {
+        Some(taken) => {
+          let value = self.expression_type(scope, source, taken);
+          Expr::value(self.harden(value.type_id))
+        }
+        None => Expr::value(TypeId::VOID),
+      };
+    }
+    // `ifx cond` with no `then` is worth the value the condition tested
+    // (**L§5.13**).
+    let then_node = payload
       .then_block
-      .map(|node| self.expression_type(scope, source, node));
+      .unwrap_or_else(|| self.ifx_then_value(source, payload.condition));
+    let then_value = Some(self.expression_type(scope, source, then_node));
     let else_value = payload
       .else_block
       .map(|node| self.expression_type(scope, source, node));
@@ -898,8 +920,30 @@ impl Checker<'_> {
       (Some(left), Some(right)) if left.autocast || is_null(&left) => Expr::value(right.type_id),
       (Some(left), Some(right)) if right.autocast || is_null(&right) => Expr::value(left.type_id),
       (Some(left), Some(right)) => Expr::value(self.unify(left.type_id, right.type_id)),
-      (Some(only), None) | (None, Some(only)) => Expr::value(only.type_id),
+      (Some(only), None) | (None, Some(only)) => Expr::value(self.harden(only.type_id)),
       (None, None) => Expr::value(TypeId::VOID),
+    }
+  }
+
+  /// The value an `ifx` with no `then` is worth when its condition holds
+  /// (**L§5.13**): the condition itself, or — one level of boolean operator
+  /// down — the thing it tested. `ifx x > 3` is worth `x`, `ifx f(x)` is worth
+  /// `x`, and `ifx a.b` is worth the `bool` `a.b`.
+  pub fn ifx_then_value(&self, source: SourceId, condition: NodeId) -> NodeId {
+    let Some(ast) = self.ast(source) else {
+      return condition;
+    };
+    match ast.data(condition) {
+      NodeData::UnaryOperator {
+        operator: OperatorType::NOT,
+        operand,
+      } => self.ifx_then_value(source, *operand),
+      NodeData::BinaryOperator { operator, left, .. } if is_boolean_operator(*operator) => *left,
+      NodeData::ProcedureCall(call) => call
+        .arguments
+        .first()
+        .map_or(condition, |argument| argument.expression),
+      _ => condition,
     }
   }
 
@@ -949,3 +993,19 @@ fn negate(value: &Const) -> Option<Const> {
 /// writes and compound assignment at once.
 const SUBSCRIPT: &str = "[]";
 const ADDRESS_SUBSCRIPT: &str = "*[]";
+
+/// The operators an `ifx` with no `then` looks through to find the value its
+/// condition tested (**L§5.13**). `.` is not one: `ifx a.b` is worth `a.b`.
+fn is_boolean_operator(operator: OperatorType) -> bool {
+  matches!(
+    operator,
+    OperatorType::IS_EQUAL
+      | OperatorType::IS_NOT_EQUAL
+      | OperatorType::LESS
+      | OperatorType::LESS_OR_EQUAL
+      | OperatorType::GREATER
+      | OperatorType::GREATER_OR_EQUAL
+      | OperatorType::LOGICAL_AND
+      | OperatorType::LOGICAL_OR
+  )
+}

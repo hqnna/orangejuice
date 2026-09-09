@@ -2531,6 +2531,26 @@ impl Program<'_> {
       }
       NodeData::If(payload) => {
         let payload = payload.clone();
+        // `#ifx` chooses between two *expression* blocks rather than splicing
+        // statements into the scope around it, so each branch keeps a block
+        // scope of its own; the one the condition rejects is simply never
+        // lowered (**L§5.13**, **L§6.10**).
+        if payload
+          .if_flags
+          .contains(oj_syntax::ast::IfFlags::IS_IFX | oj_syntax::ast::IfFlags::IS_STATIC)
+        {
+          self.walk(parsed, payload.condition, scope, source);
+          let taken = self.fold_condition(scope, source, payload.condition);
+          let branches = match taken {
+            Some(true) => vec![payload.then_block],
+            Some(false) => vec![payload.else_block],
+            None => vec![payload.then_block, payload.else_block],
+          };
+          for branch in branches.into_iter().flatten() {
+            self.body(parsed, branch, scope, source);
+          }
+          return;
+        }
         if payload
           .if_flags
           .contains(oj_syntax::ast::IfFlags::IS_STATIC)
