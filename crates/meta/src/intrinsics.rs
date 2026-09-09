@@ -88,6 +88,10 @@ pub(crate) fn table() -> Vec<(&'static str, usize)> {
     ("developer_debug", developer_debug as *const () as usize),
     ("get_type", get_type as *const () as usize),
     (
+      "compiler_get_struct_location",
+      compiler_get_struct_location as *const () as usize,
+    ),
+    (
       "compiler_set_type_info_flags",
       compiler_set_type_info_flags as *const () as usize,
     ),
@@ -263,6 +267,42 @@ unsafe extern "C" fn developer_debug(_value: *mut c_void, _context: *mut c_void)
 /// is only valid on a `*Type_Info` the compiler made for this workspace.
 unsafe extern "C" fn get_type(info: *const c_void, _context: *mut c_void) -> *const c_void {
   info
+}
+
+/// `compiler_get_struct_location :: (w: Workspace, info: *Type_Info_Struct) -> Source_Code_Location`
+///
+/// The pointer is an address in the type table image the running code reads,
+/// and whoever started that code said where each struct in it was written
+/// (**C§3.3**). A pointer that is not one of those answers with an empty
+/// location, the way the reference does for a struct it has no source for.
+unsafe extern "C" fn compiler_get_struct_location(
+  result: *mut SourceCodeLocation,
+  _w: i64,
+  info: *const c_void,
+  _context: *mut c_void,
+) {
+  let found = with(|meta| {
+    meta
+      .struct_location(info as usize)
+      .map(|(path, line, character)| (meta.intern(path.as_bytes()), line, character))
+  })
+  .flatten();
+  if result.is_null() {
+    return;
+  }
+  let location = match found {
+    Some((filename, line_number, character_number)) => SourceCodeLocation {
+      fully_pathed_filename: filename,
+      line_number,
+      character_number,
+    },
+    None => SourceCodeLocation {
+      fully_pathed_filename: Str::EMPTY,
+      line_number: 0,
+      character_number: 0,
+    },
+  };
+  unsafe { *result = location };
 }
 
 /// `compiler_set_type_info_flags :: (type: Type, flags: Type_Info_Flags)`

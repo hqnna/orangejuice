@@ -1232,3 +1232,27 @@ fn an_import_may_be_answered_only_once() {
     report.diagnostics.join("")
   );
 }
+
+#[test]
+fn compiler_get_struct_location_names_where_the_struct_was_written() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "compiler_get_struct_location :: (w: Workspace, info: *Type_Info_Struct) -> Source_Code_Location #compiler;\n\
+     get_current_workspace :: () -> Workspace #compiler;\n\
+     Point :: struct { x: float; y: float; }\n\
+     Later :: struct { z: float; }\n\
+     #run {\n  \
+       w := get_current_workspace();\n  \
+       first  := compiler_get_struct_location(w, cast(*Type_Info_Struct) type_info(Point));\n  \
+       second := compiler_get_struct_location(w, cast(*Type_Info_Struct) type_info(Later));\n  \
+       if first.fully_pathed_filename == \"\"  compiler_report(\"the file a struct is in is reported\");\n  \
+       if first.character_number != 10  compiler_report(\"and the character the struct starts at\");\n  \
+       if second.line_number != first.line_number + 1  compiler_report(\"and its own line, not another struct's\");\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("main"));
+}

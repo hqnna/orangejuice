@@ -121,13 +121,6 @@ impl Engine {
       ),
       None => (1, 1),
     };
-    let mut buffer = Buffer::new(size, alignment);
-    let entry: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(address as usize) };
-    entry(buffer.as_mut_ptr());
-
-    if request.result == TypeId::VOID {
-      return Ok(RunOutcome::Void);
-    }
     // A `Type` a run produced is an address into the type table image, so it
     // is read back through where that image ended up (**L§17**).
     let table = lowered
@@ -137,6 +130,20 @@ impl Engine {
       .as_deref()
       .and_then(|symbol| self.state.borrow().segments.address(symbol))
       .map(|base| (base as u64, &lowered.program.type_table));
+    // A run that asks where a struct was written needs that worked out before
+    // it starts: only this side knows where the image was placed, and the
+    // checker is not reachable from inside the call (**C§3.3**).
+    if let Some((base, image)) = table {
+      install_struct_locations(checker, &lowered.program, base, image);
+    }
+
+    let mut buffer = Buffer::new(size, alignment);
+    let entry: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(address as usize) };
+    entry(buffer.as_mut_ptr());
+
+    if request.result == TypeId::VOID {
+      return Ok(RunOutcome::Void);
+    }
     if checker.types().underlying(request.result) == TypeId::TYPE {
       return match table.and_then(|(base, image)| read_type(base, image, buffer.as_slice())) {
         Some(type_id) => Ok(RunOutcome::Value(oj_sema::Const::type_value(type_id))),
@@ -546,4 +553,31 @@ fn compile_time_links(bytes: &[u8]) -> Box<[oj_sema::RunLink]> {
     }
   }
   links.into_boxed_slice()
+}
+
+/// Says where each struct in a run's type table image was written, but only
+/// when the run actually asks (**C§3.3**): working it out costs a lookup per
+/// type, and almost no `#run` calls `compiler_get_struct_location`.
+fn install_struct_locations(
+  checker: &mut Checker,
+  program: &Program,
+  base: u64,
+  image: &oj_ir::TypeTableImage,
+) {
+  const SYMBOL: &str = "compiler_get_struct_location";
+  let asked = program
+    .procedures
+    .iter()
+    .any(|procedure| procedure.symbol == SYMBOL);
+  if !asked {
+    return;
+  }
+  let mut locations = HashMap::new();
+  for (type_id, offset) in &image.offsets {
+    let Some(location) = checker.struct_location(*type_id) else {
+      continue;
+    };
+    locations.insert((base + offset) as usize, location);
+  }
+  oj_meta::with(|meta| meta.set_struct_locations(locations));
 }

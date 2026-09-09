@@ -330,6 +330,11 @@ pub struct Meta {
   /// The segments `add_data_segment` created, kept so that the pointer handed
   /// back stays valid for the whole compilation (**C§3.3**).
   segments: Vec<std::pin::Pin<Box<DataSegment>>>,
+  /// Where each struct in the type table image the compile-time code is
+  /// running against was written (**C§3.3**), by the address of its
+  /// `Type_Info_Struct`. Whoever runs the code installs this, since only that
+  /// side knows where the image was placed.
+  struct_locations: std::collections::HashMap<usize, (String, i64, i64)>,
   /// The trees a metaprogram has been handed, and the storage they live in
   /// (**C§5.3**). A metaprogram keeps every pointer it was given, so this
   /// lasts as long as the compilation does.
@@ -510,6 +515,21 @@ impl Meta {
     let address = unsafe { segment.as_mut().get_unchecked_mut() as *mut DataSegment }.cast();
     self.segments.push(segment);
     address
+  }
+
+  /// Says where the structs of the image the code about to run reads are, so
+  /// that `compiler_get_struct_location` can answer for a `*Type_Info_Struct`
+  /// (**C§3.3**). Each run reads its own image, so each run installs its own.
+  pub fn set_struct_locations(
+    &mut self,
+    locations: std::collections::HashMap<usize, (String, i64, i64)>,
+  ) {
+    self.struct_locations = locations;
+  }
+
+  /// Where the struct a `*Type_Info_Struct` belongs to was written.
+  pub fn struct_location(&self, address: usize) -> Option<(String, i64, i64)> {
+    self.struct_locations.get(&address).cloned()
   }
 
   /// The blobs `add_global_data` put into this compilation: where each one

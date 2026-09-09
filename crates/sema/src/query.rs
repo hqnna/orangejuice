@@ -662,6 +662,24 @@ impl Checker<'_> {
     }
   }
 
+  /// Where a struct was written: the file, the line and the character
+  /// (**C§3.3**). This is what `compiler_get_struct_location` answers, and it
+  /// is the declaration's own place rather than any use of it.
+  pub fn struct_location(&mut self, type_id: TypeId) -> Option<(String, i64, i64)> {
+    let underlying = self.types().underlying(type_id);
+    let definition = self.types().struct_of(underlying)?;
+    let scope = self.struct_scope(definition)?;
+    let (source, node) = self.aggregate_owner(scope)?;
+    let span = self.ast(source)?.node(node).span;
+    let file = self.program().sources().file(source);
+    let at = file.location(span.start);
+    Some((
+      file.path().display().to_string(),
+      i64::from(at.line),
+      i64::from(at.column),
+    ))
+  }
+
   /// The type a name denotes anywhere in the program. A metaprogram's own
   /// structs — `Build_Options`, `Message` — belong to the distribution rather
   /// than to the compiler, so this is how the compiler finds one without
