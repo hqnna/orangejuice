@@ -951,8 +951,9 @@ impl<'c, 'p> Lowering<'c, 'p> {
         bytes: bytes.data.clone(),
         links: Box::default(),
       }),
-      // A `Code` value is a piece of the program, not data (**L§13.1**).
-      Value::Type(_) | Value::EnumName(_) | Value::Code { .. } => None,
+      // A `Code` value is a piece of the program, not data (**L§13.1**), and a
+      // procedure is an address only the module that generates it can supply.
+      Value::Type(_) | Value::EnumName(_) | Value::Code { .. } | Value::Procedure(_) => None,
     }
   }
 

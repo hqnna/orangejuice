@@ -19,6 +19,10 @@ pub enum Value {
   Type(TypeId),
   /// A `.NAME` whose enum the context has not supplied yet (**L§5.12**).
   EnumName(Symbol),
+  /// A procedure, which is a constant like any other name declared with `::`
+  /// (**L§5.11**): the declaration it was written at, whose address the back
+  /// end supplies.
+  Procedure(oj_scope::DeclId),
   /// A piece of the program, as `Code` (**L§13.1**): the node it was written
   /// at, and the scope its names resolve in.
   Code {
@@ -76,6 +80,9 @@ impl Value {
       Self::Null => Some(false),
       Self::String(text) => Some(!text.is_empty()),
       Self::Type(_) | Self::EnumName(_) | Self::Bytes(_) | Self::Code { .. } => None,
+      // A procedure name is never null, but its truth is an address the back
+      // end supplies rather than anything foldable here.
+      Self::Procedure(_) => None,
     }
   }
 
@@ -176,6 +183,21 @@ impl Const {
     }
     if types.is_float(target) {
       return Some(Self::new(target, Value::Float(self.value.as_float()?)));
+    }
+    // A string literal is bytes, so it casts to a fixed array of them and stays
+    // constant while it does: `cast([5] u8) "Hello"` (**L§5.6**).
+    if let Value::String(text) = &self.value
+      && let Some((element, oj_types::ArrayKind::Fixed(count))) =
+        types.array_of(types.underlying(target))
+      && matches!(element, TypeId::U8 | TypeId::S8)
+      && count as usize >= text.len()
+    {
+      let mut data = vec![0u8; count as usize];
+      data[..text.len()].copy_from_slice(text);
+      return Some(Self::new(
+        target,
+        Value::Bytes(RunBytes::plain(data.into_boxed_slice())),
+      ));
     }
     match types.kind(types.underlying(target)) {
       oj_types::TypeKind::Bool => Some(Self::new(target, Value::Bool(self.value.truth()?))),

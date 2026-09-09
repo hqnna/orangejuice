@@ -46,7 +46,8 @@ impl Checker<'_> {
       self.check_cast(source, span, &value, target, cast.cast_flags);
     }
     // A cast of a numeric constant is a constant (**L§5.11**), which is what
-    // makes `tell(cast(u8) 42.0, …)` bake a `$$x` parameter.
+    // makes `tell(cast(u8) 42.0, …)` bake a `$$x` parameter; so is a string
+    // literal cast to a fixed array of bytes.
     let folded = value
       .constant
       .as_ref()
@@ -56,6 +57,7 @@ impl Checker<'_> {
           crate::constants::Value::Int(_)
             | crate::constants::Value::Float(_)
             | crate::constants::Value::Bool(_)
+            | crate::constants::Value::String(_)
         )
       })
       .and_then(|value| value.convert(self.types(), target));

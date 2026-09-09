@@ -46,6 +46,7 @@ pub(crate) enum ConstKey {
   Type(TypeId),
   Name(Symbol),
   Code(SourceId, NodeId),
+  Procedure(DeclId),
 }
 
 pub(crate) fn const_key(value: &Const) -> ConstKey {
@@ -59,6 +60,7 @@ pub(crate) fn const_key(value: &Const) -> ConstKey {
     Value::Type(id) => ConstKey::Type(*id),
     Value::EnumName(name) => ConstKey::Name(*name),
     Value::Code { source, node, .. } => ConstKey::Code(*source, *node),
+    Value::Procedure(decl) => ConstKey::Procedure(*decl),
   }
 }
 
@@ -818,7 +820,12 @@ impl Checker<'_> {
       // has to be one; a `$$x` takes one when the call site has one and stays
       // an ordinary parameter otherwise (**L§7.8**).
       if let Some((decl, required)) = self.baked_parameter_decl(source, signature, index) {
-        match argument.value.constant.clone() {
+        // A procedure name is a constant like any other declared with `::`
+        // (**L§5.11**), which is what lets `$$x` bake one and the body ask
+        // `is_constant(x)` about it. It has no value of its own before that,
+        // since a call site resolves the name rather than reading it.
+        let named = self.named_procedure(&argument.value);
+        match argument.value.constant.clone().or(named) {
           Some(value) => {
             solution.bindings.push((decl, value));
             continue;
@@ -903,9 +910,15 @@ impl Checker<'_> {
       // whichever node happens to sit at that index.
       let default_source = parameter.default_source.unwrap_or(source);
       let scope = self.scope_at(default_source, default, scopes.arguments);
-      let value = self
+      // A default that is not a constant leaves the parameter unbaked rather
+      // than rejecting the candidate: `$x := #caller_location` is filled at the
+      // call site like any other default (**L§7.13**).
+      let Some(value) = self
         .expression_type(scope, default_source, default)
-        .constant?;
+        .constant
+      else {
+        continue;
+      };
       solution.bindings.push((decl, value));
     }
 
@@ -937,6 +950,23 @@ impl Checker<'_> {
     solution.substitution = substitution;
     solution.bindings.sort_by_key(|(id, _)| *id);
     Some(solution)
+  }
+
+  /// The one concrete procedure an expression names, as the constant it is
+  /// (**L§5.11**). A polymorphic one has no value until a call site
+  /// instantiates it, and a name that stands for a whole overload set has none
+  /// until one is chosen (**L§7.5**, **L§7.8**).
+  fn named_procedure(&mut self, value: &Expr) -> Option<Const> {
+    let [only] = value.overloads[..] else {
+      return None;
+    };
+    let type_id = self.decl_type(only).value;
+    let concrete = self.types().procedure_of(type_id).is_some_and(|signature| {
+      !signature
+        .flags
+        .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC)
+    });
+    concrete.then(|| Const::new(type_id, Value::Procedure(only)))
   }
 
   /// The declaration of a `$x` or `$$x` parameter, whose *value* the

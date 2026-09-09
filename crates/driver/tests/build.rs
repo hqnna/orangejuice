@@ -3349,3 +3349,52 @@ fn a_struct_constant_reaches_its_as_member_through_its_offset() {
     "5\n0\n0\n7\n",
   );
 }
+
+#[test]
+fn a_baked_parameter_takes_a_procedure_name_as_the_constant_it_is() {
+  // A procedure declared with `::` is a constant, so `$$x` bakes one and the
+  // body can ask whether it got one (**L§5.11**).
+  assert_output(
+    "#import \"Basic\";\n\
+     tell :: ($$x: $T, name: string) {\n  \
+       if is_constant(x)  put(tprint(\"constant %\\n\", name));\n  \
+       else               put(tprint(\"variable %\\n\", name));\n\
+     }\n\
+     other :: () {}\n\
+     main :: () {\n  \
+       tell(other, \"a procedure\");\n  \
+       tell(3, \"a number\");\n  \
+       n := 4;\n  \
+       tell(n, \"a local\");\n\
+     }\n",
+    "constant a procedure\nconstant a number\nvariable a local\n",
+  );
+}
+
+#[test]
+fn a_baked_default_the_call_site_cannot_fold_stays_an_ordinary_parameter() {
+  // `$x := #caller_location` is filled where the call was written, like any
+  // other default (**L§7.13**).
+  assert_output(
+    "#import \"Basic\";\n\
+     where :: ($x := #caller_location) -> int { return x.line_number; }\n\
+     main :: () {\n  \
+       a := where();\n  \
+       b := where();\n  \
+       put_number(b - a);\n\
+     }\n",
+    "1\n",
+  );
+}
+
+#[test]
+fn a_string_literal_casts_to_a_fixed_array_of_bytes_constantly() {
+  // The bytes are the literal's, so the cast folds (**L§5.6**, **L§5.11**).
+  assert_output(
+    "main :: () {\n  \
+       a :: cast([5] u8) \"Hello\";\n  \
+       for a  put_number(it);\n\
+     }\n",
+    "72\n101\n108\n108\n111\n",
+  );
+}
