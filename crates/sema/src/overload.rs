@@ -201,7 +201,6 @@ impl Checker<'_> {
       // The varargs parameter is a `[] T`; an argument matches its element,
       // unless it was written `..xs`, which hands over the whole array.
       let target = if Some(index) == signature.vararg_slot && !argument.spread {
-        total = total.saturating_add(convert::VARARGS);
         match self.types().array_of(parameter.type_id) {
           Some((element, _)) => element,
           None => parameter.type_id,
@@ -216,6 +215,12 @@ impl Checker<'_> {
         continue;
       }
       total = total.saturating_add(self.argument_distance(&argument.value, target)?);
+    }
+    // A non-varargs candidate wins over a varargs one when both match
+    // (**L§7.5**), which is what picks `array_add(array)` over
+    // `array_add(array, to_append: ..T)` given nothing to append.
+    if signature.vararg_slot.is_some() {
+      total = total.saturating_add(convert::VARARGS);
     }
     if signature.polymorphic {
       total = total.saturating_add(convert::POLYMORPH);

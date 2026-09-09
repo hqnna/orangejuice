@@ -2758,3 +2758,37 @@ fn an_overload_set_passed_as_an_argument_is_narrowed_by_the_parameter() {
     "5\n",
   );
 }
+
+#[test]
+fn arithmetic_widens_an_integer_into_a_float() {
+  // Measured with the reference: `f * j` is a `float32` and `d * f` a
+  // `float64`, where a *comparison* between the two would be an error
+  // (**L§5.2**, **L§5.10**).
+  assert_output(
+    "main :: () {\n  \
+       j: s64 = 3;\n  \
+       f: float32 = 1.5;\n  \
+       d: float64 = 2.25;\n  \
+       put_number(cast(int)(f * j));\n  \
+       put_number(cast(int)(d * f * 2.0));\n  \
+       put_number(cast(int)(cast(float) j * j));\n\
+     }\n",
+    "4\n6\n9\n",
+  );
+}
+
+#[test]
+fn a_non_varargs_overload_wins_over_a_varargs_one() {
+  // `array_add(*xs)` means the one that returns a `*T`, not the one whose
+  // `..T` slot it would leave empty (**L§7.5**).
+  assert_output(
+    "take :: (values: *[..] $T) -> int { return 1; }\n\
+     take :: (values: *[..] $T, more: ..T) -> int { return 2; }\n\
+     main :: () {\n  \
+       xs: [..] int;\n  \
+       put_number(take(*xs));\n  \
+       put_number(take(*xs, 1, 2));\n\
+     }\n",
+    "1\n2\n",
+  );
+}

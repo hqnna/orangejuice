@@ -856,8 +856,23 @@ impl Checker<'_> {
       }
       return TypeId::UNKNOWN;
     }
-    if self.types().is_float(left) && self.types().is_float(right) {
-      return TypeId::UNKNOWN;
+    // Two float widths meet at the wider one, and an integer widens into a
+    // float: `cast(float) j * j` and `f * u` are `float32`, measured with the
+    // reference (**L§5.10**).
+    if let (Some(left_kind), Some(right_kind)) = (
+      self.types().float_kind(left),
+      self.types().float_kind(right),
+    ) {
+      return match left_kind.size() >= right_kind.size() {
+        true => left,
+        false => right,
+      };
+    }
+    if self.types().is_float(left) && self.types().is_integer(right) {
+      return left;
+    }
+    if self.types().is_integer(left) && self.types().is_float(right) {
+      return right;
     }
     // Pointer arithmetic and comparisons keep the pointer's type.
     if self.types().is_pointer(left) && self.types().is_integer(right) {
