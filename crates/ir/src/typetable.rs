@@ -678,3 +678,56 @@ fn is_procedure(checker: &mut Checker, type_id: TypeId) -> bool {
 /// `Struct_Textual_Flags`' bits, which is why they are named apart.
 const TYPE_INFO_NONE: u32 = 0x1;
 const TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS: u32 = 0x2;
+
+/// A `Type_Info` image built for someone who only *reads* it: the same
+/// self-referential bytes the program carries, for a compilation a metaprogram
+/// is looking at rather than one that is being lowered (**C§5.3**, **L§17**).
+///
+/// The addresses a metaprogram is handed have to be real, so the caller places
+/// the bytes somewhere that outlives the compilation and calls
+/// [`TypeImage::relocate`] to turn the self-relative pointers into addresses
+/// into that placement.
+pub struct TypeImage {
+  pub bytes: Vec<u8>,
+  relocations: Vec<(u64, u64)>,
+  offsets: Vec<(TypeId, u64)>,
+}
+
+impl TypeImage {
+  /// Builds the records for `types` and everything they reach.
+  pub fn build(checker: &mut Checker, types: &[TypeId]) -> Self {
+    let mut table = TypeTable::default();
+    for type_id in types {
+      table.offset_of(checker, *type_id);
+    }
+    table.finish(checker);
+    Self {
+      bytes: table.bytes().to_vec(),
+      relocations: table.relocations().to_vec(),
+      offsets: table.placements(),
+    }
+  }
+
+  /// Where each type's record sits, relative to the start of the image.
+  pub fn offsets(&self) -> &[(TypeId, u64)] {
+    &self.offsets
+  }
+
+  /// Writes the image's own pointers as addresses into `base`, which must be
+  /// where `bytes` was placed.
+  ///
+  /// # Safety
+  /// `base` must point at a copy of `bytes` that is at least `bytes.len()`
+  /// long and that outlives every address handed out of it.
+  pub unsafe fn relocate(&self, base: *mut u8) {
+    for (at, target) in &self.relocations {
+      let address = (base as u64).wrapping_add(*target);
+      unsafe {
+        base
+          .add(*at as usize)
+          .cast::<u64>()
+          .write_unaligned(address)
+      };
+    }
+  }
+}

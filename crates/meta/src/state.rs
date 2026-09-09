@@ -383,6 +383,10 @@ pub struct Meta {
   /// Strings and slices handed to compile-time code, which have to outlive the
   /// call that produced them.
   arena: Vec<Box<[u8]>>,
+  /// Whether the metaprogram added source to the compilation it is itself part
+  /// of, which the driver answers by running that compilation again with the
+  /// source in place (`docs/spec.md` §6.5).
+  pub self_modified: bool,
 }
 
 impl Meta {
@@ -644,6 +648,44 @@ impl Meta {
     }
     if let Some(intercept) = self.intercept.as_mut() {
       intercept.recompile = true;
+    }
+  }
+
+  /// Records a string a metaprogram added to the scope a `Code` was written in
+  /// (**C§3.3**). `add_build_string`'s `code` argument is a dummy whose only
+  /// purpose is to name a scope, so what it names here is the file it was
+  /// written in.
+  ///
+  /// The scope may belong to the compilation that is running right now — that
+  /// is how `Metaprogram_Plugins` fills the `#placeholder` its own body waits
+  /// on — in which case the compilation is run *again* with the string in
+  /// place, since a `#run` of ours cannot stall (`docs/spec.md` §6.5).
+  pub fn add_string_in_scope(&mut self, workspace: i64, path: PathBuf, text: String) {
+    let target = StringScope::File(path);
+    let running = self.workspace(workspace).is_some_and(|w| w.implicit);
+    if let Some(target_workspace) = self.workspace(workspace) {
+      if target_workspace
+        .scoped_strings
+        .iter()
+        .any(|had| had.target == target && had.text == text)
+      {
+        return;
+      }
+      target_workspace
+        .scoped_strings
+        .push(ScopedString { target, text });
+      target_workspace.started = true;
+    }
+    match running {
+      // The compilation the string joins is this one, so it is not a watched
+      // workspace that has to happen again — the driver runs the whole thing
+      // over.
+      true => self.self_modified = true,
+      false => {
+        if let Some(intercept) = self.intercept.as_mut() {
+          intercept.recompile = true;
+        }
+      }
     }
   }
 

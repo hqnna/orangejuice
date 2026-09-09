@@ -22,3 +22,4 @@ pub use lower::{
   lower, lower_library, lower_modify, lower_run, lower_with_roots, modify_result_size,
 };
 pub use print::{print_ir, summary};
+pub use typetable::TypeImage;

@@ -2073,3 +2073,23 @@ fn a_foreign_symbol_is_not_taken_by_an_overload_that_can_be_renamed() {
     "42\n4\n",
   );
 }
+
+#[test]
+fn a_modify_sees_an_untyped_constant_as_the_type_its_header_declared() {
+  // A call site that writes `.B` hands over an *untyped* enum constant; inside
+  // the `#modify` the variable is a value of the type the header declared, so
+  // comparing it to another member of that enum is what it looks like
+  // (**L§7.8**).
+  assert_output(
+    "Kind :: enum u8 { A; B; C; }\n\
+     pick :: ($k: Kind = .A) -> int #modify {\n  \
+       if k == .B  k = .C;\n  \
+       return true;\n\
+     } {\n  \
+       #if k == .C  return 3;\n  \
+       return 1;\n\
+     }\n\
+     main :: () { put_number(pick(.B)); }\n",
+    "3\n",
+  );
+}

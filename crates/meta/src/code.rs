@@ -820,6 +820,25 @@ impl Nodes {
     address
   }
 
+  /// Puts a `Type_Info` image where a metaprogram can read it and hands back
+  /// where it landed (**C§5.3**). The bytes live as long as the arena, which
+  /// is what makes the `Code_Node.type` addresses taken out of them good for
+  /// the whole compilation.
+  pub fn place_image(&mut self, bytes: &[u8]) -> *mut u8 {
+    if bytes.is_empty() {
+      return std::ptr::null_mut();
+    }
+    let slice = self.arena.alloc_slice(bytes);
+    slice.data.cast_mut()
+  }
+
+  /// The file an exported node was written in, which is the scope a `Code`
+  /// handed to `add_build_string` names (**C§3.3**).
+  pub fn path_of(&self, node: *const CodeNode) -> Option<&std::path::PathBuf> {
+    let (key, _) = self.origin.get(&(node as usize))?;
+    self.paths.get(&(key.0, key.1))
+  }
+
   /// Records where a node was written and the text of the file it was written
   /// in, which together are what it prints as.
   pub fn record_span(&mut self, key: Key, span: (u32, u32), text: &[u8]) {

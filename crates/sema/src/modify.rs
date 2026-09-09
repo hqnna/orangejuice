@@ -57,6 +57,46 @@ pub enum ModifyOutcome {
 }
 
 impl Checker<'_> {
+  /// The type a `$x` variable's *value* has inside a `#modify` block
+  /// (**L§7.8**).
+  ///
+  /// A type variable is an ordinary `Type` there: it is not constant, so
+  /// `size_of(T)` and `y: T;` are not allowed. Everything else is a value of
+  /// the type the header declared, which is not always the type the solved
+  /// constant carries — a call site that wrote `.B` or `3` handed over an
+  /// untyped constant, and a block comparing it to another member of its enum
+  /// needs the enum.
+  fn modify_variable_type(&mut self, decl: DeclId, value: &Const) -> TypeId {
+    if matches!(value.value, Value::Type(_)) {
+      return TypeId::TYPE;
+    }
+    if !self.types().is_untyped(value.type_id) {
+      return value.type_id;
+    }
+    let declared = self.declared_parameter_type(decl);
+    match self.types().is_unknown(declared) {
+      true => self.harden(value.type_id),
+      false => declared,
+    }
+  }
+
+  /// The type a parameter was written with, read from the header rather than
+  /// from anything a call site decided.
+  fn declared_parameter_type(&mut self, decl: DeclId) -> TypeId {
+    let info = self.program().tree().decl(decl);
+    let (Some(source), Some(node), scope) = (info.source, info.node, info.scope) else {
+      return TypeId::UNKNOWN;
+    };
+    let Some(NodeData::Declaration(declaration)) = self.ast(source).map(|ast| ast.data(node))
+    else {
+      return TypeId::UNKNOWN;
+    };
+    let Some(type_inst) = declaration.type_inst else {
+      return TypeId::UNKNOWN;
+    };
+    self.type_from_node(scope, source, type_inst)
+  }
+
   /// Runs the `#modify` blocks of a header that has just been solved
   /// (**L§7.8**). `None` rejects the candidate; `Some` gives the values the
   /// instantiation should be keyed and built with.
@@ -79,13 +119,7 @@ impl Checker<'_> {
         .iter()
         .map(|(decl, value)| ModifyVariable {
           decl: *decl,
-          // A type variable is an ordinary `Type` inside the block: it is not
-          // constant there, so `size_of(T)` and `y: T;` are not allowed
-          // (**L§7.8**).
-          type_id: match value.value {
-            Value::Type(_) => TypeId::TYPE,
-            _ => value.type_id,
-          },
+          type_id: self.modify_variable_type(*decl, value),
           value: value.clone(),
         })
         .collect();

@@ -38,7 +38,7 @@ pub use code::{
   CodeProcedureBody, CodeProcedureCall, CodeProcedureHeader, CodePushContext, CodeResolvedOverload,
   CodeReturn, CodeScopeEntry, CodeStruct, CodeStructLiteralInfo, CodeTypeDefinition,
   CodeTypeInstantiation, CodeTypeQuery, CodeUnaryOperator, CodeUsing, CodeWhile,
-  ContextModification, Location, MessageTypechecked, Nodes, Tree, Typechecked, literal_type,
+  ContextModification, Key, Location, MessageTypechecked, Nodes, Tree, Typechecked, literal_type,
 };
 pub use message::{
   ErrorCode, ImportStatus, Kind, Message, MessageComplete, MessageFailedImport, MessageFile,

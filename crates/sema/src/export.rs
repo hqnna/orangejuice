@@ -24,7 +24,7 @@ use oj_meta::{
   CodeDirectiveModuleParameters, CodeDirectivePlace, CodeDirectivePokeName,
   CodeDirectiveProcedureName, CodeDirectiveRun, CodeDirectiveScope, CodeDirectiveWildcard,
   CodeEnum, CodeExpressionQuery, CodeFor, CodeIdent, CodeIf, CodeLiteral, CodeLiteralValues,
-  CodeLoopControl, CodeNode, CodeNote, CodePointerLiteralInfo, CodeProcedureBody,
+  CodeLoopControl, CodeMakeVarargs, CodeNode, CodeNote, CodePointerLiteralInfo, CodeProcedureBody,
   CodeProcedureCall, CodeProcedureHeader, CodePushContext, CodeReturn, CodeStruct,
   CodeStructLiteralInfo, CodeTypeInstantiation, CodeTypeQuery, CodeUnaryOperator, CodeUsing,
   CodeWhile, ContextModification, Location, Nodes, Slice, Str, Tree, literal_type,
@@ -35,6 +35,16 @@ use oj_syntax::ast::{
 };
 
 use crate::checker::Checker;
+
+/// `Code_Node.Kind.MAKE_VARARGS` (**C§5.3**): the node the compiler puts in a
+/// `..T` slot to stand for the arguments it gathered. Nothing writes one, so
+/// `oj-syntax` has no kind of its own for it.
+const MAKE_VARARGS_KIND: u8 = 24;
+
+/// How many times the name-resolving pass runs. Resolving one name exports
+/// the declaration it means, whose own names then want resolving; a handful of
+/// rounds settles a program.
+const RESOLVE_ROUNDS: usize = 4;
 
 /// Walks one compilation's trees into the storage a metaprogram reads.
 pub struct Exporter<'c, 'p> {
@@ -50,6 +60,11 @@ pub struct Exporter<'c, 'p> {
   generation: u32,
   parent_block: *const CodeBlock,
   owning_statement: *const CodeNode,
+  /// Where each type's `Type_Info` sits, when the caller built an image for
+  /// this compilation and placed it somewhere the metaprogram can read
+  /// (**C§5.3**). Without one a node carries no type, which is what a dump
+  /// stage and a compilation nobody is watching see.
+  type_addresses: std::collections::HashMap<oj_types::TypeId, usize>,
 }
 
 impl<'c, 'p> Exporter<'c, 'p> {
@@ -62,7 +77,14 @@ impl<'c, 'p> Exporter<'c, 'p> {
       generation,
       parent_block: std::ptr::null(),
       owning_statement: std::ptr::null(),
+      type_addresses: std::collections::HashMap::new(),
     }
+  }
+
+  /// Installs the `Type_Info` addresses a metaprogram reads through
+  /// `Code_Node.type` (**C§5.3**).
+  pub fn set_type_addresses(&mut self, addresses: Vec<(oj_types::TypeId, usize)>) {
+    self.type_addresses = addresses.into_iter().collect();
   }
 
   /// Exports one tree and hands back what `compiler_get_nodes` answers for it.
@@ -135,6 +157,102 @@ impl<'c, 'p> Exporter<'c, 'p> {
     self.nodes.arena.alloc_slice(&items)
   }
 
+  /// `Code_Procedure_Call.arguments_sorted`: the arguments in the callee's
+  /// parameter order, with the ones that landed in a `..T` slot gathered into
+  /// a `Code_Make_Varargs` and the ones the call left out standing for their
+  /// defaults (**C§5.3**, **L§7.3**).
+  ///
+  /// A metaprogram reads the *last* of these to decide whether the call spread
+  /// its varargs, so a call whose callee resolved has to carry them; a call
+  /// that resolved to nothing carries none, which is what an empty list means.
+  fn sorted_arguments(&mut self, source: SourceId, node: NodeId) -> Slice {
+    // The scope is the one the *callee name* was resolved in: a call node is
+    // not a name, so nothing recorded a scope for it.
+    let called = match self.checker.tree_of(source).map(|ast| ast.data(node)) {
+      Some(NodeData::ProcedureCall(call)) => call.procedure_expression,
+      _ => return Slice::EMPTY,
+    };
+    let fallback = self.checker.program().main_scope();
+    let scope = self.checker.scope_for(source, called, fallback);
+    let Some(plan) = self.checker.call_plan(scope, source, node) else {
+      return Slice::EMPTY;
+    };
+    let vararg_slot = plan.varargs.as_ref().map(|(index, _, _)| *index);
+    let total = plan.arguments.len() + usize::from(vararg_slot.is_some());
+    let mut written = plan.arguments.iter();
+    let mut items: Vec<*const CodeNode> = Vec::with_capacity(total);
+    for index in 0..total {
+      if Some(index) == vararg_slot {
+        let Some((_, element, gathered)) = plan.varargs.clone() else {
+          continue;
+        };
+        // `f(..xs)` hands the whole array over, so what stands in the slot is
+        // the expression itself rather than a gathering of one (**L§7.3**).
+        if plan.varargs_spread {
+          if let Some(only) = gathered.first() {
+            items.push(self.node(only.source, only.node));
+          }
+          continue;
+        }
+        let expressions: Vec<*const CodeNode> = gathered
+          .iter()
+          .map(|argument| self.node(argument.source, argument.node))
+          .collect();
+        let expressions = self.nodes.arena.alloc_slice(&expressions);
+        let serial = self.nodes.next_serial();
+        let made = self.nodes.arena.alloc(CodeMakeVarargs {
+          base: CodeNode {
+            kind: MAKE_VARARGS_KIND,
+            node_flags: 0,
+            type_info: std::ptr::null(),
+            location: Location {
+              enclosing_load: std::ptr::null(),
+              l0: 0,
+              c0: 0,
+              l1: 0,
+              c1: 0,
+            },
+            serial,
+          },
+          element_type: std::ptr::null(),
+          expressions,
+          is_for_non_native_calling_convention: false,
+        });
+        let _ = element;
+        items.push(made.cast());
+        continue;
+      }
+      let Some(argument) = written.next() else {
+        continue;
+      };
+      items.push(self.node(argument.source, argument.node));
+    }
+    self.nodes.arena.alloc_slice(&items)
+  }
+
+  /// `Code_Node.type`: the address of the node's `Type_Info` in the image the
+  /// caller built for this compilation (**C§5.3**). A declaration carries the
+  /// type it was declared with, which is what a metaprogram reads to decide
+  /// whether a parameter is a `string`; anything else carries none, since
+  /// asking for an arbitrary expression's type mid-export would typecheck it
+  /// again in a scope the export does not have.
+  fn type_info_of(&mut self, source: SourceId, id: NodeId) -> *const std::ffi::c_void {
+    if self.type_addresses.is_empty() {
+      return std::ptr::null();
+    }
+    let Some(decl) = self.checker.decl_at(source, id) else {
+      return std::ptr::null();
+    };
+    if self.checker.program().tree().decl(decl).node != Some(id) {
+      return std::ptr::null();
+    }
+    let type_id = self.checker.decl_type(decl).value;
+    match self.type_addresses.get(&type_id) {
+      Some(address) => *address as *const std::ffi::c_void,
+      None => std::ptr::null(),
+    }
+  }
+
   fn text(&mut self, bytes: &[u8]) -> Str {
     self.nodes.arena.alloc_str(bytes)
   }
@@ -169,7 +287,7 @@ impl<'c, 'p> Exporter<'c, 'p> {
         kind as u16 as u8
       },
       node_flags: node.flags.bits(),
-      type_info: std::ptr::null(),
+      type_info: self.type_info_of(source, id),
       location: Location {
         enclosing_load: std::ptr::null(),
         l0: start.line as i32,
@@ -327,11 +445,13 @@ impl Exporter<'_, '_> {
           }
           None => std::ptr::null_mut(),
         };
+        let sorted = self.sorted_arguments(source, id);
         unsafe {
           (*address).procedure_expression = procedure;
           (*address).resolved_procedure_expression =
             self.already_exported(source, call.procedure_expression);
           (*address).arguments_unsorted = unsorted;
+          (*address).arguments_sorted = sorted;
           (*address).context_modification = modification;
           (*address).flags = call.flags.bits();
         }
@@ -987,13 +1107,15 @@ impl Exporter<'_, '_> {
     let (Some(declared_in), Some(node)) = (declaration.source, declaration.node) else {
       return std::ptr::null();
     };
-    match self.nodes.placed((self.generation, declared_in.0, node.0)) {
-      Some(address) => {
-        self.reach(address);
-        address.cast()
-      }
-      None => std::ptr::null(),
+    if let Some(address) = self.nodes.placed((self.generation, declared_in.0, node.0)) {
+      self.reach(address);
+      return address.cast();
     }
+    // A name may mean a declaration this export has not reached — `print` in
+    // `Basic`, say. The reference hands a metaprogram the whole program's
+    // graph, so the declaration is exported here rather than left null; a
+    // plugin that reads a call's callee needs it (**C§5.3**).
+    self.node(declared_in, node).cast()
   }
 
   /// What a call resolved to, on the same terms as
@@ -1079,7 +1201,24 @@ impl Exporter<'_, '_> {
   /// compilation exported has an address. A name written before the
   /// declaration it means could not be pointed at on the first walk.
   pub fn resolve_names(&mut self) {
-    for ((generation, source, node), address) in self.nodes.placed_entries() {
+    // Resolving a name exports the declaration it means, so the pass runs
+    // again over whatever that brought in; the order is the one the nodes were
+    // written in, so that what a metaprogram is handed does not depend on how
+    // a hash table happened to iterate.
+    let mut done = 0usize;
+    for _ in 0..RESOLVE_ROUNDS {
+      let mut entries = self.nodes.placed_entries();
+      if entries.len() <= done {
+        break;
+      }
+      entries.sort_unstable_by_key(|(key, _)| *key);
+      done = entries.len();
+      self.resolve_round(entries);
+    }
+  }
+
+  fn resolve_round(&mut self, entries: Vec<(oj_meta::Key, *mut CodeNode)>) {
+    for ((generation, source, node), address) in entries {
       // Only this compilation's nodes: an earlier one's numbers mean nothing
       // to the trees this one is walking.
       if generation != self.generation {
@@ -1102,6 +1241,45 @@ impl Exporter<'_, '_> {
       };
       let resolved = self.already_exported(source, called);
       unsafe { (*address.cast::<CodeProcedureCall>()).resolved_procedure_expression = resolved };
+      self.resolve_callee(source, id, called);
     }
+  }
+
+  /// Points the name a call was written with at the procedure it chose
+  /// (**C§5.3**). A metaprogram reads a call's callee that way — through
+  /// `Code_Ident.resolved_declaration` on the rightmost name of the call's
+  /// procedure expression — so overload resolution's answer has to be written
+  /// back onto the tree.
+  fn resolve_callee(&mut self, source: SourceId, call: NodeId, called: NodeId) {
+    let mut name = called;
+    loop {
+      match self.checker.tree_of(source).map(|ast| ast.data(name)) {
+        Some(NodeData::BinaryOperator {
+          operator: oj_syntax::ast::OperatorType::DOT,
+          right,
+          ..
+        }) => name = *right,
+        Some(NodeData::Ident(_)) => break,
+        _ => return,
+      }
+    }
+    let Some(address) = self.nodes.placed((self.generation, source.0, name.0)) else {
+      return;
+    };
+    let fallback = self.checker.program().main_scope();
+    let scope = self.checker.scope_for(source, name, fallback);
+    let Some(callee) = self
+      .checker
+      .call_plan(scope, source, call)
+      .and_then(|plan| plan.callee)
+    else {
+      return;
+    };
+    let declaration = self.checker.program().tree().decl(callee);
+    let (Some(declared_in), Some(node)) = (declaration.source, declaration.node) else {
+      return;
+    };
+    let target = self.node(declared_in, node);
+    unsafe { (*address.cast::<CodeIdent>()).resolved_declaration = target.cast() };
   }
 }

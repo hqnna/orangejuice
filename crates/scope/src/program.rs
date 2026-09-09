@@ -526,6 +526,23 @@ impl<'a> Program<'a> {
     self.references.borrow()
   }
 
+  /// How many references the program has recorded so far, or `0` while it is
+  /// recording one. The scope tree grows *while* the typechecker runs — an
+  /// `#insert` adds to it, and so does a module a `#import` inside one
+  /// instantiates (**L§4.3**) — so a checker that read the list once has to be
+  /// able to ask whether there is more.
+  pub fn reference_count(&self) -> usize {
+    self.references.try_borrow().map_or(0, |list| list.len())
+  }
+
+  /// The references recorded after the first `from` of them.
+  pub fn references_since(&self, from: usize) -> Vec<Reference> {
+    match self.references.try_borrow() {
+      Ok(list) if list.len() > from => list[from..].to_vec(),
+      _ => Vec::new(),
+    }
+  }
+
   /// Whether `name` is one a macro injects into its caller's block.
   pub fn is_macro_injected(&self, name: Symbol) -> bool {
     self.macro_injected.borrow().contains(&name)
@@ -892,10 +909,14 @@ impl<'a> Program<'a> {
 
   /// A module is loaded exactly once however it was reached, so its contents
   /// are not conditional even when the `#import` that pulled it in sits in a
-  /// `#if` branch M3 could not decide.
+  /// `#if` branch M3 could not decide — and they do not belong to that branch
+  /// either, or a later `#import` naming the same module from outside every
+  /// `#if` would reach declarations the checker then drops with the branch.
   fn load_module_files(&self, module: ScopeId, entry: &Path, origin: Option<(SourceId, Span)>) {
     let conditional = self.conditional.replace(0);
+    let branch = self.branch.replace(None);
     self.load_file_into(module, entry, origin);
+    self.branch.set(branch);
     self.conditional.set(conditional);
   }
 

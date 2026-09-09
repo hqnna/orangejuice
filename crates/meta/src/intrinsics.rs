@@ -184,10 +184,9 @@ unsafe extern "C" fn compiler_get_code(
 
 /// `get_root_type :: (code: Code) -> (status: Get_Root_Type_Status, type: Type)`
 ///
-/// A node exported by orangejuice carries no `Type_Info` address, because the
-/// table it would point into belongs to the workspace being compiled rather
-/// than to the metaprogram reading it (`docs/spec.md` §10), so a well-formed
-/// `Code` reports `NOT_TYPED` rather than a pointer into the wrong table.
+/// A `Type` is its `Type_Info`'s address, and an exported node carries one
+/// when the compilation it belongs to built an image for the metaprogram to
+/// read (**C§5.3**). A node with none reports `NOT_TYPED`.
 unsafe extern "C" fn get_root_type(
   code: *const CodeNode,
   result: *mut *const c_void,
@@ -199,10 +198,20 @@ unsafe extern "C" fn get_root_type(
   if code.is_null() {
     return 2;
   }
-  match with(|meta| meta.nodes.borrow().tree(code)).flatten() {
-    Some(_) => 4,
-    None => 3,
+  if with(|meta| meta.nodes.borrow().tree(code))
+    .flatten()
+    .is_none()
+  {
+    return 3;
   }
+  let type_info = unsafe { (*code).type_info };
+  if type_info.is_null() {
+    return 4;
+  }
+  if !result.is_null() {
+    unsafe { *result = type_info };
+  }
+  1
 }
 
 /// `compiler_make_procedure_live :: (w: Workspace, header: *Code_Procedure_Header)`
@@ -737,15 +746,23 @@ unsafe extern "C" fn add_build_file(
 unsafe extern "C" fn add_build_string(
   data: *const Str,
   w: i64,
-  _code: u64,
+  code: *const CodeNode,
   _location: *const SourceCodeLocation,
   _context: *mut c_void,
 ) {
   let text = unsafe { read_str(data) };
   with(|meta| {
-    if let Some(workspace) = meta.workspace(w) {
-      workspace.strings.push(text);
-      workspace.started = true;
+    // A `Code` here is a dummy whose only purpose is to name the scope the
+    // string joins (**C§3.3**); without one the string is a file of its own.
+    let scope = meta.nodes.borrow().path_of(code).cloned();
+    match scope {
+      Some(path) => meta.add_string_in_scope(w, path, text),
+      None => {
+        if let Some(workspace) = meta.workspace(w) {
+          workspace.strings.push(text);
+          workspace.started = true;
+        }
+      }
     }
   });
 }

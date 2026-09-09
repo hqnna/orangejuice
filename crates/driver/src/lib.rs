@@ -169,6 +169,37 @@ fn run_workspace(
   only: Option<&str>,
   watching: Option<std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>>,
 ) -> Report {
+  // A metaprogram may add source to the compilation it is itself part of —
+  // that is how `Metaprogram_Plugins` fills the `#placeholder` its own body
+  // waits on. The reference stalls the `#run` until the declaration arrives;
+  // orangejuice cannot (`docs/spec.md` §6.5), so the compilation is run again
+  // with the source in place, which is the same replay every other
+  // after-the-fact answer gets.
+  let mut options = options.clone();
+  for _ in 0..SELF_MODIFICATION_ROUNDS {
+    let mut added = Vec::new();
+    let report = run_workspace_once(input, &options, stage, only, watching.clone(), &mut added);
+    if added.is_empty() {
+      return report;
+    }
+    options.added_strings.extend(added);
+  }
+  Report::failure("a metaprogram kept adding source to its own compilation")
+}
+
+/// How many times a compilation is run again for source its own metaprogram
+/// added. One round is what `Metaprogram_Plugins` needs; the rest is only so
+/// that a metaprogram that never settles stops rather than runs forever.
+const SELF_MODIFICATION_ROUNDS: usize = 8;
+
+fn run_workspace_once(
+  input: &Input,
+  options: &BuildOptions,
+  stage: Stage,
+  only: Option<&str>,
+  watching: Option<std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>>,
+  self_added: &mut Vec<oj_scope::AddedString>,
+) -> Report {
   let root = &input.anchor();
   let sources = SourceMap::new();
   let interner = Interner::new();
@@ -271,11 +302,16 @@ fn run_workspace(
   let outer = oj_meta::install(state);
   checker.check();
   let meta = oj_meta::uninstall().unwrap_or_default();
+  if meta.self_modified {
+    *self_added = self_added_strings(&meta, root, &options.added_strings);
+  }
   // What a watching metaprogram is told about this compilation's program: the
   // trees, exported once the checker is done with them (**C§3.2**).
   if watching.is_some() {
+    let addresses = place_type_image(&mut checker, &nodes);
     let mut borrowed = nodes.borrow_mut();
     let mut exporter = oj_sema::Exporter::new(&mut checker, &mut borrowed, generation);
+    exporter.set_type_addresses(addresses);
     report.compiled.typechecked = vec![exporter.program()];
     export_failed_imports(&mut exporter, &program, &mut report.compiled);
   }
@@ -873,6 +909,76 @@ fn added_string_path(workspace: &oj_meta::Workspace, outer: &Path, index: usize)
     index + 1
   ))
 }
+/// Builds the `Type_Info` image for a compilation a metaprogram is watching
+/// and puts it where that metaprogram can read it (**C§5.3**).
+///
+/// A `Code_Node.type` has to be an address, and the table it points into
+/// belongs to the workspace being compiled rather than to the metaprogram — so
+/// the image is built here, in the compiler's own memory, and lives as long as
+/// the storage the trees are exported into.
+fn place_type_image(
+  checker: &mut oj_sema::Checker<'_>,
+  nodes: &std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>,
+) -> Vec<(oj_types::TypeId, usize)> {
+  let all: Vec<oj_types::TypeId> = (0..checker.types().len() as u32)
+    .map(oj_types::TypeId)
+    .collect();
+  let image = oj_ir::TypeImage::build(checker, &all);
+  let base = nodes.borrow_mut().place_image(&image.bytes);
+  if base.is_null() {
+    return Vec::new();
+  }
+  // SAFETY: the bytes were just copied into the arena, which outlives every
+  // address handed out of them.
+  unsafe { image.relocate(base) };
+  image
+    .offsets()
+    .iter()
+    .map(|(type_id, offset)| (*type_id, base as usize + *offset as usize))
+    .collect()
+}
+
+/// The strings a metaprogram added to a scope of the compilation it is itself
+/// part of, minus the ones a previous round already put there (**C§3.3**).
+fn self_added_strings(
+  meta: &oj_meta::Meta,
+  root: &Path,
+  already: &[oj_scope::AddedString],
+) -> Vec<oj_scope::AddedString> {
+  let directory = root
+    .parent()
+    .map(Path::to_path_buf)
+    .unwrap_or_else(|| root.to_path_buf());
+  let mut added: Vec<oj_scope::AddedString> = Vec::new();
+  for workspace in &meta.workspaces {
+    if !workspace.implicit {
+      continue;
+    }
+    for scoped in &workspace.scoped_strings {
+      let oj_meta::StringScope::File(path) = &scoped.target else {
+        continue;
+      };
+      let target = oj_scope::StringTarget::File(path.clone());
+      let seen = already
+        .iter()
+        .chain(added.iter())
+        .any(|had| had.target == target && had.text == scoped.text);
+      if seen {
+        continue;
+      }
+      added.push(oj_scope::AddedString {
+        target,
+        path: directory.join(format!(
+          ".self_string_{}.jai",
+          already.len() + added.len() + 1
+        )),
+        text: scoped.text.clone(),
+      });
+    }
+  }
+  added
+}
+
 /// Gives every `#no_reset` global the bytes compile-time execution left in it
 /// (**L§12.3**). Everything else keeps the initializer the front end folded,
 /// which is the reset.

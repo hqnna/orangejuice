@@ -234,7 +234,14 @@ pub struct Checker<'a> {
   /// (**L§7.8**).
   states: HashMap<(Option<InstanceId>, DeclId), State>,
   finished: Vec<DeclId>,
-  scope_of_node: HashMap<(SourceId, NodeId), ScopeId>,
+  /// The scope each written name was resolved in. The program grows while the
+  /// typechecker runs — an `#insert` splices statements in, and a `#import`
+  /// inside one walks a whole module (**L§4.3**) — so this is topped up from
+  /// the program rather than read once.
+  scope_of_node: std::cell::RefCell<HashMap<(SourceId, NodeId), ScopeId>>,
+  references_seen: std::cell::Cell<usize>,
+  /// How many units this checker has read. The rest arrived after it started.
+  units_seen: usize,
   struct_scopes: HashMap<StructId, ScopeId>,
   enum_scopes: HashMap<EnumId, ScopeId>,
   /// The aggregate body a member scope belongs to, so that asking for one
@@ -332,10 +339,12 @@ impl<'a> Checker<'a> {
   pub fn new(program: &'a Program<'a>) -> Self {
     let interner = program.interner();
     let mut scope_of_node = HashMap::new();
+    let mut references_seen = 0usize;
     for reference in program.references().iter() {
       scope_of_node
         .entry((reference.source, reference.node))
         .or_insert(reference.scope);
+      references_seen += 1;
     }
 
     let aggregate_owners = program
@@ -344,48 +353,10 @@ impl<'a> Checker<'a> {
       .map(|(source, node, scope)| (scope, (source, node)))
       .collect();
 
-    let mut compound_properties = HashMap::new();
-    let mut iterators = HashMap::new();
-    for unit in program.units() {
-      let ast = &unit.parsed.ast;
-      for index in 0..ast.len() {
-        let node = NodeId(index as u32);
-        // `it` and `it_index` take their types from the loop they belong to
-        // (**L§6.5**), which is only reachable from the loop's side.
-        if matches!(ast.data(node), NodeData::For(_))
-          && let Some(scope) = program.loop_scope(unit.source, node)
-        {
-          // A loop that did not name its variables declares them with no
-          // identifier to be found through, so the loop's own scope — which
-          // holds `it` then `it_index` and nothing else — is the key.
-          for (index, id) in program
-            .tree()
-            .declarations(scope)
-            .iter()
-            .take(2)
-            .enumerate()
-          {
-            iterators.insert(*id, (unit.source, node, index == 1));
-          }
-        }
-        let NodeData::CompoundDeclaration(compound) = ast.data(node) else {
-          continue;
-        };
-        let NodeData::CommaSeparatedArguments { arguments } =
-          ast.data(compound.comma_separated_assignment)
-        else {
-          continue;
-        };
-        for (index, argument) in arguments.iter().enumerate() {
-          compound_properties.insert(
-            (unit.source, argument.node),
-            (compound.declaration_properties, index),
-          );
-        }
-      }
-    }
+    let compound_properties = HashMap::new();
+    let iterators = HashMap::new();
 
-    Self {
+    let mut checker = Self {
       program,
       interner,
       nodes: None,
@@ -395,7 +366,8 @@ impl<'a> Checker<'a> {
       names: Names::new(interner),
       states: HashMap::new(),
       finished: Vec::new(),
-      scope_of_node,
+      scope_of_node: std::cell::RefCell::new(scope_of_node),
+      references_seen: std::cell::Cell::new(references_seen),
       struct_scopes: HashMap::new(),
       enum_scopes: HashMap::new(),
       aggregate_owners,
@@ -427,7 +399,74 @@ impl<'a> Checker<'a> {
       call_site: None,
       loop_expansions: HashMap::new(),
       argument_instances: HashMap::new(),
+      units_seen: 0,
+    };
+    checker.refresh_units();
+    checker
+  }
+
+  /// Reads the files the program has gained since this checker last looked.
+  /// The program grows while the typechecker runs: an `#insert` splices a
+  /// parsed string in, and a `#import` inside one walks a whole module of the
+  /// distribution (**L§4.3**). Everything derived from a unit's AST — which
+  /// loop a nameless `it` belongs to, which compound declaration a name was
+  /// written in — has to grow with it.
+  fn refresh_units(&mut self) {
+    let program = self.program;
+    let count = program.unit_count();
+    if count <= self.units_seen {
+      return;
     }
+    let units: Vec<(oj_diag::SourceId, std::sync::Arc<oj_syntax::Parsed>)> = program
+      .units()
+      .skip(self.units_seen)
+      .map(|unit| (unit.source, std::sync::Arc::clone(&unit.parsed)))
+      .collect();
+    for (unit_source, parsed) in &units {
+      let ast = &parsed.ast;
+      let unit_source = *unit_source;
+      for index in 0..ast.len() {
+        let node = NodeId(index as u32);
+        // `it` and `it_index` take their types from the loop they belong to
+        // (**L§6.5**), which is only reachable from the loop's side.
+        if matches!(ast.data(node), NodeData::For(_))
+          && let Some(scope) = program.loop_scope(unit_source, node)
+        {
+          // A loop that did not name its variables declares them with no
+          // identifier to be found through, so the loop's own scope — which
+          // holds `it` then `it_index` and nothing else — is the key.
+          for (index, id) in program
+            .tree()
+            .declarations(scope)
+            .iter()
+            .take(2)
+            .enumerate()
+          {
+            self.iterators.insert(*id, (unit_source, node, index == 1));
+          }
+        }
+        let NodeData::CompoundDeclaration(compound) = ast.data(node) else {
+          continue;
+        };
+        let NodeData::CommaSeparatedArguments { arguments } =
+          ast.data(compound.comma_separated_assignment)
+        else {
+          continue;
+        };
+        for (index, argument) in arguments.iter().enumerate() {
+          self.compound_properties.insert(
+            (unit_source, argument.node),
+            (compound.declaration_properties, index),
+          );
+        }
+      }
+    }
+    self.units_seen = count;
+    self.aggregate_owners = program
+      .aggregate_scopes()
+      .into_iter()
+      .map(|(source, node, scope)| (scope, (source, node)))
+      .collect();
   }
 
   /// Installs the engine that executes `#run`s. Without one the checker still
@@ -694,7 +733,30 @@ impl<'a> Checker<'a> {
   }
 
   pub(crate) fn scope_of(&self, source: SourceId, node: NodeId) -> Option<ScopeId> {
-    self.scope_of_node.get(&(source, node)).copied()
+    if let Some(scope) = self.scope_of_node.borrow().get(&(source, node)) {
+      return Some(*scope);
+    }
+    self.refresh_scopes();
+    self.scope_of_node.borrow().get(&(source, node)).copied()
+  }
+
+  /// Takes in the names the program has resolved since this checker last
+  /// looked. A whole module can arrive mid-typecheck — `#insert`ing a string
+  /// that `#import`s one is how `Metaprogram_Plugins` reaches a plugin — and
+  /// every name in it was written after the snapshot `new` took (**L§4.3**).
+  fn refresh_scopes(&self) {
+    let seen = self.references_seen.get();
+    let count = self.program.reference_count();
+    if count <= seen {
+      return;
+    }
+    let mut map = self.scope_of_node.borrow_mut();
+    for reference in self.program.references_since(seen) {
+      map
+        .entry((reference.source, reference.node))
+        .or_insert(reference.scope);
+    }
+    self.references_seen.set(count);
   }
 
   pub(crate) fn record_struct_scope(&mut self, id: StructId, scope: ScopeId) {
@@ -1021,6 +1083,9 @@ impl<'a> Checker<'a> {
   }
 
   fn compute_decl_type(&mut self, id: DeclId) -> DeclType {
+    // A declaration of a file that arrived mid-typecheck is one this checker
+    // has read nothing about yet (**L§4.3**).
+    self.refresh_units();
     let decl = self.program.tree().decl(id);
     // A loop variable takes its type from the loop rather than from a
     // declaration; one the program did not name has no node at all

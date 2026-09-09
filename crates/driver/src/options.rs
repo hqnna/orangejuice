@@ -210,12 +210,11 @@ pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
       }),
       "-natvis" | "-no_inline" => {}
       // These need the metaprogram, the interpreter, or both.
+      // The plugin list belongs to `Default_Metaprogram`, which reads it out
+      // of the command line it is handed (**C§2.1**); the driver only has to
+      // take the name along with the switch.
       "-plug" | "-plugin" => {
-        let value = take(&argument)?;
-        deferred.push(Deferred {
-          option: format!("{argument} {value}"),
-          milestone: "M8",
-        });
+        let _ = take(&argument)?;
       }
       "-add" | "-run" => {
         let value = take(&argument)?;
@@ -311,8 +310,16 @@ mod tests {
 
   #[test]
   fn options_that_need_a_later_milestone_are_recorded_rather_than_ignored() {
-    let parsed = parse_of(&["-plug", "Check"]).expect("it should parse");
+    let parsed = parse_of(&["-run", "main()"]).expect("it should parse");
     assert_eq!(parsed.deferred.len(), 1);
-    assert_eq!(parsed.deferred[0].milestone, "M8");
+    assert_eq!(parsed.deferred[0].milestone, "M6");
+  }
+
+  #[test]
+  fn a_plugin_switch_takes_its_name_and_is_left_to_the_metaprogram() {
+    let parsed = parse_of(&["-plug", "Check"]).expect("it should parse");
+    assert!(parsed.deferred.is_empty());
+    let parsed = parse_of(&["-plug"]).expect_err("the name is not optional");
+    assert_eq!(parsed.message, "Command line: Missing argument to -plug.");
   }
 }

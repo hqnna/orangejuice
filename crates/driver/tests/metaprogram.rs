@@ -1501,3 +1501,87 @@ fn a_statement_a_metaprogram_made_itself_is_compiled_back_to_source() {
     .expect("the rebuilt program runs");
   assert_eq!(String::from_utf8_lossy(&output.stdout), "");
 }
+
+#[test]
+fn the_check_plugin_reports_a_format_string_that_does_not_match_its_arguments() {
+  // `Default_Metaprogram` loads `modules/Check` unless `-no_check`, and Check
+  // is what turns a call's `Code_*` tree into this diagnostic. The wording is
+  // the reference compiler's, measured by running the same program through it.
+  let Some(jai_dir) = oj_testsupport::jai_dir() else {
+    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+    return;
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let Some(metaprogram) = ({
+    // SAFETY: as the test above.
+    unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
+    oj_driver::default_metaprogram()
+  }) else {
+    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
+    return;
+  };
+
+  let fixture = Fixture::new();
+  fixture.write(
+    "bad.jai",
+    "#import \"Basic\";\nmain :: () {\n    print(\"% and %\\n\", 1);\n}\n",
+  );
+  let build = |arguments: &[String]| {
+    oj_driver::run_through_metaprogram(
+      &metaprogram,
+      &fixture.path("bad.jai"),
+      arguments,
+      &oj_driver::BuildOptions::new(),
+      oj_driver::Stage::Executable,
+    )
+  };
+
+  let report = build(&[]);
+  assert!(report.failed, "the plugin should stop the build");
+  let reported = report.diagnostics.join("");
+  assert!(
+    reported.contains(
+      "Error: Incorrect number of arguments supplied to 'print': \
+       The format string requires 2 arguments, but 1 argument is given."
+    ),
+    "{reported}"
+  );
+
+  // `-no_check` is what says not to load the plugin, and then nothing checks.
+  let report = build(&[String::from("-no_check")]);
+  assert!(
+    !report.failed,
+    "without the plugin the same program builds, but:\n{}",
+    report.diagnostics.join("")
+  );
+}
+
+#[test]
+fn a_metaprogram_fills_a_placeholder_of_the_compilation_it_is_part_of() {
+  // `Metaprogram_Plugins` bootstraps this way: it fills the `#placeholder` its
+  // own body waits on from inside a `#run`. The reference stalls that `#run`
+  // until the declaration arrives (**C§3.3**); orangejuice runs the whole
+  // compilation again with it in place (`docs/spec.md` §6.5).
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#import \"Basic\";\n\
+     #placeholder ANSWER;\n\
+     HERE :: #code {};\n\
+     #run add_build_string(\"ANSWER :: 42;\", -1, HERE);\n\
+     main :: () {\n  \
+       print(\"%\\n\", ANSWER);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  let executable = fixture.path("main");
+  assert_built(&report, &executable);
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
+}
