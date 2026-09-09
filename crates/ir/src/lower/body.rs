@@ -1043,7 +1043,10 @@ impl Lowering<'_, '_> {
       return;
     };
     if operator == OperatorType::ASSIGN {
-      let scope = self.checker.scope_for(source, right, self.body_scope);
+      // Both sides of an assignment were written in the same scope, so the
+      // left one's answers for a right side that names nothing — which is what
+      // `v = .{1, 2, 3} + .{4, 5, 6};` is.
+      let scope = self.checker.scope_for(source, right, scope);
       if let Some(value) = self.expression(scope, source, right, Some(place.type_id)) {
         let address = place.id;
         self.store(address, value);
@@ -1171,6 +1174,7 @@ impl Lowering<'_, '_> {
           SUBSCRIPT,
           &[base, index],
           &[None, Some(index_value)],
+          None,
         ) else {
           self.unsupported(source, node, "'operator []'", "M7");
           return true;
@@ -1193,6 +1197,7 @@ impl Lowering<'_, '_> {
       SUBSCRIPT_ASSIGN,
       &[base, index, right],
       &given,
+      None,
     );
     true
   }

@@ -613,8 +613,24 @@ impl Checker<'_> {
     operator: &str,
     operands: &[NodeId],
   ) -> Option<CallPlan> {
+    self.operator_plan_hinted(scope, source, node, operator, operands, None)
+  }
+
+  /// The same, with the type the whole expression was asked for. An operand
+  /// that is a bare `.{…}` has no type of its own, so `.{3, 2, 1} + .{-1, -2,
+  /// -3}` only names an `operator +` once the hint says which struct they are
+  /// literals of (**L§5.7**, **L§7.7**).
+  pub fn operator_plan_hinted(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: &str,
+    operands: &[NodeId],
+    hint: Option<TypeId>,
+  ) -> Option<CallPlan> {
     self.at_call_site(scope, source, node, |checker| {
-      checker.operator_plan_inner(scope, source, node, operator, operands)
+      checker.operator_plan_inner(scope, source, node, operator, operands, hint)
     })
   }
 
@@ -625,12 +641,17 @@ impl Checker<'_> {
     node: NodeId,
     operator: &str,
     operands: &[NodeId],
+    hint: Option<TypeId>,
   ) -> Option<CallPlan> {
     let typed: Vec<Expr> = operands
       .iter()
       .map(|operand| {
         let written = self.scope_at(source, *operand, scope);
-        self.expression_type(written, source, *operand)
+        let value = self.expression_type(written, source, *operand);
+        match hint.filter(|_| self.types().is_untyped(value.type_id)) {
+          Some(hint) => Expr::value(hint),
+          None => value,
+        }
       })
       .collect();
     let (signature, swapped) =

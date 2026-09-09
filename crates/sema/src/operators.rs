@@ -158,44 +158,43 @@ impl Checker<'_> {
   }
 
   /// The scope an expression was written in, found through the recorded scope
-  /// of the leftmost identifier under it. Only identifiers have one of their
-  /// own, and an operator's overload set is looked up like any other name.
+  /// of an identifier under it. Only identifiers have one of their own, and an
+  /// operator's overload set is looked up like any other name. The leftmost
+  /// spine answers for almost everything; the right one is what `.{3, 2, 1} +
+  /// w` needs, since a bare `.{…}` names nothing at all.
   pub(crate) fn nearest_scope(&self, source: SourceId, node: NodeId, fallback: ScopeId) -> ScopeId {
+    self
+      .spine_scope(source, node, true)
+      .or_else(|| self.spine_scope(source, node, false))
+      .unwrap_or(fallback)
+  }
+
+  fn spine_scope(&self, source: SourceId, node: NodeId, leftmost: bool) -> Option<ScopeId> {
     let mut current = node;
     for _ in 0..MAX_SPINE {
       if let Some(scope) = self.scope_of(source, current) {
-        return scope;
+        return Some(scope);
       }
-      let Some(ast) = self.ast(source) else {
-        break;
-      };
+      let ast = self.ast(source)?;
       current = match ast.data(current) {
-        NodeData::BinaryOperator { left, .. } => *left,
+        NodeData::BinaryOperator { left, right, .. } => match leftmost {
+          true => *left,
+          false => *right,
+        },
         NodeData::UnaryOperator { operand, .. } => *operand,
         NodeData::Cast(cast) => cast.expression,
         NodeData::ProcedureCall(call) => call.procedure_expression,
-        NodeData::TypeInstantiation(inst) => {
-          match inst.type_valued_expression.or(inst.pointer_to) {
-            Some(inner) => inner,
-            None => break,
-          }
-        }
+        NodeData::TypeInstantiation(inst) => inst.type_valued_expression.or(inst.pointer_to)?,
         // A designated literal's type is written where the literal is.
         NodeData::Literal(literal) => match &literal.value {
-          oj_syntax::ast::LiteralValue::Struct(structure) => match structure.type_expression {
-            Some(inner) => inner,
-            None => break,
-          },
-          oj_syntax::ast::LiteralValue::Array(array) => match array.element_type {
-            Some(inner) => inner,
-            None => break,
-          },
-          _ => break,
+          oj_syntax::ast::LiteralValue::Struct(structure) => structure.type_expression?,
+          oj_syntax::ast::LiteralValue::Array(array) => array.element_type?,
+          _ => return None,
         },
-        _ => break,
+        _ => return None,
       };
     }
-    fallback
+    None
   }
 }
 

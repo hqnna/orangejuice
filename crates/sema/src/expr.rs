@@ -215,7 +215,13 @@ impl Checker<'_> {
           .ast(source)
           .map_or(Span::at(0), |ast| ast.node(node).span);
         self.check_struct_literal(scope, source, node, span, type_id, &literal.arguments);
-        Expr::value(type_id)
+        // A struct literal whose members all fold is itself a constant
+        // (**L§5.11**).
+        let arguments = literal.arguments.clone();
+        match self.fold_struct_literal(scope, source, type_id, &arguments) {
+          Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(RunBytes::plain(bytes)))),
+          None => Expr::value(type_id),
+        }
       }
     }
   }
@@ -250,6 +256,69 @@ impl Checker<'_> {
     }
     let bytes = self.fold_array_literal(scope, source, element, &members)?;
     Some(Const::new(target, Value::Bytes(RunBytes::plain(bytes))))
+  }
+
+  /// The storage of a struct literal all of whose members fold, starting from
+  /// the type's own defaults (**L§5.11**, **L§8.2**). `None` as soon as one of
+  /// them does not fold, or the literal designates a slot inside a member,
+  /// which is a place rather than a member of its own.
+  fn fold_struct_literal(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    type_id: TypeId,
+    arguments: &[oj_syntax::ast::Argument],
+  ) -> Option<Box<[u8]>> {
+    let definition = self.types().struct_of(self.types().underlying(type_id))?;
+    self.complete_struct(definition);
+    let mut bytes = self.default_bytes(type_id)?;
+    let settable: Vec<(Symbol, TypeId, u64)> = self
+      .types()
+      .struct_info(definition)
+      .settable_members()
+      .map(|member| (member.name, member.type_id, member.offset))
+      .collect();
+    let named: Vec<(Symbol, TypeId, u64)> = self
+      .types()
+      .struct_info(definition)
+      .members
+      .iter()
+      .map(|member| (member.name, member.type_id, member.offset))
+      .collect();
+
+    let mut position = 0usize;
+    for argument in arguments {
+      // A designator names a slot inside a member; the bytes of that are the
+      // back end's to lay down.
+      if matches!(
+        self.ast(source).map(|ast| ast.data(argument.expression)),
+        Some(NodeData::BinaryOperator {
+          operator: OperatorType::ASSIGN,
+          ..
+        })
+      ) {
+        return None;
+      }
+      let member = match argument.name.and_then(|node| self.ident_name(source, node)) {
+        Some(name) => named.iter().find(|entry| entry.0 == name).copied()?,
+        None => {
+          let member = settable.get(position).copied()?;
+          position += 1;
+          member
+        }
+      };
+      let (_, member_type, offset) = member;
+      let size = self.layout_of(member_type)?.size as usize;
+      let start = offset as usize;
+      if size == 0 || start + size > bytes.len() {
+        return None;
+      }
+      let value = self.const_value_at(scope, source, argument.expression, member_type)?;
+      if !value.write_bytes(self.types(), member_type, &mut bytes[start..start + size]) {
+        return None;
+      }
+    }
+    Some(bytes.into_boxed_slice())
   }
 
   /// The storage of an array literal all of whose members fold. `None` as soon

@@ -2546,3 +2546,57 @@ fn a_positional_argument_skips_a_slot_a_named_one_claimed() {
     "11\n",
   );
 }
+
+#[test]
+fn a_struct_literal_designates_a_slot_inside_a_member() {
+  // `Body.{values[1] = 7}` names storage inside a member rather than a member
+  // of its own (**L§5.7**).
+  assert_output(
+    "Inner :: struct { a: int; b: int; }\n\
+     Body :: struct { values: [3] int; inner: Inner; }\n\
+     main :: () {\n  \
+       body := Body.{values[1] = 7, inner.b = 9};\n  \
+       put_number(body.values[0]);\n  \
+       put_number(body.values[1]);\n  \
+       put_number(body.inner.b);\n\
+     }\n",
+    "0\n7\n9\n",
+  );
+}
+
+#[test]
+fn a_struct_literal_of_constants_is_a_constant() {
+  // (**L§5.11**) — and an undesignated one takes the type the operator it is
+  // in was asked for (**L§5.7**).
+  assert_output(
+    "V3 :: struct { x, y, z: int; }\n\
+     operator + :: (a: V3, b: V3) -> V3 { return .{a.x+b.x, a.y+b.y, a.z+b.z}; }\n\
+     main :: () {\n  \
+       #if is_constant(V3.{1, 2, 3})  put(\"constant\\n\");\n  \
+       result: V3;\n  \
+       result = .{3, 2, 1} + .{-1, -2, -3};\n  \
+       put_number(result.x);\n  \
+       put_number(result.z);\n\
+     }\n",
+    "constant\n2\n-2\n",
+  );
+}
+
+#[test]
+fn a_parameter_takes_its_type_from_another_parameters_instantiation() {
+  // `value: holder.T` needs the `Holder(…)` the call passed, which re-reading
+  // the header with the bindings in place is what supplies (**L§7.8**).
+  assert_output(
+    "Holder :: struct (N: int, T: Type) { array: [N] T; }\n\
+     add :: (holder: *Holder, index: int, value: holder.T) {\n  \
+       holder.array[index] = value;\n\
+     }\n\
+     main :: () {\n  \
+       ints: Holder(5, int);\n  \
+       add(*ints, 2, 9);\n  \
+       put_number(ints.array[2]);\n  \
+       put_number(ints.N);\n\
+     }\n",
+    "9\n5\n",
+  );
+}

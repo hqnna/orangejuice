@@ -911,6 +911,11 @@ impl Checker<'_> {
       // A variable something else already decided is not decided again: the
       // argument only has to convert to it, which scoring checks
       // (**L§7.8**).
+      // A parameter whose type the header could not work out on its own —
+      // `value: holder.T`, which needs the instantiation `holder` was passed —
+      // decides nothing here and rejects nothing: re-reading the header with
+      // the bindings in place is what gives it a type (**L§7.8**).
+      (TypeKind::Unknown, _) => true,
       (TypeKind::Polymorph(definition), _) => {
         // An argument that is itself polymorphic — `square :: (x: $T) -> T`
         // passed where `(x: X) -> X` is wanted — decides nothing; it takes the

@@ -863,6 +863,75 @@ impl Lowering<'_, '_> {
     }
   }
 
+  /// The storage a struct literal's designator names: `values[1]`, `a.b`, or
+  /// `a.b[2]`, all rooted at a member of the literal's own type (**L§5.7**).
+  /// The subscript has to be a constant, since it is a designator rather than
+  /// an expression the program evaluates.
+  fn designated_slot(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    address: ValueId,
+    type_id: TypeId,
+    designator: NodeId,
+  ) -> Option<Val> {
+    let data = self.checker.tree_of(source)?.data(designator).clone();
+    match data {
+      NodeData::Ident(_) => {
+        let name = self.checker.name_at(source, designator)?;
+        let underlying = self.checker.types().underlying(type_id);
+        let definition = self.checker.types().struct_of(underlying)?;
+        let member = self
+          .checker
+          .types()
+          .struct_info(definition)
+          .member(name)?
+          .clone();
+        let slot = self.offset(address, member.offset, member.type_id);
+        Some(Val {
+          id: slot,
+          type_id: member.type_id,
+          indirect: true,
+        })
+      }
+      NodeData::BinaryOperator {
+        operator: OperatorType::DOT,
+        left,
+        right,
+        ..
+      } => {
+        let outer = self.designated_slot(scope, source, address, type_id, left)?;
+        self.designated_slot(scope, source, outer.id, outer.type_id, right)
+      }
+      NodeData::BinaryOperator {
+        operator: OperatorType::ARRAY_SUBSCRIPT,
+        left,
+        right,
+        ..
+      } => {
+        let base = self.designated_slot(scope, source, address, type_id, left)?;
+        let index = self
+          .checker
+          .expression(scope, source, right)
+          .constant?
+          .value
+          .as_int()?;
+        let (element, kind) = self.checker.types().array_of(base.type_id)?;
+        if !matches!(kind, ArrayKind::Fixed(_)) {
+          return None;
+        }
+        let (stride, _) = self.size_align(element);
+        let slot = self.offset(base.id, index as u64 * stride, element);
+        Some(Val {
+          id: slot,
+          type_id: element,
+          indirect: true,
+        })
+      }
+      _ => None,
+    }
+  }
+
   fn fill_struct_literal(
     &mut self,
     scope: ScopeId,
@@ -893,6 +962,27 @@ impl Lowering<'_, '_> {
 
     let mut position = 0usize;
     for argument in arguments {
+      // `Body.{values[1] = 7}` designates a slot *inside* a member, which the
+      // parser leaves as a whole assignment rather than as a name and a value
+      // (**L§5.7**).
+      if let Some(NodeData::BinaryOperator {
+        operator: OperatorType::ASSIGN,
+        left,
+        right,
+        ..
+      }) = self
+        .checker
+        .tree_of(source)
+        .map(|ast| ast.data(argument.expression))
+      {
+        let (left, right) = (*left, *right);
+        if let Some(slot) = self.designated_slot(scope, source, address, type_id, left) {
+          if let Some(value) = self.expression(scope, source, right, Some(slot.type_id)) {
+            self.store(slot.id, value);
+          }
+          continue;
+        }
+      }
       let member = match argument
         .name
         .and_then(|node| self.checker.name_at(source, node))
@@ -1060,8 +1150,16 @@ impl Lowering<'_, '_> {
       return self.short_circuit(scope, source, operator, left, right);
     }
     // A struct operand may overload the operator (**L§7.7**); `a != b` with
-    // only an `operator ==` in scope is that call, negated.
-    if let Some(value) = self.operator_call(scope, source, node, operator.text(), &[left, right]) {
+    // only an `operator ==` in scope is that call, negated. A bare `.{…}`
+    // operand takes the type the whole expression was asked for.
+    let untyped = [left, right].into_iter().all(|operand| {
+      let type_id = self.checker.expression(scope, source, operand).type_id;
+      self.checker.types().is_untyped(type_id)
+    });
+    let hint = want.filter(|_| untyped);
+    if let Some(value) =
+      self.operator_call_hinted(scope, source, node, operator.text(), &[left, right], hint)
+    {
       return Some(value);
     }
     if operator == OperatorType::IS_NOT_EQUAL
@@ -1846,11 +1944,27 @@ impl Lowering<'_, '_> {
     operator: &str,
     operands: &[NodeId],
   ) -> Option<Val> {
-    self.operator_call_with(scope, source, node, operator, operands, &[])
+    self.operator_call_with(scope, source, node, operator, operands, &[], None)
+  }
+
+  /// The same, telling the front end what type the whole expression was asked
+  /// for, which is what says which struct a bare `.{…}` operand is a literal
+  /// of (**L§7.7**).
+  fn operator_call_hinted(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    operator: &str,
+    operands: &[NodeId],
+    hint: Option<TypeId>,
+  ) -> Option<Val> {
+    self.operator_call_with(scope, source, node, operator, operands, &[], hint)
   }
 
   /// The same, with values the caller has already lowered for some of the
   /// operands — which is what keeps `w[i] += 1` from evaluating `i` twice.
+  #[allow(clippy::too_many_arguments)]
   pub(super) fn operator_call_with(
     &mut self,
     scope: ScopeId,
@@ -1859,10 +1973,11 @@ impl Lowering<'_, '_> {
     operator: &str,
     operands: &[NodeId],
     given: &[Option<Val>],
+    hint: Option<TypeId>,
   ) -> Option<Val> {
     let plan = self
       .checker
-      .operator_plan(scope, source, node, operator, operands)?;
+      .operator_plan_hinted(scope, source, node, operator, operands, hint)?;
     // A parameter that is a pointer to the operand's own type takes the
     // address of the place the operand names: `operator *[] :: (b: *Bucket…)`
     // is written `b[i]` (**L§7.7**).
