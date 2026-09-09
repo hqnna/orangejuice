@@ -3506,3 +3506,21 @@ fn a_name_reached_through_an_instantiation_resolves_under_it() {
     "Poly(E=float32) 1.5\nPoly(E=s64) 7\n",
   );
 }
+
+#[test]
+fn a_fixed_array_parameter_binds_its_dimension() {
+  // `[$N] T` takes `N` from how long the argument is — from its type when it
+  // has one, and from what was written when it is a `.[…]` (**L§7.8**).
+  assert_output(
+    "sum :: (a: [$N] float) -> int { total := 0.0; for a  total += it; return xx (total * 10 + N); }\n\
+     baked :: ($a: [$N] float) -> int { return N * 100; }\n\
+     main :: () {\n  \
+       xs: [4] float;\n  \
+       xs[0] = 1.5;\n  \
+       put_number(sum(xs));\n  \
+       put_number(sum(.[1.0, 2.0, 3.0]));\n  \
+       put_number(baked(.[1.0, 2.0]));\n\
+     }\n",
+    "19\n63\n200\n",
+  );
+}

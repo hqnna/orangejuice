@@ -783,6 +783,28 @@ impl Checker<'_> {
     for (index, argument) in typed_first {
       let argument = &argument;
       let parameter = signature.parameters.get(index)?;
+      // `[$N] T` binds `N` to how long the argument is. The dimension is a
+      // value rather than a type, so unification never reaches it, and the
+      // header cannot say what the parameter's type is until it is bound
+      // (**L§7.8**).
+      if let Some((dimension, count, array)) =
+        self.array_dimension_binding(source, signature, index, argument)
+      {
+        if !solution
+          .bindings
+          .iter()
+          .any(|(bound, _)| *bound == dimension)
+        {
+          solution
+            .bindings
+            .push((dimension, Const::new(TypeId::S64, Value::Int(count))));
+        }
+        if let Some(decl) = self.header_parameter_decl(source, signature, index)
+          && !solution.overrides.iter().any(|(bound, _)| *bound == decl)
+        {
+          solution.overrides.push((decl, array));
+        }
+      }
       // An argument in the varargs slot matches the `[] T`'s element
       // (**L§7.8**): `values: ..$T` takes `T` from the first one. `..xs`
       // hands over the whole array instead.
@@ -838,7 +860,19 @@ impl Checker<'_> {
         // `is_constant(x)` about it. It has no value of its own before that,
         // since a call site resolves the name rather than reading it.
         let named = self.named_procedure(&argument.value);
-        match argument.value.constant.clone().or(named) {
+        // A `.[…]` has no type of its own, so it only becomes data once the
+        // parameter says which array it is (**L§5.8**, **L§5.11**).
+        let folded = argument.value.constant.clone().or(named).or_else(|| {
+          let target = solution
+            .overrides
+            .iter()
+            .find(|(bound, _)| *bound == decl)
+            .map(|(_, type_id)| *type_id)
+            .unwrap_or(parameter.type_id);
+          let (written_source, written, written_scope) = argument.written?;
+          self.const_value_at(written_scope, written_source, written, target)
+        });
+        match folded {
           Some(value) => {
             solution.bindings.push((decl, value));
             continue;
@@ -980,6 +1014,61 @@ impl Checker<'_> {
         .contains(oj_types::ProcedureFlags::IS_POLYMORPHIC)
     });
     concrete.then(|| Const::new(type_id, Value::Procedure(only)))
+  }
+
+  /// The `$N` a parameter written `[$N] T` declares, and the length the call
+  /// site gives it (**L§7.8**). `None` when the parameter is not written that
+  /// way, or when what was passed has no length of its own.
+  fn array_dimension_binding(
+    &mut self,
+    source: SourceId,
+    signature: &crate::overload::Signature,
+    index: usize,
+    argument: &CallArgument,
+  ) -> Option<(DeclId, i128, TypeId)> {
+    let parameter = self.header_parameter_decl(source, signature, index)?;
+    let node = self.program().tree().decl(parameter).node?;
+    let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
+      return None;
+    };
+    let NodeData::TypeInstantiation(inst) = self.ast(source)?.data(declaration.type_inst?) else {
+      return None;
+    };
+    let dimension = inst.array_dimension?;
+    let NodeData::Ident(ident) = self.ast(source)?.data(dimension) else {
+      return None;
+    };
+    if !ident
+      .flags
+      .contains(oj_syntax::ast::IdentFlags::DEFINES_POLYMORPH_VARIABLE)
+    {
+      return None;
+    }
+    let declared = self.decl_at(source, dimension)?;
+    let count = match self.types().array_of(argument.value.type_id) {
+      Some((_, ArrayKind::Fixed(count))) => i128::from(count),
+      // A `.[…]` has no type of its own, so its length is what was written
+      // (**L§5.8**).
+      _ => {
+        let (written_source, written, _) = argument.written?;
+        let NodeData::Literal(literal) = self.ast(written_source)?.data(written) else {
+          return None;
+        };
+        let oj_syntax::ast::LiteralValue::Array(array) = &literal.value else {
+          return None;
+        };
+        i128::try_from(array.members.len()).ok()?
+      }
+    };
+    // With the length known the parameter is a real array type, which is what
+    // a `$a: [$N] float` has to fold its argument against.
+    let scopes = self
+      .program()
+      .procedure_scopes(source, signature.header?.1)?;
+    let element = self.type_from_node(scopes.arguments, source, inst.array_element_type?);
+    let length = u64::try_from(count).ok()?;
+    let array = self.types_mut().array(element, ArrayKind::Fixed(length));
+    Some((declared, count, array))
   }
 
   /// The declaration of a `$x` or `$$x` parameter, whose *value* the
@@ -1374,6 +1463,12 @@ impl Checker<'_> {
     // the argument fits there is what scoring answers (**L§7.8**). This is
     // what lets `(int) -> $S` unify with `(int) -> string`.
     if !self.is_polymorphic_type(pattern) {
+      return true;
+    }
+    // A pattern the header could not work out on its own decides nothing and
+    // rejects nothing, whatever was passed: `a: [$N] float` has no type until
+    // `N` is bound, and the argument may be an untyped `.[…]` (**L§7.8**).
+    if matches!(self.types().kind(pattern), TypeKind::Unknown) {
       return true;
     }
     if self.types().is_unknown(actual) {
