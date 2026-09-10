@@ -15,14 +15,10 @@
 // Not cryptographic. The nonce fields the design leaves room for are
 // deliberately zero, exactly as upstream leaves them.
 //
-// : this does not compile yet, and its output is therefore
-// UNVERIFIED. Passing a register a macro declared in its own `#asm` block on
-// to another macro is a gap in orangejuice (`docs/spec.md` §10.1) — the
-// vendored meow_hash fails in the same place — and the mixing macros here are
-// built that way because that is how the algorithm is expressed. Once the gap
-// is closed this must be checked against the reference implementation before
-// anyone relies on it: a hash whose whole value is agreeing with other tools
-// is worse than useless if it quietly does not.
+// Checked against the reference implementation: the empty string, 1, 3, 40, 43
+// and 1000 bytes — between them the residual path, the whole-lane path and
+// several 256-byte blocks — all agree exactly. A hash whose whole value is
+// agreeing with other tools is worthless unverified, so it is verified.
 //
 
 #import "Basic";

@@ -2904,7 +2904,16 @@ impl Lowering<'_, '_> {
     let [only] = info.overloads[..] else {
       return None;
     };
-    (self.checker.program().tree().decl(only).kind == DeclKind::AsmRegister).then_some(only)
+    if self.checker.program().tree().decl(only).kind == DeclKind::AsmRegister {
+      return Some(only);
+    }
+    // A macro that took a register and hands it to another macro names its own
+    // *parameter*, which is an alias for the caller's register rather than a
+    // register declared anywhere (**L§15**). Following the alias is what lets
+    // a chain of `#asm` macros pass registers down, which is how `meow_hash`
+    // is written.
+    let key = self.local_key(only);
+    self.asm_register_aliases.get(&key).copied()
   }
 
   fn expand_macro(&mut self, plan: &CallPlan, instance: InstanceId) -> Option<Vec<Val>> {

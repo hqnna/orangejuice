@@ -4975,3 +4975,33 @@ fn a_cast_to_a_fixed_array_reads_the_array_at_the_pointer() {
   };
   assert_eq!(built.output, "[11, 22, 33, 44] [22, 33, 44, 55]\n");
 }
+
+#[test]
+fn a_macro_passes_on_a_register_it_declared_itself() {
+  // A macro taking a `__reg` binds the name to the caller's register
+  // (**L§15**). Handing that name to *another* macro means the argument
+  // resolves to the parameter, which is an alias rather than a register — so
+  // following the alias is what lets a chain of `#asm` macros pass registers
+  // down. `meow_hash` is written that way throughout.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     add_into :: (a: __reg, b: __reg) #expand { #asm { paddq a, b; } }\n\
+     mix :: (a: __reg) #expand {\n  \
+       #asm { one: vec; movq one, ones; }\n  \
+       add_into(a, one);\n\
+     }\n\
+     main :: () {\n  \
+       ones: s64 = 1;\n  \
+       start: s64 = 40;\n  \
+       #asm { acc: vec; movq acc, start; }\n  \
+       mix(acc);\n  \
+       mix(acc);\n  \
+       out: s64;\n  \
+       #asm { movq out, acc; }\n  \
+       print(\"%\\n\", out);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "42\n");
+}

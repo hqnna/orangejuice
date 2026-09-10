@@ -315,12 +315,6 @@ what it actually does.
   arguments into a compile-time array of `Type` that the struct body can index
   and iterate. `modules/Tagged_Union.jai` takes four defaulted parameters
   instead, which keeps the call syntax for up to four types.
-- **A register a macro declared in its own `#asm` block cannot be passed to
-  another macro.** Passing one the *caller* declared works; passing one
-  declared inside the macro reports a milestone error naming M7 at the call.
-  `modules/meow_hash` needs this and so does the vendored one, which fails
-  under orangejuice in exactly the same place — so the gap predates our
-  module, and nothing in `how_to` exercises it.
 - **An `#insert`-generated member cannot be reached through a polymorphic
   parameter.** A struct whose body comes from `#insert -> string` instantiates
   correctly and its members can be used directly, but a procedure taking
