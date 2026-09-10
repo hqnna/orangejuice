@@ -269,9 +269,9 @@ impl<'c, 'p> Exporter<'c, 'p> {
     let file = self.checker.program().sources().file(source);
     let start = file.location(node.span.start);
     let end = file.location(node.span.end);
-    self
-      .nodes
-      .record_path((self.generation, source.0), file.path().to_path_buf());
+    let path = file.path().to_path_buf();
+    let enclosing_load = self.nodes.file_message(&path);
+    self.nodes.record_path((self.generation, source.0), path);
     self.nodes.record_span(
       (self.generation, source.0, id.0),
       (node.span.start, node.span.end),
@@ -289,7 +289,7 @@ impl<'c, 'p> Exporter<'c, 'p> {
       node_flags: node.flags.bits(),
       type_info: self.type_info_of(source, id),
       location: Location {
-        enclosing_load: std::ptr::null(),
+        enclosing_load,
         l0: start.line as i32,
         c0: start.column as i32,
         l1: end.line as i32,

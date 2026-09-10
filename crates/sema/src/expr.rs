@@ -98,10 +98,15 @@ impl Checker<'_> {
             .expansion_site()
             .or(self.call_site)
             .map(|site| (site.source, site.node)),
-          // `#location(x)` where `x` names a procedure is where *that* was
-          // written, which is what `#location(#this)` asks for (**L§5.14**).
-          false => match self.procedure_named_at(scope, source, directive.expression) {
-            Some(place) => Some(place),
+          // `#location(x)` where `x` names a constant is where the value it was
+          // declared with was written — measured against the reference, which
+          // points at the `(` of a procedure and at the expression of anything
+          // else (**L§5.14**).
+          false => match directive
+            .expression
+            .and_then(|argument| self.constant_written_at(scope, source, argument))
+          {
+            Some((at_source, at_node, _)) => Some((at_source, at_node)),
             None => Some((source, written)),
           },
         };
@@ -1282,25 +1287,81 @@ impl Checker<'_> {
         let value = self.expression_type(scope, source, argument);
         Expr::constant(Const::bool(value.constant.is_some()))
       }
-      ExpressionQueryKind::CodeOf => Expr::value(TypeId::CODE),
+      // `code_of(x)` is the piece of program `x` was written as, which is a
+      // constant like a `#code` (**L§5.11**, **L§13.1**). A name that stands
+      // for a constant is the *value* it was declared with, which is what lets
+      // `code_of(a_here_string)` see the literal's flags.
+      ExpressionQueryKind::CodeOf => {
+        let (source, node, scope) = self
+          .constant_written_at(scope, source, argument)
+          .unwrap_or((source, argument, scope));
+        Expr::constant(Const::new(
+          TypeId::CODE,
+          Value::Code {
+            source,
+            node,
+            scope,
+          },
+        ))
+      }
     }
   }
 
-  /// Where the procedure an expression names was written, when it names one
+  /// Where the constant an expression names was declared, when it names one
   /// (**L§5.14**).
-  fn procedure_named_at(
+  fn constant_named_at(
     &mut self,
     scope: ScopeId,
     source: SourceId,
     expression: Option<NodeId>,
   ) -> Option<(SourceId, NodeId)> {
     let expression = expression?;
-    let value = self.expression_type(scope, source, expression);
-    let Value::Procedure(decl) = value.constant?.value else {
+    // `#this` is not a name but stands for one procedure, which is what
+    // `#location(#this)` asks the place of (**L§5.14**).
+    let Some(name) = self.ident_name(source, expression) else {
+      let value = self.expression_type(scope, source, expression);
+      let Value::Procedure(decl) = value.constant?.value else {
+        return None;
+      };
+      let info = self.program().tree().decl(decl);
+      return Some((info.source?, info.node?));
+    };
+    // The name is looked up rather than typed: a type name stands for the type
+    // rather than for the declaration, so its `Expr` has nothing to go on.
+    let scope = self.scope_at(source, expression, scope);
+    let Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
       return None;
     };
-    let info = self.program().tree().decl(decl);
+    let [only] = candidates[..] else {
+      return None;
+    };
+    let info = self.program().tree().decl(only);
+    // Measured against the reference: `#location(CONST)` and
+    // `#location(some_procedure)` are where those were declared, while
+    // `#location(a_variable)` is where the `#location` itself stands.
+    let declared = matches!(
+      info.kind,
+      DeclKind::Constant | DeclKind::Procedure | DeclKind::Struct | DeclKind::Enum
+    );
+    declared.then_some(())?;
     Some((info.source?, info.node?))
+  }
+
+  /// The expression a name was declared with, when it names a constant: what
+  /// `code_of(x)` is the code *of* (**L§13.1**).
+  fn constant_written_at(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    expression: NodeId,
+  ) -> Option<(SourceId, NodeId, ScopeId)> {
+    let (declared_source, declared) = self.constant_named_at(scope, source, Some(expression))?;
+    let NodeData::Declaration(declaration) = self.ast(declared_source)?.data(declared) else {
+      return None;
+    };
+    let written = declaration.expression?;
+    let scope = self.scope_at(declared_source, written, scope);
+    Some((declared_source, written, scope))
   }
 
   /// Whether every argument of a literal folded, which is what makes the

@@ -138,6 +138,10 @@ pub struct BuildOptions {
   pub print_version: bool,
   /// `-help` / `-?`, which prints the vendored metaprogram's help text.
   pub print_help: bool,
+  /// The number this compilation's own workspace takes (**C§3.1**). The
+  /// reference numbers them once for the whole compiler, so a workspace a
+  /// metaprogram created carries its number into the compilation it drives.
+  pub workspace_id: i64,
 }
 
 impl BuildOptions {
@@ -146,6 +150,7 @@ impl BuildOptions {
       optimization: Optimization::Debug,
       stack_trace: true,
       debug_info: true,
+      workspace_id: 1,
       use_color: true,
       enable_split_modules: true,
       dead_code_elimination: true,

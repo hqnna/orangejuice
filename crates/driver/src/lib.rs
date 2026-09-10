@@ -275,7 +275,7 @@ fn run_workspace_once(
   // A metaprogram runs as part of typechecking, since its work is done by the
   // `#run`s the checker executes (**C§3.1**). What it asks the compiler for
   // lands in this, and the workspaces it created are built once it is done.
-  let mut state = metaprogram_state(&mut checker, options);
+  let mut state = metaprogram_state(&mut checker, options, root);
   if let Some(nodes) = &watching {
     state.nodes = nodes.clone();
   }
@@ -299,6 +299,11 @@ fn run_workspace_once(
     state.during_compile_layout,
     watched.clone(),
   ));
+  // A node carries the `Message_File` of the file it was written in, and the
+  // reference makes those whether or not a metaprogram is listening — so this
+  // compilation makes its own before the checker can export anything
+  // (**C§3.2**).
+  state.declare_own_files(&report.compiled);
   let outer = oj_meta::install(state);
   checker.check();
   let meta = oj_meta::uninstall().unwrap_or_default();
@@ -363,6 +368,9 @@ fn run_workspace_once(
   // is the whole program. A dump stage was asked for explicitly, so it still
   // gets its answer.
   if options.output_type == oj_link::OutputType::NoOutput && stage == Stage::Executable {
+    // Producing nothing is what the metaprogram asked for, not a failure: a
+    // watching one is told the workspace compiled (**C§3.2**).
+    report.compiled.failed = false;
     return report;
   }
   // A library has no `main`; what it holds is whatever its exports reach
@@ -509,18 +517,26 @@ const JAI_VERSION_NUMBERS: (i32, i32, i32) = (0, 2, 9);
 /// member, rather than being written down here — the struct is the
 /// distribution's, so the only honest source for what a field starts at is the
 /// declaration itself (**C§4**).
-fn metaprogram_state(checker: &mut oj_sema::Checker<'_>, options: &BuildOptions) -> oj_meta::Meta {
-  let mut meta = oj_meta::Meta::new();
+fn metaprogram_state(
+  checker: &mut oj_sema::Checker<'_>,
+  options: &BuildOptions,
+  root: &Path,
+) -> oj_meta::Meta {
+  let mut meta = oj_meta::Meta::numbered_from(options.workspace_id.max(1));
   meta.base_path = oj_meta::base_path_of(jai_dir().as_ref());
   meta.command_line = options.compile_time_command_line.clone();
   meta.version = String::from(JAI_VERSION);
   meta.version_numbers = JAI_VERSION_NUMBERS;
   if let Some(build_options) = checker.type_named("Build_Options") {
     meta.default_build_options = checker.default_bytes(build_options).unwrap_or_default();
-    if let Some(at) = build_options_layout(checker, build_options).compile_time_command_line {
+    meta.build_options_layout = build_options_layout(checker, build_options);
+    if let Some(at) = meta.build_options_layout.compile_time_command_line {
       meta.seed_command_line(at);
     }
-    meta.build_options_layout = build_options_layout(checker, build_options);
+    // A fresh `Build_Options` already names the paths the compiler chose
+    // (**C§4**): where the output goes, where the intermediates go, and what a
+    // `#import` searches.
+    seed_default_paths(&mut meta, options, root);
   }
   if let Some(during_compile) = checker.type_named("Build_Options_During_Compile") {
     meta.during_compile_layout = during_compile_layout(checker, during_compile);
@@ -540,6 +556,40 @@ fn metaprogram_state(checker: &mut oj_sema::Checker<'_>, options: &BuildOptions)
   meta
 }
 
+/// The paths a fresh `Build_Options` already names (**C§4**): the ones the
+/// command line and the file being compiled decide, rather than defaults
+/// written down here.
+fn seed_default_paths(meta: &mut oj_meta::Meta, options: &BuildOptions, root: &Path) {
+  let directory = root
+    .parent()
+    .map(Path::to_path_buf)
+    .unwrap_or_else(|| PathBuf::from("."));
+  let layout = meta.build_options_layout;
+  if let Some(at) = layout.output_path {
+    let output = options
+      .output_path
+      .clone()
+      .unwrap_or_else(|| directory.clone());
+    meta.seed_string(at, &output.display().to_string());
+  }
+  if let Some(at) = layout.intermediate_path {
+    let intermediate = directory.join(".build");
+    meta.seed_string(at, &intermediate.display().to_string());
+  }
+  if let Some(at) = layout.import_path {
+    let mut path: Vec<String> = options
+      .import_dirs
+      .iter()
+      .map(|directory| directory.display().to_string())
+      .collect();
+    path.push(directory.join("modules").display().to_string());
+    if let Some(jai) = jai_dir() {
+      path.push(format!("{}/", jai.join("modules").display()));
+    }
+    meta.seed_strings(at, &path);
+  }
+}
+
 /// Where the fields the driver acts on sit inside `Build_Options`.
 fn build_options_layout(
   checker: &mut oj_sema::Checker<'_>,
@@ -554,6 +604,8 @@ fn build_options_layout(
       "compile_time_command_line" => layout.compile_time_command_line = Some(offset),
       "runtime_support_definitions" => layout.runtime_support_definitions = Some(offset),
       "use_custom_link_command" => layout.use_custom_link_command = Some(offset),
+      "intermediate_path" => layout.intermediate_path = Some(offset),
+      "import_path" => layout.import_path = Some(offset),
       "append_executable_filename_extension" => {
         layout.append_executable_filename_extension = Some(offset);
       }
@@ -678,6 +730,7 @@ fn workspace_input(
     .unwrap_or_else(|| PathBuf::from("."));
   let mut nested = options.clone();
   nested.compile_time_command_line = Vec::new();
+  nested.workspace_id = workspace.id;
   if let Some(name) = workspace.option_string(layout, |layout| layout.output_executable_name)
     && !name.is_empty()
   {

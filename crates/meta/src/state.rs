@@ -69,6 +69,11 @@ pub struct BuildOptionsLayout {
   /// Where the arguments after a lone `-` are handed to a metaprogram
   /// (**C§2.1**).
   pub compile_time_command_line: Option<u64>,
+  /// `intermediate_path`, which a fresh `Build_Options` already names
+  /// (**C§4**).
+  pub intermediate_path: Option<u64>,
+  /// `import_path`, which a fresh `Build_Options` already names (**C§4**).
+  pub import_path: Option<u64>,
 }
 
 /// Where the `Build_Options_During_Compile` members the driver acts on sit
@@ -336,6 +341,13 @@ pub struct Meta {
   /// The workspace compile-time code belongs to, which `w = -1` means
   /// (**C§3.1**).
   pub current: i64,
+  /// The number the compilation's own workspace takes. The reference numbers
+  /// workspaces once for the whole compiler — the metaprogram is 1 and the
+  /// program it builds is 2 (**C§3.1**) — so a nested compilation starts
+  /// counting where the one above it left off.
+  first_workspace: i64,
+  /// The `Message_File` this compilation made for each of its own files.
+  own_files: std::collections::HashMap<PathBuf, *const MessageFile>,
   pub reports: Vec<Report>,
   /// The bytes of `Build_Options` as the distribution declares it, already
   /// filled in with the defaults its members carry, and its size.
@@ -397,7 +409,16 @@ impl Meta {
   /// A compilation, with the workspace the program itself is (**C§3.1**).
   /// `get_current_workspace` names it, and `w = -1` means it.
   pub fn new() -> Self {
-    let mut meta = Self::default();
+    Self::numbered_from(1)
+  }
+
+  /// The same, for a compilation whose own workspace the one above it already
+  /// numbered (**C§3.1**).
+  pub fn numbered_from(first: i64) -> Self {
+    let mut meta = Self {
+      first_workspace: first,
+      ..Self::default()
+    };
     let id = meta.create_workspace(String::new());
     meta.current = id;
     if let Some(workspace) = meta.workspace(id) {
@@ -460,10 +481,43 @@ impl Meta {
     }
   }
 
+  /// Writes a `string` into every `Build_Options` this compilation hands out,
+  /// which is how a fresh one already names the paths the compiler chose
+  /// (**C§4**).
+  pub fn seed_string(&mut self, at: u64, text: &str) {
+    let interned = self.intern(text.as_bytes());
+    let mut bytes = Vec::with_capacity(size_of::<Str>());
+    bytes.extend_from_slice(&interned.count.to_ne_bytes());
+    bytes.extend_from_slice(&(interned.data as usize).to_ne_bytes());
+    self.seed_bytes(at, &bytes);
+  }
+
+  /// The same for a `[] string`.
+  pub fn seed_strings(&mut self, at: u64, items: &[String]) {
+    let slice = self.intern_strings(items);
+    let mut bytes = Vec::with_capacity(size_of::<Slice>());
+    bytes.extend_from_slice(&slice.count.to_ne_bytes());
+    bytes.extend_from_slice(&(slice.data as usize).to_ne_bytes());
+    self.seed_bytes(at, &bytes);
+  }
+
+  fn seed_bytes(&mut self, at: u64, bytes: &[u8]) {
+    let at = at as usize;
+    if self.default_build_options.len() < at + bytes.len() {
+      return;
+    }
+    self.default_build_options[at..at + bytes.len()].copy_from_slice(bytes);
+    for workspace in &mut self.workspaces {
+      if workspace.options.len() >= at + bytes.len() {
+        workspace.options[at..at + bytes.len()].copy_from_slice(bytes);
+      }
+    }
+  }
+
   /// Creates a workspace and returns its handle. Handles start at 1, since 0
   /// is the failure the reference documents (**C§3.1**).
   pub fn create_workspace(&mut self, name: String) -> i64 {
-    let id = self.workspaces.len() as i64 + 1;
+    let id = self.first_workspace + self.workspaces.len() as i64;
     let options = self.default_build_options.clone();
     self.workspaces.push(Workspace {
       id,
@@ -998,6 +1052,36 @@ impl Meta {
   /// reads them from rather than out of a message that has gone away.
   fn nodes_slice(&mut self, items: &[crate::code::Typechecked]) -> Slice {
     self.nodes.borrow_mut().arena.alloc_slice(items)
+  }
+
+  /// Makes the `Message_File` of every file this compilation is made of, so a
+  /// node exported from one already knows where it was written (**C§3.2**).
+  /// The reference produces those messages whether or not anybody is listening;
+  /// here they are made before the checker starts, since a `#run` may ask for a
+  /// `Code` while it is still running.
+  pub fn declare_own_files(&mut self, compiled: &Compiled) {
+    let workspace = self.current;
+    let mut by_path = std::collections::HashMap::new();
+    for file in &compiled.files {
+      if self.own_files.contains_key(&file.path) {
+        continue;
+      }
+      let filename = self.intern(file.path.display().to_string().as_bytes());
+      let stored = Stored::File(Box::new(MessageFile {
+        message: Message {
+          kind: Kind::File,
+          workspace,
+        },
+        fully_pathed_filename: filename,
+        enclosing_import: std::ptr::null(),
+        from_a_string: file.from_a_string,
+      }));
+      let address = stored.as_ptr().cast::<MessageFile>();
+      by_path.insert(file.path.clone(), address);
+      self.own_files.insert(file.path.clone(), address);
+      self.messages.push(stored);
+    }
+    self.nodes.borrow_mut().attach_files(&by_path);
   }
 
   fn push_message(&mut self, message: Stored) {

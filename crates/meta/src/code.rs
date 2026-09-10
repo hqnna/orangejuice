@@ -772,6 +772,9 @@ pub struct Nodes {
   /// The bytes each exported node had when the compilation handed it over,
   /// which is what says whether the metaprogram has since written to it.
   shadow: HashMap<usize, Vec<u8>>,
+  /// The `Message_File` of each file, so that a node exported after they
+  /// exist can point at one straight away (**C§3.2**).
+  files: HashMap<std::path::PathBuf, *const MessageFile>,
   generation: u32,
   serial: i64,
 }
@@ -927,10 +930,19 @@ impl Nodes {
     self.paths.insert(key, path);
   }
 
+  /// The `Message_File` of the file a source came from, when the compilation
+  /// has already made one (**C§3.2**).
+  pub fn file_message(&self, path: &std::path::Path) -> *const MessageFile {
+    self.files.get(path).copied().unwrap_or(std::ptr::null())
+  }
+
   /// Points every exported node at the `Message_File` of the file it was
   /// written in (**C§3.2**). The messages are made after the compilation they
   /// describe, so `enclosing_load` is filled in here rather than at export.
   pub fn attach_files(&mut self, by_path: &HashMap<std::path::PathBuf, *const MessageFile>) {
+    for (path, message) in by_path {
+      self.files.insert(path.clone(), *message);
+    }
     for ((generation, source, _), address) in &self.placed {
       let Some(path) = self.paths.get(&(*generation, *source)) else {
         continue;

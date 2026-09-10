@@ -738,6 +738,12 @@ fn a_program_that_outputs_nothing_needs_no_entry_point() {
   };
   assert!(!report.failed, "{}", report.diagnostics.join(""));
   assert!(!fixture.path("main").exists(), "nothing should be written");
+  // A metaprogram watching this compilation is told it compiled: producing
+  // nothing is what it asked for, not a failure (**C§3.2**).
+  assert!(
+    !report.compiled.failed,
+    "a workspace that produces nothing still compiled"
+  );
 }
 
 /// The `Code_*` declarations the export tests read the compiler's answers
@@ -1587,53 +1593,59 @@ fn a_metaprogram_fills_a_placeholder_of_the_compilation_it_is_part_of() {
 }
 
 #[test]
-fn a_run_happens_once_under_the_default_metaprogram() {
-  // The distribution's own `Metaprogram_Plugins` fills a `#placeholder` from
-  // inside its `#run`, which orangejuice answers by running the compilation
-  // again (`docs/spec.md` §6.5). The workspace under it must not be compiled
-  // in the round that is going to be replayed, or every `#run` of the program
-  // would happen twice.
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
-  if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
-    return;
-  }
-  let Some(metaprogram) = ({
-    // SAFETY: cargo runs each integration test binary in its own process, and
-    // nothing else in this one reads it.
-    unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
-    oj_driver::default_metaprogram()
-  }) else {
-    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
-    return;
-  };
-
+fn a_workspace_is_compiled_once_and_numbered_by_the_one_above_it() {
+  // A metaprogram that fills a `#placeholder` of its own compilation makes
+  // that compilation run again with the declaration in place (`docs/spec.md`
+  // §6.5). The workspace it drives must not be compiled in the round that is
+  // going to be replayed, or every `#run` of the program under it would happen
+  // twice — the reference stalls the one `#run` and compiles once.
   let fixture = Fixture::new();
+  let counted = fixture.path("counted.jai");
   fixture.write(
     "counted.jai",
+    // The reference numbers workspaces once for the whole compiler: the
+    // metaprogram is 1 and the program it builds is 2 (**C§3.1**), so a
+    // compilation that is itself a workspace carries its number.
     "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
      #no_reset times := 0;\n\
-     #run times += 1;\n\
+     #run {\n  \
+       times += 1;\n  \
+       if get_current_workspace() != 2  compiler_report(\"this workspace is not 2\");\n\
+     }\n\
      main :: () { print(\"%\\n\", times); }\n",
   );
-  let report = oj_driver::run_through_metaprogram(
-    &metaprogram,
-    &fixture.path("counted.jai"),
-    &[],
-    &oj_driver::BuildOptions::new(),
-    oj_driver::Stage::Executable,
-  );
+  let Some(report) = build(
+    &fixture,
+    &format!(
+      "#import \"Basic\";\n\
+       #placeholder READY;\n\
+       HERE :: #code {{}};\n\
+       #run {{\n  \
+         add_build_string(\"READY :: true;\", -1, HERE);\n  \
+         w := compiler_create_workspace(\"Target\");\n  \
+         options := get_build_options(w);\n  \
+         options.output_executable_name = \"counted\";\n  \
+         options.output_path = \"{output}\";\n  \
+         set_build_options(options, w);\n  \
+         add_build_file(\"{source}\", w);\n\
+       }}\n\
+       #run READY;\n\
+       main :: () {{}}\n",
+      output = fixture.path("").display(),
+      source = counted.display(),
+    ),
+  ) else {
+    return;
+  };
   assert!(
     !report.failed,
-    "the metaprogram should build the program, but:\n{}",
+    "the metaprogram should build its workspace, but:\n{}",
     report.diagnostics.join("")
   );
-  let executable = report.executable.expect("a successful build has one");
+  let executable = fixture.path("counted");
   let output = std::process::Command::new(&executable)
     .output()
-    .expect("the produced program runs");
+    .expect("the program the workspace produced runs");
   assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
 }

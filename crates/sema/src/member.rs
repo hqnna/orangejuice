@@ -257,7 +257,13 @@ impl Checker<'_> {
       // `.data` of a constant string or array literal, and of a *global* fixed
       // array, is an address the linker settles — constant, though nothing
       // here knows the number (**L§5.11**). A local's storage is not.
-      let constant = match constant_elements(base, kind) {
+      // `.data` of an *empty* array literal is null rather than an address, and
+      // that null is the constant (**L§5.11**).
+      // An empty array has no storage, so its `.data` is the null the reference
+      // reports rather than an address (**L§5.11**).
+      let empty = kind == ArrayKind::Fixed(0)
+        || constant_elements(base, kind).is_some_and(|bytes| bytes.is_empty());
+      let constant = match constant_elements(base, kind).filter(|bytes| !bytes.is_empty()) {
         Some(bytes) => Some(Address {
           at: AddressOf::Data(bytes),
           offset: 0,
@@ -275,7 +281,10 @@ impl Checker<'_> {
       return Some(Expr {
         type_id: pointer,
         denoted: None,
-        constant: constant.map(|address| Const::new(pointer, Value::Address(address))),
+        constant: match empty {
+          true => Some(Const::new(pointer, Value::Null)),
+          false => constant.map(|address| Const::new(pointer, Value::Address(address))),
+        },
         lvalue: lvalue && !matches!(kind, ArrayKind::Fixed(_)),
         overloads: Vec::new(),
         overload_instance: None,

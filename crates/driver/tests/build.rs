@@ -3815,3 +3815,24 @@ fn a_location_is_a_constant_wherever_it_is_written() {
     "0\n0\n",
   );
 }
+
+#[test]
+fn a_location_of_a_name_is_where_a_constant_was_declared() {
+  // Measured against the reference: `#location(x)` is where `x` was declared
+  // when `x` is a constant, a procedure or a type, and where the `#location`
+  // itself stands when `x` is a variable (**L§5.14**).
+  assert_output(
+    "CONSTANT :: 42;\n\
+     procedure :: () {}\n\
+     Shape :: struct {}\n\
+     main :: () {\n  \
+       variable := 7;\n  \
+       base := #location().line_number;\n  \
+       put_number(#location(CONSTANT).line_number - base);\n  \
+       put_number(#location(procedure).line_number - base);\n  \
+       put_number(#location(Shape).line_number - base);\n  \
+       put_number(#location(variable).line_number - base);\n\
+     }\n",
+    "-5\n-4\n-3\n4\n",
+  );
+}
