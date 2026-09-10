@@ -326,10 +326,14 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         .module
         .add_function(&procedure.symbol, function_type, None);
       // A compile-time module shares its JIT dylib with every other one, so
-      // only the procedure the run was built for may claim a public symbol;
-      // the rest are private copies (`docs/spec.md` §6.5).
+      // only the procedure the run was built for and the ones this module is
+      // the first to reach may claim a public symbol; the rest are private
+      // copies (`docs/spec.md` §6.5).
       let private = match self.purpose {
-        crate::Purpose::CompileTime => self.program.entry != Some(ProcId(index as u32)),
+        crate::Purpose::CompileTime => {
+          self.program.entry != Some(ProcId(index as u32))
+            && !procedure.flags.contains(ProcedureFlags::SHARED)
+        }
         crate::Purpose::Executable => !procedure.flags.contains(ProcedureFlags::EXPORT),
       };
       if procedure.has_body() && private {

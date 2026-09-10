@@ -15,10 +15,12 @@
 //! it without executing anything (**C§14**).
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use oj_diag::Diagnostic;
-use oj_ir::{Constant, Global, GlobalInit, Library, ProcedureFlags, Program};
+use oj_ir::{
+  Callee, ConstLink, Constant, Global, GlobalInit, Inst, Library, ProcedureFlags, Program,
+};
 use oj_runtime::{Segment, Segments};
 use oj_scope::DeclId;
 use oj_sema::{
@@ -41,6 +43,10 @@ struct State {
   segments: Segments,
   /// The symbols already bound in the JIT dylib.
   defined: HashSet<String>,
+  /// The procedures some earlier module of this compilation already compiled
+  /// into the dylib, so that a later one declares them instead of building
+  /// them again.
+  compiled: HashSet<String>,
   /// Where each declaration's storage went, so that a `#no_reset` global can
   /// be read back at the end (**L§12.3**).
   bound: HashMap<DeclId, String>,
@@ -91,7 +97,7 @@ impl Engine {
     };
     // Lowering asks the checker its usual questions, and one of those answers
     // may be another `#run` — so nothing of this engine is borrowed here.
-    let lowered = oj_ir::lower_run(checker, &run);
+    let mut lowered = oj_ir::lower_run(checker, &run);
     if lowered.has_errors() {
       for diagnostic in lowered.diagnostics {
         checker.push_diagnostic(diagnostic);
@@ -110,9 +116,11 @@ impl Engine {
     self.bind_intrinsics(&lowered.program)?;
     self.load_libraries(&lowered.program.libraries);
 
+    let claimed = self.share_procedures(&mut lowered.program);
     let module = self.orc.context().create_module(&request.symbol);
     let module = oj_codegen::build_module(module, &lowered.program, &self.options)?;
     self.orc.add_module(module)?;
+    self.share_committed(claimed);
     let address = self.orc.lookup(&request.symbol)?;
 
     // A run behind a compound declaration writes every value it produced into
@@ -226,7 +234,7 @@ impl Engine {
       variables: request.variables.clone(),
       symbol: request.symbol.clone(),
     };
-    let lowered = oj_ir::lower_modify(checker, &modify);
+    let mut lowered = oj_ir::lower_modify(checker, &modify);
     if lowered.has_errors() {
       for diagnostic in lowered.diagnostics {
         checker.push_diagnostic(diagnostic);
@@ -243,9 +251,11 @@ impl Engine {
     self.bind_intrinsics(&lowered.program)?;
     self.load_libraries(&lowered.program.libraries);
 
+    let claimed = self.share_procedures(&mut lowered.program);
     let module = self.orc.context().create_module(&request.symbol);
     let module = oj_codegen::build_module(module, &lowered.program, &self.options)?;
     self.orc.add_module(module)?;
+    self.share_committed(claimed);
     let address = self.orc.lookup(&request.symbol)?;
 
     let size = oj_ir::modify_result_size(request.variables.len());
@@ -361,6 +371,52 @@ impl Engine {
     Ok(())
   }
 
+  /// Leaves the module with only the code it is the first to reach.
+  ///
+  /// Every `#run` and `#modify` of a compilation shares one JIT dylib, and a
+  /// compile-time symbol names the declaration and instantiation it came from
+  /// rather than a collision counter, so a procedure two runs both reach is
+  /// one procedure. The module that gets there first compiles it and gives it
+  /// away; the rest keep the header and let the dylib answer, which is what
+  /// keeps a second run from re-lowering and re-compiling the whole program
+  /// behind it (`docs/spec.md` §6.5). The symbols it claims are only recorded
+  /// once the module is really in — see [`Engine::share_committed`].
+  fn share_procedures(&self, program: &mut Program) -> Vec<String> {
+    let compiled = &self.state.borrow().compiled;
+    let table_bound = reaches_type_table(program);
+    let mut claimed = Vec::new();
+    for (index, procedure) in program.procedures.iter_mut().enumerate() {
+      if !procedure.has_body() || program.entry == Some(oj_ir::ProcId(index as u32)) {
+        continue;
+      }
+      // A run's type table is an image of its own, built out of everything the
+      // checker knew when it ran, so a procedure that reads one belongs to the
+      // run that built it and is compiled again for the next (**L§17**).
+      if table_bound[index] {
+        continue;
+      }
+      if compiled.contains(&procedure.symbol) {
+        procedure.blocks.clear();
+        continue;
+      }
+      // Two procedures of one module may still want one symbol — a
+      // `#program_export` pair — and LLVM tells those apart itself, so only
+      // the first of them is the one to share.
+      if claimed.contains(&procedure.symbol) {
+        continue;
+      }
+      procedure.flags |= ProcedureFlags::SHARED;
+      claimed.push(procedure.symbol.clone());
+    }
+    claimed
+  }
+
+  /// Records what a module that is now in the dylib brought with it.
+  fn share_committed(&self, claimed: Vec<String>) {
+    let mut state = self.state.borrow_mut();
+    state.compiled.extend(claimed);
+  }
+
   /// `dlopen`s the libraries a run's `#foreign` procedures named, so that the
   /// JIT's process search generator can find their symbols (`docs/spec.md`
   /// §6.5).
@@ -453,6 +509,76 @@ impl Drop for Buffer {
   fn drop(&mut self) {
     unsafe { std::alloc::dealloc(self.pointer, self.layout) };
   }
+}
+
+/// Which of a module's procedures can reach its type table image, directly or
+/// through anything they call (**L§17**).
+///
+/// The image belongs to the run that built it — it holds the types the checker
+/// knew at that moment, at addresses only that run's globals were given — so a
+/// procedure that can see one is not a procedure a later module may share.
+fn reaches_type_table(program: &Program) -> Vec<bool> {
+  let mut reaches = vec![false; program.procedures.len()];
+  let Some(symbol) = program.type_table.symbol.as_deref() else {
+    return reaches;
+  };
+  let Some(table) = program
+    .globals
+    .iter()
+    .position(|global| global.symbol == symbol)
+    .map(|index| oj_ir::GlobalId(index as u32))
+  else {
+    return reaches;
+  };
+  // Who calls whom, so that reaching the image can be carried back out to
+  // every procedure that could end up looking at it.
+  let mut callers: Vec<Vec<usize>> = vec![Vec::new(); program.procedures.len()];
+  let mut queue = VecDeque::new();
+  for (index, procedure) in program.procedures.iter().enumerate() {
+    for instruction in procedure
+      .blocks
+      .iter()
+      .flat_map(|block| &block.instructions)
+    {
+      match instruction {
+        Inst::GlobalAddress { global, .. } if *global == table => {
+          if !reaches[index] {
+            reaches[index] = true;
+            queue.push_back(index);
+          }
+        }
+        // Taking a procedure's address is as good as calling it: whatever the
+        // pointer is handed to may call it later.
+        Inst::ProcedureAddress { procedure, .. } => {
+          callers[procedure.0 as usize].push(index);
+        }
+        Inst::Call {
+          callee: Callee::Direct(callee),
+          ..
+        } => callers[callee.0 as usize].push(index),
+        Inst::Const {
+          value: Constant::Bytes { links, .. },
+          ..
+        } => {
+          for (_, link) in links.iter() {
+            if let ConstLink::Procedure(callee) = link {
+              callers[callee.0 as usize].push(index);
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+  while let Some(index) = queue.pop_front() {
+    for caller in std::mem::take(&mut callers[index]) {
+      if !reaches[caller] {
+        reaches[caller] = true;
+        queue.push_back(caller);
+      }
+    }
+  }
+  reaches
 }
 
 /// The bytes a global starts compile time with: whatever the front end folded,

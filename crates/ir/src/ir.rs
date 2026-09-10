@@ -381,6 +381,11 @@ bitflags::bitflags! {
     /// procedure inside `oj-meta` and the call happens at compile time only
     /// (**C§3.3**).
     const COMPILER = 0x20;
+    /// A compile-time module's copy of a procedure every *other* module of the
+    /// compilation shares: this is the module that defines the symbol, and the
+    /// rest declare it and resolve against the JIT dylib (`docs/spec.md`
+    /// §6.5).
+    const SHARED = 0x40;
   }
 }
 
