@@ -1,5 +1,5 @@
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use oj_diag::{SourceId, Span};
@@ -238,7 +238,7 @@ impl Scope {
       children: Vec::new(),
       source: None,
       path: None,
-      names: HashMap::new(),
+      names: HashMap::default(),
       declarations: Vec::new(),
       imports: Vec::new(),
       used_values: Vec::new(),
@@ -484,7 +484,26 @@ impl ScopeTree {
           scope.parent,
         )
       });
-      let here = found.or_else(|| self.lookup_through_imports(id, name));
+      // A procedure declared in a scope and one imported *into* that scope are
+      // one overload set, not a name shadowing another: `contains(a, b)`
+      // written beside a `#import "String"` joins the two `contains`es that
+      // module exports (**L§7.5**, **L§11.2**). Anything that is not a
+      // procedure shadows what the scope imported, the way it shadows what an
+      // outer scope declares.
+      let declared = found.unwrap_or_default();
+      let gathers = declared.is_empty()
+        || declared
+          .iter()
+          .all(|decl| self.decl(*decl).kind == DeclKind::Procedure);
+      let mut here = declared;
+      if gathers && let Some(imported) = self.lookup_through_imports(id, name) {
+        for decl in imported {
+          if !here.contains(&decl) {
+            here.push(decl);
+          }
+        }
+      }
+      let here = (!here.is_empty()).then_some(here);
       if let Some(here) = here {
         // A `#placeholder` is a promise that something will declare the name,
         // so a real declaration in the same scope replaces it and one further
@@ -584,10 +603,25 @@ impl ScopeTree {
   /// scope merely `#import`ed stops there (**L§11.2**).
   fn lookup_through_imports(&self, scope: ScopeId, name: Symbol) -> Option<Vec<DeclId>> {
     let mut found = Vec::new();
-    for edge in self.imports(scope) {
-      if edge.admits(name) {
-        self.collect_exports(edge.target, name, &mut Vec::new(), &mut found);
+    // Read the edges where they lie: this is the hot path of every lookup, and
+    // an `ImportEdge` carries two `Vec<Symbol>` filters that are not worth
+    // copying to walk past them.
+    let mut targets: Option<Vec<ScopeId>> = None;
+    self.with_scope(scope, |holder| {
+      if holder.imports.is_empty() {
+        return;
       }
+      targets = Some(
+        holder
+          .imports
+          .iter()
+          .filter(|edge| edge.admits(name))
+          .map(|edge| edge.target)
+          .collect(),
+      );
+    });
+    for target in targets.into_iter().flatten() {
+      self.collect_exports(target, name, &mut Vec::new(), &mut found);
     }
     (!found.is_empty()).then_some(found)
   }
@@ -613,10 +647,22 @@ impl ScopeTree {
           .filter(|id| self.decl(*id).visibility.is_exported()),
       );
     }
-    for edge in self.imports(scope) {
-      if edge.transitive && edge.admits(name) {
-        self.collect_exports(edge.target, name, visiting, found);
+    let mut transitive: Option<Vec<ScopeId>> = None;
+    self.with_scope(scope, |holder| {
+      if holder.imports.is_empty() {
+        return;
       }
+      transitive = Some(
+        holder
+          .imports
+          .iter()
+          .filter(|edge| edge.transitive && edge.admits(name))
+          .map(|edge| edge.target)
+          .collect(),
+      );
+    });
+    for target in transitive.into_iter().flatten() {
+      self.collect_exports(target, name, visiting, found);
     }
 
     visiting.pop();

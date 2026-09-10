@@ -13,7 +13,8 @@ pub use run::{Run, lower_run, run_result_layout};
 
 pub use Options as LowerOptions;
 
-use std::collections::{HashMap, VecDeque};
+use rustc_hash::FxHashMap as HashMap;
+use std::collections::VecDeque;
 
 use oj_diag::{Diagnostic, SourceId, Span};
 use oj_lexer::Symbol;
@@ -243,6 +244,12 @@ struct Lowering<'c, 'p> {
   /// names itself stops instead of looping.
   constants: std::collections::HashSet<DeclId>,
   loops: Vec<Loop>,
+  /// The `for`s a `for_expansion` is standing in for right now: the name the
+  /// caller wrote its iterator with, and how deep the loop stack was when the
+  /// expansion began, so a labelled `break` or `continue` in the body the
+  /// caller handed over reaches the loop the macro opened for it
+  /// (**L§6.5**, **L§7.14**).
+  expanded_loops: Vec<(Symbol, usize)>,
   insert_controls: Vec<InsertControls>,
   /// How deep the lowering is inside an `#insert` of a `Code` that was written
   /// outside the macro being spliced. A `return` means what it meant where it
@@ -306,11 +313,11 @@ impl<'c, 'p> Lowering<'c, 'p> {
       mode,
       procedures: Vec::new(),
       globals: Vec::new(),
-      procedure_ids: HashMap::new(),
-      global_ids: HashMap::new(),
+      procedure_ids: HashMap::default(),
+      global_ids: HashMap::default(),
       queue: VecDeque::new(),
       libraries: Vec::new(),
-      symbols: HashMap::new(),
+      symbols: HashMap::default(),
       diagnostics: Vec::new(),
       entry: None,
       entry_decl: None,
@@ -324,10 +331,11 @@ impl<'c, 'p> Lowering<'c, 'p> {
       value_types: Vec::new(),
       current: BlockId(0),
       current_procedure: None,
-      local_of_decl: HashMap::new(),
-      union_members: HashMap::new(),
-      constants: std::collections::HashSet::new(),
+      local_of_decl: HashMap::default(),
+      union_members: HashMap::default(),
+      constants: std::collections::HashSet::default(),
       loops: Vec::new(),
+      expanded_loops: Vec::new(),
       insert_controls: Vec::new(),
       inserted_from_outside: 0,
       expansions: Vec::new(),
@@ -339,8 +347,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       context_value: None,
       body_scope: ScopeId(0),
       body_source: SourceId(0),
-      asm_registers: HashMap::new(),
-      asm_register_aliases: HashMap::new(),
+      asm_registers: HashMap::default(),
+      asm_register_aliases: HashMap::default(),
       runtime_init: None,
       stack_trace: true,
       trace_types: None,
@@ -349,7 +357,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       trace_frame: None,
       current_loc: None,
       debug_files: Vec::new(),
-      debug_file_ids: HashMap::new(),
+      debug_file_ids: HashMap::default(),
     }
   }
 

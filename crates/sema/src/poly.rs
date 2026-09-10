@@ -7,7 +7,7 @@
 //! specialization its own procedure type. Identical constant sets share one
 //! instantiation, program-wide.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use oj_diag::SourceId;
 use oj_lexer::Symbol;
@@ -835,7 +835,7 @@ impl Checker<'_> {
     header: NodeId,
     scopes: ProcedureScopes,
   ) -> Option<Solution> {
-    let mut substitution: HashMap<PolymorphId, TypeId> = HashMap::new();
+    let mut substitution: HashMap<PolymorphId, TypeId> = HashMap::default();
     let mut solution = Solution::default();
     // A header with a `#modify` may decide a variable the call site said
     // nothing about — one declared in the return list, or one whose argument
@@ -1536,12 +1536,20 @@ impl Checker<'_> {
     if !self.is_polymorphic_type(pattern) {
       return true;
     }
-    // `null` names no type, so it never decides a `$T` (**L§7.8**).
+    // `null` does not decide a `$T` an *earlier* argument already did: it fits
+    // every pointer, so `compare_and_swap(*lock, null, p)` keeps the `T` the
+    // pointer gave it (**L§7.8**). What nothing has decided yet it decides as
+    // the `*void` it is, which is what makes `lsp_respond(id, null)` a reply
+    // of no payload — measured against the reference.
     if matches!(
       value.constant.as_ref().map(|value| &value.value),
       Some(Value::Null)
     ) {
-      return true;
+      let resolved = self.substitute(pattern, substitution);
+      if !self.is_polymorphic_type(resolved) {
+        return true;
+      }
+      return self.unify_types(pattern, TypeId::VOID_POINTER, substitution);
     }
     // A `.{…}` or `.[…]` has no type of its own: the parameter is what says
     // what it is (**L§5.8**). Once the other arguments have decided the

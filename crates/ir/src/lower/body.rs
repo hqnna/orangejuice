@@ -35,6 +35,7 @@ impl Lowering<'_, '_> {
     self.asm_registers.clear();
     self.asm_register_aliases.clear();
     self.loops.clear();
+    self.expanded_loops.clear();
     self.expansions.clear();
     self.call_sites.clear();
     self.defers.clear();
@@ -1199,7 +1200,19 @@ impl Lowering<'_, '_> {
         .loops
         .iter()
         .rev()
-        .find(|entry| entry.label == Some(label)),
+        .find(|entry| entry.label == Some(label))
+        // A `for` whose container has a `for_expansion` opens no loop of its
+        // own: the macro opens one for it, and the name the caller wrote its
+        // iterator with reaches that one (**L§6.5**, **L§7.14**).
+        .or_else(|| {
+          let depth = self
+            .expanded_loops
+            .iter()
+            .rev()
+            .find(|(name, _)| *name == label)
+            .map(|(_, depth)| *depth)?;
+          self.loops.get(depth)
+        }),
       None => self.loops.last(),
     };
     let Some(entry) = entry else {
@@ -1547,9 +1560,21 @@ impl Lowering<'_, '_> {
   fn expand_for(&mut self, node: NodeId, payload: &ast::ForNode, expansion: LoopExpansion) {
     let source = self.body_source;
     let instance = expansion.instance;
+    // The loop the macro opens stands in for the one the caller wrote, so a
+    // `continue file;` in the body the caller handed over reaches it by the
+    // name the caller gave its iterator (**L§6.5**, **L§7.14**).
+    let (it, _) = self.checker.loop_iterators(source, node);
+    let label = self.loop_label(it);
+    if let Some(label) = label {
+      let depth = self.loops.len();
+      self.expanded_loops.push((label, depth));
+    }
     let previous_instance = self.checker.enter_instance(Some(instance));
     let expanded = self.expand_for_body(node, payload, expansion, previous_instance);
     self.checker.enter_instance(previous_instance);
+    if label.is_some() {
+      self.expanded_loops.pop();
+    }
     if expanded.is_none() {
       self.unsupported(source, node, "this 'for_expansion'", "M7");
     }

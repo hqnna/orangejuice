@@ -368,7 +368,6 @@ dependencies = [
  "oj-syntax",
  "oj-testsupport",
  "oj-types",
- "rustc-hash",
  "tempfile",
 ]
 

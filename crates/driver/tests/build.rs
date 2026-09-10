@@ -4878,3 +4878,78 @@ fn a_run_inside_an_unsolved_specialization_does_not_execute() {
     "1\n",
   );
 }
+
+#[test]
+fn a_procedure_declared_beside_an_import_joins_its_overloads() {
+  // A procedure a scope declares and one it imported are the same overload
+  // set, not a name shadowing another: `Jails` declares `contains` over its
+  // own type beside a `#import "String"` (**L§7.5**, **L§11.2**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"String\";\n\
+     Loc :: struct { l0: int; }\n\
+     contains :: (a: Loc, b: Loc) -> bool { return a.l0 == b.l0; }\n\
+     main :: () {\n  \
+       x, y: Loc;\n  \
+       print(\"% % %\\n\", contains(\"a/b\", \"/\"), contains(\"a/b\", #char \"/\"), contains(x, y));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "true true true\n");
+}
+
+#[test]
+fn a_null_argument_decides_a_variable_nothing_else_did() {
+  // `null` fits every pointer, so it keeps the `T` an earlier argument gave
+  // it and settles one nothing has: `lsp_respond(id, null)` is a `*void`
+  // (**L§7.8**), measured against the reference.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     f :: (id: u32, data: $T) { print(\"% \", type_of(data)); }\n\
+     g :: (a: *$T, b: *T) { print(\"% \", type_of(a)); }\n\
+     main :: () {\n  \
+       p: *int;\n  \
+       f(1, null);\n  \
+       f(2, 7);\n  \
+       g(p, null);\n  \
+       g(null, p);\n  \
+       print(\"\\n\");\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "*void s64 *s64 *void \n");
+}
+
+#[test]
+fn a_labelled_control_names_the_loop_a_for_expansion_stands_in_for() {
+  // `for file: table { … continue file; }` opens no loop of its own — the
+  // `for_expansion` opens one for it — and the name the caller gave its
+  // iterator reaches that one (**L§6.5**, **L§7.14**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     main :: () {\n  \
+       t: Table(int, int);\n  \
+       init(*t);\n  \
+       table_add(*t, 1, 1);\n  \
+       table_add(*t, 2, 2);\n  \
+       table_add(*t, 3, 3);\n  \
+       inner := int.[10, 20];\n  \
+       total := 0;\n  \
+       for v: t {\n    \
+         for x: inner {\n      \
+           if v == 2 && x == 10 continue v;\n      \
+           if v == 3 && x == 20 break v;\n      \
+           total += v * x;\n    \
+         }\n    \
+         total += 1000;\n  \
+       }\n  \
+       print(\"%\\n\", total);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "30\n");
+}
