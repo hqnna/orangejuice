@@ -274,6 +274,7 @@ fn every_how_to_program_reports_only_milestones_it_does_not_own() {
 
 #[test]
 fn a_body_that_can_reach_its_end_without_returning_is_a_warning() {
+  let _ = jai_dir_or_skip!();
   let warnings = |source: &str| -> Vec<String> {
     lower(source).map_or_else(Vec::new, |lowered| {
       lowered
