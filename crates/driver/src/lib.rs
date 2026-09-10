@@ -1170,9 +1170,41 @@ pub fn jai_dir() -> Option<PathBuf> {
     let candidate = PathBuf::from(value);
     return candidate.join("modules").is_dir().then_some(candidate);
   }
-  let current = std::env::current_dir().ok()?;
-  current.ancestors().find_map(|directory| {
-    let candidate = directory.join("vendor").join("jai");
-    candidate.join("modules").is_dir().then_some(candidate)
+  if let Ok(current) = std::env::current_dir()
+    && let Some(vendored) = current.ancestors().find_map(|directory| {
+      let candidate = directory.join("vendor").join("jai");
+      candidate.join("modules").is_dir().then_some(candidate)
+    })
+  {
+    return Some(vendored);
+  }
+  own_distribution()
+}
+
+/// orangejuice's own modules, which is what a checkout with no reference
+/// distribution behind it compiles against.
+///
+/// The reference distribution still wins where there is one, so a tree that
+/// has both keeps being measured against the real thing; this is the fallback
+/// that makes `oj` a compiler somebody can use on its own.
+pub fn own_distribution() -> Option<PathBuf> {
+  if let Some(value) = std::env::var_os("OJ_MODULES").filter(|value| !value.is_empty()) {
+    let candidate = PathBuf::from(value);
+    return candidate.join("Preload.jai").is_file().then(|| {
+      candidate
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or(candidate.clone())
+    });
+  }
+  // Beside the binary for an installed compiler, further up for one being run
+  // out of `target/release` in a checkout.
+  let executable = std::env::current_exe().ok()?;
+  executable.ancestors().find_map(|directory| {
+    let candidate = directory.join("modules");
+    candidate
+      .join("Preload.jai")
+      .is_file()
+      .then(|| directory.to_path_buf())
   })
 }
