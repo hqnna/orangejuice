@@ -51,13 +51,38 @@ Soa :: struct (T: Type, N: s64)
     }
 }
 
-// Accessors that gather an item back together, or scatter one into place,
-// are not provided. They want a parameter naming this struct family — either
-// `*Soa($T, $N)` or a `$S` a macro reads `S.Item` from — and orangejuice
-// cannot yet reach an `#insert`-generated member through either
-// (`docs/spec.md` §10.1). Direct access works and is how SOA is normally
-// used anyway:
-//
-//     for i: 0..s.x.count-1  s.x[i] *= 2;
-//     particle_x := s.x[3];
-//
+// Gathers item `index` back together into an ordinary `T`.
+soa_get :: (soa: *$S, index: s64) -> S.Item {
+    result: S.Item;
+    #insert -> string {
+        builder: String_Builder;
+        init_string_builder(*builder, temp);
+        info := cast(*Type_Info_Struct) S.Item;
+        highest := -1;
+        for * member: info.members {
+            if member.flags & .CONSTANT           continue;
+            if member.offset_in_bytes < highest   continue;
+            highest = member.offset_in_bytes + member.type.runtime_size;
+            print_to_builder(*builder, "    result.% = soa.%[index];\n", member.name, member.name);
+        }
+        return builder_to_string(*builder);
+    }
+    return result;
+}
+
+// Scatters an ordinary `T` into item `index`.
+soa_set :: (soa: *$S, index: s64, value: S.Item) {
+    #insert -> string {
+        builder: String_Builder;
+        init_string_builder(*builder, temp);
+        info := cast(*Type_Info_Struct) S.Item;
+        highest := -1;
+        for * member: info.members {
+            if member.flags & .CONSTANT           continue;
+            if member.offset_in_bytes < highest   continue;
+            highest = member.offset_in_bytes + member.type.runtime_size;
+            print_to_builder(*builder, "    soa.%[index] = value.%;\n", member.name, member.name);
+        }
+        return builder_to_string(*builder);
+    }
+}

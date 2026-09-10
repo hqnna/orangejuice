@@ -32,11 +32,7 @@ Tagged_Union :: struct (A: Type, B: Type = void, C: Type = void, D: Type = void)
 // Sets the tag to `type_of(value)` and copies it in. Setting a type the union
 // was not declared with is a compile-time error.
 set :: (union_value: *Tagged_Union($A, $B, $C, $D), value: $V) {
-    // A type the union was not declared with cannot be got back out — `get`
-    // compares the tag — so setting one is caught, just not at compile time.
-    // It should be a `#assert` on `V == A || V == B || ...`; that fails to
-    // fold when the procedure is in a module other than the caller
-    // (`docs/spec.md` §10.1).
+    #assert(V == A || V == B || V == C || V == D, "That type is not one this union was declared with.");
     union_value.tag = V;
     memcpy(union_value.bytes.data, *value, size_of(V));
 }
