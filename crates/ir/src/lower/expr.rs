@@ -3247,6 +3247,28 @@ impl Lowering<'_, '_> {
         });
       }
     }
+    // `cast([4] u8) p` reads the array *at* the pointer rather than making one
+    // out of the pointer's own bytes (**L§5.6**). Measured against the
+    // reference: `cast([4] u8) (p + 1)` reads one byte further along, which is
+    // what `Adpcm`'s decoder takes its four encoded bytes with.
+    if self.checker.types().is_pointer(from)
+      && matches!(
+        self.checker.types().kind(to),
+        TypeKind::Array {
+          kind: ArrayKind::Fixed(_),
+          ..
+        }
+      )
+    {
+      let pointer = self.scalar(value);
+      let storage = self.offset(pointer, 0, target);
+      return Some(Val {
+        id: storage,
+        type_id: target,
+        indirect: true,
+      });
+    }
+
     if !self.is_scalar(from) || !self.is_scalar(to) {
       self.unsupported(source, node, "this conversion", "M7");
       return None;

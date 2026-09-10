@@ -4953,3 +4953,25 @@ fn a_labelled_control_names_the_loop_a_for_expansion_stands_in_for() {
   };
   assert_eq!(built.output, "30\n");
 }
+
+#[test]
+fn a_cast_to_a_fixed_array_reads_the_array_at_the_pointer() {
+  // `cast([4] u8) p` is the four bytes *at* `p`, not four bytes made out of
+  // the pointer itself (**L§5.6**) — so advancing the pointer by one advances
+  // the window by one. Measured against the reference, and what `Adpcm`'s
+  // decoder takes each block of encoded samples with.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       bytes: [8] u8;\n  \
+       bytes[0] = 11; bytes[1] = 22; bytes[2] = 33; bytes[3] = 44; bytes[4] = 55;\n  \
+       p := bytes.data;\n  \
+       print(\"% \", cast([4] u8) p);\n  \
+       p += 1;\n  \
+       print(\"%\\n\", cast([4] u8) p);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "[11, 22, 33, 44] [22, 33, 44, 55]\n");
+}
