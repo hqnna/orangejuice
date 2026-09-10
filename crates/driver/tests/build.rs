@@ -5005,3 +5005,70 @@ fn a_macro_passes_on_a_register_it_declared_itself() {
   };
   assert_eq!(built.output, "42\n");
 }
+
+#[test]
+fn an_enum_literal_reaches_a_variable_another_argument_bound() {
+  // `.NAME` has no type of its own: the parameter says what it is
+  // (**L§5.12**). When that parameter is a `$T` some earlier argument already
+  // decided, the literal has nothing left to say — so solving must let it
+  // through rather than trying to unify an untyped enum against the binding.
+  // `table_add(*t, key, .SOME_KIND)` is the shape that needs it.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Kind :: enum { ASSIGN; DECLARATION; }\n\
+     Box :: struct (K: Type, V: Type) { k: K; v: V; }\n\
+     take_two :: (a: $T, b: T) { print(\"two %\\n\", b); }\n\
+     put :: (box: *Box($K, $V), key: K, value: V) { box.k = key; box.v = value; }\n\
+     main :: () {\n  \
+       take_two(Kind.ASSIGN, .DECLARATION);\n  \
+       b: Box(int, Kind);\n  \
+       put(*b, 0, .ASSIGN);\n  \
+       print(\"box %\\n\", b.v);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "two DECLARATION\nbox ASSIGN\n");
+}
+
+#[test]
+fn a_return_forwards_every_value_a_call_produced() {
+  // `return f();` where `f` returns as many values as the header declares
+  // hands all of them on (**L§7.2**), rather than taking the first and
+  // defaulting the rest — which a named return list has no defaults for.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     inner :: (n: int) -> (value: int, ok: bool) { return n * 2, n > 0; }\n\
+     outer :: (n: int) -> (value: int, ok: bool) { return inner(n); }\n\
+     main :: () {\n  \
+       value, ok := outer(21);\n  \
+       print(\"% %\\n\", value, ok);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "42 true\n");
+}
+
+#[test]
+fn type_info_lists_only_the_members_a_struct_declares() {
+  // A member brought in by `using` is reachable through the member it came
+  // through, which is listed, so the reference does not repeat it in
+  // `Type_Info_Struct.members` (**L§8.4**, **L§17**). A walker that recurses
+  // into a `USING` member would otherwise see the same field several times —
+  // which is what made a reflective JSON writer emit one key four times.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Base  :: struct { a: int; }\n\
+     Middle :: struct { using base: Base; }\n\
+     Outer :: struct { using middle: Middle; b: int; struct { c: int; } }\n\
+     main :: () {\n  \
+       info := cast(*Type_Info_Struct) type_info(Outer);\n  \
+       print(\"%\\n\", info.members.count);\n  \
+       for * m: info.members  print(\"[%] %\\n\", m.name, m.flags);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "3\n[middle] USING\n[b] 0\n[] USING\n");
+}

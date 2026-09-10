@@ -1,227 +1,325 @@
 //
-// Command_Line: arguments into a struct.
+// Command_Line: the argument list filled into a struct the program declared.
 //
-// A struct's members are the options: `parse_arguments(*Options)` fills them
-// from the command line by walking the type table, so adding an option is
-// adding a member rather than adding a case to a parser.
+//     Arguments :: struct {
+//         verbose:  bool;      @"?Say more about what is happening."
+//         threads:  int;       @"?How many workers to run."
+//         out_path: string;
+//     }
 //
-// `-name value` for anything that takes one, `-name` alone for a bool, and
-// everything after `--` or not starting with `-` is left in `arguments`.
+//     success, args, is_set, free_arguments := parse_arguments(Arguments);
+//
+// The struct's members *are* the option names, found by reflection, so adding
+// an option means adding a member and nothing else. A `bool` member is a flag
+// and takes no value; everything else takes the argument that follows it.
+//
+// `is_set` says which options the caller actually wrote, which is not the same
+// as which differ from their defaults — a caller who typed the default value
+// on purpose is indistinguishable otherwise.
+//
+// A member's note beginning with `?` is its help text, printed for `-help`.
 //
 
 #import "Basic";
-#import "String";
+#import "Reflection";
 
-Argument_Flags :: enum_flags {
-    NONE                  :: 0;
-    // Stop at the first thing that is not an option, rather than gathering
-    // the rest — what a program that wraps another one wants.
-    STOP_AT_FIRST_LOOSE   :: 0x1;
-    // Say nothing about options the struct has no member for.
-    IGNORE_UNKNOWN        :: 0x2;
+// A parallel struct with one `bool` per member of `T`, generated from `T`'s
+// own type info: `is_set.threads` answers for `args.threads`.
+Is_Set :: struct (T: Type) {
+    #insert -> string {
+        info := type_info(T);
+
+        builder: String_Builder;
+        init_string_builder(*builder, temp);
+        for * member: info.members {
+            if should_skip(member)  continue;
+            print_to_builder(*builder, "    % := false;\n", member.name);
+        }
+        return builder_to_string(*builder);
+    };
 }
 
-Parse_Result :: struct {
-    ok := true;
-    // What was not an option: filenames and the like, in order.
-    arguments: [..] string;
-    // Why it failed, when it did.
-    error_message: string;
+Argument_Flags :: enum_flags u64 {
+    // An argument with no dash is collected rather than rejected.
+    FREE_ARGUMENTS_ALLOWED :: 0x1;
+    // Options are written `--name` rather than `-name`.
+    DOUBLE_DASH_REQUIRED   :: 0x2;
+    SHOW_HELP_ON_ERROR     :: 0x4;
+    // Help lists the options in name order rather than declaration order.
+    SORT_HELP              :: 0x8;
+    // Help lines up the descriptions in a column.
+    ALIGN_HELP             :: 0x10;
 }
 
-// Fills `options` from the program's own command line, skipping argv[0].
-parse_arguments :: (options: *$T, flags := Argument_Flags.NONE) -> Parse_Result {
-    args: [..] string;
-    args.allocator = temp;
-    for 1..__command_line_arguments.count - 1 {
-        array_add(*args, to_string(__command_line_arguments[it]));
-    }
-    return parse_arguments(options, args, flags);
-}
+Default_Argument_Flags :: Argument_Flags.FREE_ARGUMENTS_ALLOWED | .SORT_HELP | .ALIGN_HELP;
 
-parse_arguments :: (options: *$T, args: [] string, flags := Argument_Flags.NONE) -> Parse_Result {
-    result: Parse_Result;
+parse_arguments :: ($T: Type, flags := Default_Argument_Flags, help_triggers: [] string = .["help", "HELP", "?"]) -> (success: bool, result: T, is_set: Is_Set(T), free_arguments: [..] string) {
+    result: T;
+    is_set: Is_Set(T);
+    free_arguments: [..] string;
 
-    info := cast(*Type_Info_Struct) type_info(T);
-    if !info || info.type != .STRUCT {
-        result.ok = false;
-        result.error_message = "Options must be a struct.";
-        return result;
-    }
+    info := type_info(T);
+    args := get_command_line_arguments();
 
-    at := 0;
-    while at < args.count {
-        argument := args[at];
+    // `Is_Set`'s members are `bool`s in the same order as `T`'s, so the flag
+    // for member `n` is the `n`th byte.
+    set_flags := cast(*bool) *is_set;
 
-        // `--` ends the options; whatever follows is a plain argument even if
-        // it looks like one.
-        if argument == "--" {
-            at += 1;
-            while at < args.count {
-                array_add(*result.arguments, args[at]);
-                at += 1;
+    success := true;
+    only_free := false;
+    cursor := 1;
+
+    while cursor < args.count {
+        argument := args[cursor];
+
+        dashed := argument.count > 0 && argument[0] == #char "-";
+        if dashed && !only_free {
+            if argument == "--" && (flags & .FREE_ARGUMENTS_ALLOWED) {
+                // Everything after a bare `--` is a value, even if it looks
+                // like an option.
+                only_free = true;
+                cursor += 1;
+                continue;
+            }
+            if flags & .DOUBLE_DASH_REQUIRED  dashed = argument.count > 1 && argument[1] == #char "-";
+        }
+
+        if !dashed || only_free {
+            if !(flags & .FREE_ARGUMENTS_ALLOWED) {
+                dashes := ifx flags & .DOUBLE_DASH_REQUIRED then "--" else "-";
+                log_error("Command-line argument % does not start with '%'.\n", cursor, dashes);
+                return false, result, is_set, free_arguments;
+            }
+            array_add(*free_arguments, argument);
+            cursor += 1;
+            continue;
+        }
+
+        name := argument;
+        advance(*name, 1);
+        if flags & .DOUBLE_DASH_REQUIRED  advance(*name, 1);
+
+        found := false;
+        index := -1;
+        for * member: info.members {
+            if should_skip(member)   continue;
+            index += 1;
+            if member.name != name   continue;
+
+            found = true;
+            slot := cast(*u8) *result + member.offset_in_bytes;
+            if !take_value(slot, member.type, name, args, *cursor) {
+                success = false;
+            } else {
+                if set_flags[index] {
+                    log_error("Argument '%' was given more than once.\n", name);
+                    success = false;
+                }
+                set_flags[index] = true;
             }
             break;
         }
 
-        if !begins_with(argument, "-") || argument.count == 1 {
-            array_add(*result.arguments, argument);
-            at += 1;
-            if flags & .STOP_AT_FIRST_LOOSE {
-                while at < args.count {
-                    array_add(*result.arguments, args[at]);
-                    at += 1;
-                }
-                break;
+        if !found {
+            for help_triggers {
+                if name != it  continue;
+                show_help(T, flags, help_triggers);
+                // Asking for help is not a successful parse: there is nothing
+                // for the caller to go on and do.
+                return false, result, is_set, free_arguments;
             }
-            continue;
+
+            log_error("Command-line argument % ('%') is not valid.\n", cursor, name);
+            success = false;
+            if flags & .SHOW_HELP_ON_ERROR       show_help(T, flags, help_triggers);
+            else if help_triggers.count          log_error("Use -% to list the valid arguments.\n", help_triggers[0]);
         }
 
-        // One or two leading dashes both name the same option, and `-name=v`
-        // is the same as `-name v`.
-        name := trim_left(argument, "-");
-        inline_value: string;
-        has_inline := false;
-        equals := find_index_from_left(name, #char "=");
-        if equals >= 0 {
-            inline_value = slice(name, equals + 1, name.count);
-            name = slice(name, 0, equals);
-            has_inline = true;
-        }
-
-        member := find_member(info, name);
-        if !member {
-            if !(flags & .IGNORE_UNKNOWN) {
-                result.ok = false;
-                result.error_message = sprint("Unknown option '-%'.", name, allocator = temp);
-                return result;
-            }
-            at += 1;
-            continue;
-        }
-
-        storage := cast(*u8) options + member.offset_in_bytes;
-
-        // A bool is set by being mentioned; everything else takes the next
-        // argument.
-        if member.type.type == .BOOL && !has_inline {
-            (cast(*bool) storage).* = true;
-            at += 1;
-            continue;
-        }
-
-        value := inline_value;
-        if !has_inline {
-            if at + 1 >= args.count {
-                result.ok = false;
-                result.error_message = sprint("Option '-%' wants a value.", name, allocator = temp);
-                return result;
-            }
-            value = args[at + 1];
-            at += 1;
-        }
-        at += 1;
-
-        if !assign_member(storage, member.type, value) {
-            result.ok = false;
-            result.error_message = sprint("Option '-%' cannot take '%'.", name, value, allocator = temp);
-            return result;
-        }
+        if !success  break;
+        cursor += 1;
     }
 
-    return result;
+    return success, result, is_set, free_arguments;
 }
 
-// What the options are, printed from the struct itself so that the help text
-// cannot drift from what is accepted.
-print_usage :: (options: *$T, program_name := "") {
-    info := cast(*Type_Info_Struct) type_info(T);
-    if program_name.count  print("Usage: % [options]\n\n", program_name);
-    print("Options:\n");
+// What `-help` prints: every option, its type, and the note it was declared
+// with.
+show_help :: ($T: Type, flags := Default_Argument_Flags, help_triggers: [] string = .["help", "HELP", "?"]) {
+    info := type_info(T);
+
+    names: [..] string;
+    notes: [..] string;
+    names.allocator = temp;
+    notes.allocator = temp;
+
+    widest := 0;
     for * member: info.members {
-        if member.flags & .CONSTANT  continue;
-        print("    -%", member.name);
-        if member.type.type != .BOOL  print(" <%>", type_name(member.type));
-        print("\n");
+        if should_skip(member)  continue;
+        array_add(*names, member.name);
+        array_add(*notes, help_note(member));
+        widest = max(widest, member.name.count);
     }
+
+    if flags & .SORT_HELP  sort_together(names, notes);
+
+    lines: [..] string;
+    lines.allocator = temp;
+    for names {
+        note := notes[it_index];
+        if !note.count {
+            array_add(*lines, tprint("-%", it));
+            continue;
+        }
+
+        builder: String_Builder;
+        init_string_builder(*builder, temp);
+        print_to_builder(*builder, "-%: ", it);
+        // The descriptions line up in a column, so the padding goes after the
+        // colon rather than before it.
+        if flags & .ALIGN_HELP {
+            for 1..widest - it.count  append(*builder, #char " ");
+        }
+        append(*builder, note);
+        array_add(*lines, builder_to_string(*builder, temp));
+    }
+
+    if help_triggers.count {
+        // A deliberately blank line before the help trigger itself.
+        array_add(*lines, "");
+        array_add(*lines, tprint("-%: Show the list of commands.", join(..help_triggers, ", -", allocator = temp)));
+    }
+
+    if lines.count == 0 {
+        if flags & .FREE_ARGUMENTS_ALLOWED  print("----- There are no valid command-line options, just free arguments. -----\n");
+        else                                print("----- There are no valid command-line options. -----\n");
+    } else if lines.count == 1 {
+        print("----- Here is the only valid argument: -----\n");
+    } else {
+        print("----- Here is the list of valid arguments: -----\n");
+    }
+
+    for lines  print("    %\n", it);
 }
 
 #scope_module
 
-find_member :: (info: *Type_Info_Struct, name: string) -> *Type_Info_Struct_Member {
-    for * member: info.members {
-        if member.flags & .CONSTANT  continue;
-        // A member is named with underscores and an option usually with
-        // dashes, so the two spellings mean the same option.
-        if member.name == name  return member;
-        if names_match(member.name, name)  return member;
-    }
-    return null;
+// A member the parser has no business filling in: a constant has no storage,
+// and a `using`-brought member belongs to the type it came from.
+should_skip :: (member: *Type_Info_Struct_Member) -> bool {
+    if member.flags & .CONSTANT  return true;
+    return false;
 }
 
-names_match :: (member: string, given: string) -> bool {
-    if member.count != given.count  return false;
-    for 0..member.count - 1 {
-        a := member[it];
-        b := given[it];
-        if a == b  continue;
-        if a == #char "_" && b == #char "-"  continue;
-        return false;
+// The note the member was declared with, minus the `?` that marks it as help.
+help_note :: (member: *Type_Info_Struct_Member) -> string {
+    for member.notes {
+        if it.count && it[0] == #char "?"  return slice(it, 1, it.count - 1);
     }
-    return true;
+    return "";
 }
 
-assign_member :: (storage: *u8, type: *Type_Info, value: string) -> bool {
-    if type.type == {
+
+// Fills one member from the argument list, advancing `cursor` past whatever it
+// consumed. A `bool` consumes nothing: writing the flag is the whole meaning.
+take_value :: (slot: *u8, info: *Type_Info, name: string, args: [] string, cursor: *s64) -> bool {
+    if info.type == .BOOL {
+        (cast(*bool) slot).* = true;
+        return true;
+    }
+
+    if info.type == .ARRAY {
+        array := cast(*Type_Info_Array) info;
+        if array.array_type != .FIXED {
+            log_error("Argument '%' has a type the command line cannot fill.\n", name);
+            return false;
+        }
+        for 0..array.array_count - 1 {
+            element := slot + array.element_type.runtime_size * it;
+            if !take_value(element, array.element_type, name, args, cursor)  return false;
+        }
+        return true;
+    }
+
+    value, ok := next_argument(name, args, cursor);
+    if !ok  return false;
+
+    if info.type == {
         case .STRING;
-            (cast(*string) storage).* = value;
+            (cast(*string) slot).* = copy_string(value);
             return true;
 
-        case .BOOL;
-            if value == "true"  || value == "1" { (cast(*bool) storage).* = true;  return true; }
-            if value == "false" || value == "0" { (cast(*bool) storage).* = false; return true; }
-            return false;
-
         case .INTEGER;
-            number, ok := string_to_int(value);
-            if !ok  return false;
-            integer := cast(*Type_Info_Integer) type;
-            if integer.runtime_size == {
-                case 1; (cast(*s8)  storage).* = cast(s8)  number;
-                case 2; (cast(*s16) storage).* = cast(s16) number;
-                case 4; (cast(*s32) storage).* = cast(s32) number;
-                case;   (cast(*s64) storage).* = number;
+            integer := cast(*Type_Info_Integer) info;
+            number, number_ok, remainder := string_to_int(value);
+            if !number_ok || remainder.count {
+                log_error("Value of argument '%' was not an integer (it was '%').\n", name, value);
+                return false;
+            }
+            fits, low, high := range_check_and_store(number, integer, slot);
+            if !fits {
+                log_error("Value of argument '%' (%) is outside the range % to %.\n", name, number, low, high);
+                return false;
+            }
+            return true;
+
+        case .FLOAT;
+            number, number_ok, remainder := string_to_float64(value);
+            if !number_ok || remainder.count {
+                log_error("Value of argument '%' was not a float (it was '%').\n", name, value);
+                return false;
+            }
+            // Braced because a parenthesis right after the condition would
+            // otherwise read as a call on it.
+            if info.runtime_size == 4 {
+                (cast(*float32) slot).* = cast(float32) number;
+            } else {
+                (cast(*float64) slot).* = number;
             }
             return true;
 
         case .ENUM;
-            // By member name, which is how an option reads: `-mode fast`.
-            enum_info := cast(*Type_Info_Enum) type;
-            for enum_info.names {
-                if !equal_nocase(it, value)  continue;
-                chosen := enum_info.values[it_index];
-                size := ifx enum_info.internal_type then enum_info.internal_type.runtime_size else 8;
-                if size == {
-                    case 1; (cast(*s8)  storage).* = cast(s8)  chosen;
-                    case 2; (cast(*s16) storage).* = cast(s16) chosen;
-                    case 4; (cast(*s32) storage).* = cast(s32) chosen;
-                    case;   (cast(*s64) storage).* = chosen;
-                }
+            enum_info := cast(*Type_Info_Enum) info;
+            number, number_ok := enum_value(enum_info, value);
+            if !number_ok {
+                log_error("Value of argument '%' was not one of %'s names (it was '%').\n", name, enum_info.name, value);
+                return false;
+            }
+            if enum_info.internal_type {
+                fits := range_check_and_store(number, enum_info.internal_type, slot);
+                if !fits  return false;
                 return true;
             }
-            return false;
+            (cast(*s64) slot).* = number;
+            return true;
 
         case;
+            log_error("Argument '%' has a type the command line cannot fill.\n", name);
             return false;
     }
 }
 
-type_name :: (type: *Type_Info) -> string {
-    if type.type == {
-        case .STRING;  return "string";
-        case .INTEGER; return "number";
-        case .BOOL;    return "bool";
-        case .ENUM;    return (cast(*Type_Info_Enum) type).name;
-        case;          return "value";
+next_argument :: (name: string, args: [] string, cursor: *s64) -> (value: string, ok: bool) {
+    if cursor.* + 1 >= args.count {
+        log_error("Argument '%' needs a value, and there was none after it.\n", name);
+        return "", false;
+    }
+    cursor.* += 1;
+    return args[cursor.*], true;
+}
+
+// An insertion sort over the two arrays at once, so the help text stays with
+// the name it belongs to. The list is short enough that nothing cleverer pays.
+sort_together :: (names: [] string, helps: [] string) {
+    for 1..names.count - 1 {
+        name := names[it];
+        help := helps[it];
+        at := it - 1;
+        while at >= 0 && compare(names[at], name) > 0 {
+            names[at + 1] = names[at];
+            helps[at + 1] = helps[at];
+            at -= 1;
+        }
+        names[at + 1] = name;
+        helps[at + 1] = help;
     }
 }

@@ -45,7 +45,7 @@ thread_init :: (thread: *Thread, proc: Thread_Proc, data: *void = null, index: u
     thread.thread_context = context;
     thread.thread_context.thread_index = index;
 
-    thread.temporary_data = NewArray(u8, TEMPORARY_STORAGE_SIZE);
+    thread.temporary_data = NewArray(TEMPORARY_STORAGE_SIZE, u8);
     if !thread.temporary_data.data  return false;
 
     set_initial_data(*thread.temporary_storage, TEMPORARY_STORAGE_SIZE, thread.temporary_data.data);
@@ -153,6 +153,43 @@ condition_signal :: (condition: *Condition) {
 condition_broadcast :: (condition: *Condition) {
     if condition.ready  pthread_cond_broadcast(*condition.handle);
 }
+// ------------------------------------------------------- the short names ---
+//
+// A caller writes `init(*mutex)` and `destroy(*mutex)`; the `mutex_`-prefixed
+// spellings above are what the bodies here are, kept because a caller holding
+// both a mutex and a condition sometimes wants to say which it means.
+
+init :: (mutex: *Mutex) -> bool {
+    return mutex_init(mutex);
+}
+
+destroy :: (mutex: *Mutex) {
+    mutex_destroy(mutex);
+}
+
+// The reference spells the type this way; both names are the same struct.
+Condition_Variable :: Condition;
+
+init :: (condition: *Condition) -> bool {
+    return condition_init(condition);
+}
+
+destroy :: (condition: *Condition) {
+    condition_destroy(condition);
+}
+
+wait :: (condition: *Condition, mutex: *Mutex) {
+    condition_wait(condition, mutex);
+}
+
+signal :: (condition: *Condition) {
+    condition_signal(condition);
+}
+
+broadcast :: (condition: *Condition) {
+    condition_broadcast(condition);
+}
+
 
 #scope_module
 

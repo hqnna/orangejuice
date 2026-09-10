@@ -1,130 +1,243 @@
 //
-// Pool: fixed-size items, reused rather than returned.
+// Pool: many allocations of many sizes, one lifetime.
 //
-// Where `Flat_Pool` hands out bytes of any size and frees none of them, this
-// hands out one size and takes them back — a freed item goes on a free list
-// threaded through the item's own storage, so reuse costs a pointer read and
-// the pool never gives memory back to the allocator until it is thrown away.
+// The pool hands out bytes from a large block and never takes them back one at
+// a time — `free` on a pool allocator does nothing. When the work is finished
+// the whole pool is `reset` (its blocks kept for reuse) or `release`d (its
+// blocks given back). That is the right shape for a parse tree, a frame's
+// worth of scratch, or anything else built up and thrown away together.
 //
-// That makes it right for things a program makes and unmakes constantly and
-// which are all the same shape: nodes, particles, handles.
+// An allocation at least `oversized_size` big gets a block of its own rather
+// than being fitted into the current one, so one huge request cannot waste the
+// rest of a block.
+//
+// `Flat_Pool` is the simpler thing to reach for when one contiguous region
+// will do; this one grows by asking its `block_allocator` for another block.
 //
 
 #import "Basic";
 
-Pool :: struct (T: Type) {
-    ITEMS_PER_BLOCK :: 256;
+POOL_BLOCK_SIZE_DEFAULT     :: 65536;
+POOL_OVERSIZED_SIZE_DEFAULT :: 6554;
 
-    Block :: struct {
-        next: *Block;
-        // The items follow the header.
+// What `overwrite_memory` fills freed bytes with — a value that is neither a
+// plausible pointer nor a plausible small integer, so reading through a stale
+// pointer goes wrong loudly rather than quietly.
+STAMP :: 0xcc;
+
+Pool :: struct {
+    // The size of a block as asked of the allocator; a caller gets a little
+    // less than this, since the block's own header lives in it.
+    memblock_size:  s64 = POOL_BLOCK_SIZE_DEFAULT;
+    oversized_size: s64 = POOL_OVERSIZED_SIZE_DEFAULT;
+    // Must be a power of two.
+    alignment := 8;
+
+    current_memblock: *Memblock;
+    current_pos:      *u8;
+    bytes_left:       s64;
+
+    block_allocator: Allocator;
+
+    // Blocks a reset kept, blocks in use, and the oversized allocations that
+    // never went through a block at all.
+    unused_memblocks:        *Memblock;
+    used_memblocks:          *Memblock;
+    out_of_band_allocations: *Memblock;
+
+    // For finding a pointer kept across a reset: the bytes are stamped rather
+    // than left holding what they used to.
+    overwrite_memory        := false;
+    // For an allocator that wants its memory back promptly rather than
+    // recycled here.
+    free_memblocks_on_reset := false;
+}
+
+Memblock :: struct {
+    next: *Memblock;
+    // How big the allocation was, header included, so `release` can hand the
+    // same number back to the allocator.
+    total_size: s64;
+}
+
+// Says where the pool's blocks come from. Calling it is optional — the first
+// `get` uses `context.allocator` — but a pool that is about to *become* the
+// context allocator has to be told beforehand, or it would ask itself for its
+// own first block.
+set_allocators :: (pool: *Pool, block_allocator: Allocator = .{}) {
+    if pool.block_allocator.proc {
+        log_error("Attempt to set allocators on a Pool that has already been used.\n");
+        return;
     }
 
-    // A free item's storage holds the next free one. An item must therefore be
-    // at least pointer-sized, which `size_of` guarantees for anything worth
-    // pooling.
-    Free_Item :: struct {
-        next: *Free_Item;
+    if block_allocator.proc {
+        pool.block_allocator = block_allocator;
+        return;
     }
 
-    blocks:    *Block;
-    free_list: *Free_Item;
-    // Handed out and not yet given back.
-    live:      s64;
-    allocator: Allocator;
-}
-
-init :: (pool: *Pool($T), allocator := context.allocator) {
-    pool.blocks = null;
-    pool.free_list = null;
-    pool.live = 0;
-    pool.allocator = allocator;
-}
-
-// One item, zeroed. Null when the allocator could not give the pool a block.
-get :: (pool: *Pool($T)) -> *T {
-    if !pool.free_list {
-        if !pool_add_block(pool)  return null;
+    if context.allocator.proc == pool_allocator_proc && context.allocator.data == pool {
+        log_error("A Pool is taking its block allocator from the context, but the context allocator is that same Pool, which would loop forever. Call set_allocators on the Pool before pushing it onto context.allocator.\n");
+        pool.block_allocator = context.default_allocator;
+        return;
     }
-    item := pool.free_list;
-    pool.free_list = item.next;
-    pool.live += 1;
 
-    memory := cast(*T) item;
-    memset(memory, 0, size_of(T));
-    return memory;
+    pool.block_allocator = context.allocator;
 }
 
-// Back on the free list. Reading through the pointer afterwards reads the free
-// list, which is a use-after-free the same as any other.
-release :: (pool: *Pool($T), item: *T) {
-    if !item  return;
-    node := cast(*Pool(T).Free_Item) item;
-    node.next = pool.free_list;
-    pool.free_list = node;
-    pool.live -= 1;
-}
+// `nbytes` from the pool, aligned to `pool.alignment`. Null when the block
+// allocator could not give the pool room.
+get :: (pool: *Pool, nbytes: s64) -> *void {
+    if nbytes <= 0  return null;
+    if !pool.block_allocator.proc  set_allocators(pool);
 
-// Every item back on the free list at once, without giving the blocks up.
-reset :: (pool: *Pool($T)) {
-    pool.free_list = null;
-    pool.live = 0;
-    block := pool.blocks;
-    while block {
-        pool_thread_block(pool, block);
-        block = block.next;
+    if nbytes >= pool.oversized_size  return pool_oversized(pool, nbytes);
+
+    wanted := pool_align_up(nbytes, pool.alignment);
+    if wanted > pool.bytes_left {
+        if !pool_new_block(pool)  return null;
     }
+
+    result := pool.current_pos;
+    pool.current_pos += wanted;
+    pool.bytes_left -= wanted;
+    return result;
 }
 
-deinit :: (pool: *Pool($T)) {
-    allocator := pool_allocator(pool);
-    block := pool.blocks;
+// Every byte the pool handed out is free again; the blocks stay, so the next
+// round of allocations does not go back to the allocator.
+reset :: (pool: *Pool) {
+    // The current block goes on the used list first, so one loop covers all
+    // of them.
+    if pool.current_memblock {
+        pool_push(*pool.used_memblocks, pool.current_memblock);
+        pool.current_memblock = null;
+    }
+    pool.current_pos = null;
+    pool.bytes_left = 0;
+
+    pool_free_list(pool, *pool.out_of_band_allocations);
+
+    if pool.free_memblocks_on_reset {
+        pool_free_list(pool, *pool.used_memblocks);
+        pool_free_list(pool, *pool.unused_memblocks);
+        return;
+    }
+
+    block := pool.used_memblocks;
     while block {
         next := block.next;
-        free(block, allocator);
+        if pool.overwrite_memory  pool_stamp(block);
+        pool_push(*pool.unused_memblocks, block);
         block = next;
     }
-    pool.blocks = null;
-    pool.free_list = null;
-    pool.live = 0;
+    pool.used_memblocks = null;
+}
+
+// A reset, and then the blocks go back to the allocator too.
+release :: (pool: *Pool) {
+    reset(pool);
+    pool_free_list(pool, *pool.used_memblocks);
+    pool_free_list(pool, *pool.unused_memblocks);
+}
+
+// The `Allocator_Proc` shape, so a pool can be the context allocator:
+//
+//     set_allocators(*pool);
+//     context.allocator = .{pool_allocator_proc, *pool};
+//
+// A free is ignored, and a resize copies into fresh bytes, since the pool has
+// no way to give the old ones back.
+pool_allocator_proc :: (mode: Allocator_Mode, requested_size: s64, old_size: s64, old_memory: *void, allocator_data: *void) -> *void {
+    pool := cast(*Pool) allocator_data;
+    if !pool  return null;
+
+    if mode == {
+        case .ALLOCATE;
+            return get(pool, requested_size);
+
+        case .RESIZE;
+            memory := get(pool, requested_size);
+            if !memory  return null;
+            keep := min(old_size, requested_size);
+            if old_memory && keep > 0  memcpy(memory, old_memory, keep);
+            return memory;
+
+        case .FREE;
+            return null;
+
+        case;
+            return null;
+    }
 }
 
 #scope_module
 
-pool_allocator :: (pool: *Pool($T)) -> Allocator {
-    if pool.allocator.proc  return pool.allocator;
-    return context.allocator;
+pool_align_up :: (value: s64, alignment: s64) -> s64 {
+    if alignment <= 1  return value;
+    return (value + alignment - 1) & ~(alignment - 1);
 }
 
-block_items :: (pool: *Pool($T), block: *Pool(T).Block) -> *T {
-    return cast(*T) (cast(*u8) block + size_of(Pool(T).Block));
+pool_push :: (list: **Memblock, block: *Memblock) {
+    block.next = list.*;
+    list.* = block;
 }
 
-// Puts every item of a block on the free list, back to front so that the
-// first item handed out afterwards is the lowest address — which keeps a
-// freshly reset pool handing out items in order.
-pool_thread_block :: (pool: *Pool($T), block: *Pool(T).Block) {
-    items := block_items(pool, block);
-    index := pool.ITEMS_PER_BLOCK - 1;
-    while index >= 0 {
-        node := cast(*Pool(T).Free_Item) (items + index);
-        node.next = pool.free_list;
-        pool.free_list = node;
-        index -= 1;
+// A request too big to be worth fitting into a block gets exactly the block it
+// needs, kept on its own list so it is freed by a reset rather than recycled.
+pool_oversized :: (pool: *Pool, nbytes: s64) -> *void {
+    header := pool_align_up(size_of(Memblock), pool.alignment);
+    total := header + nbytes;
+
+    memory := alloc(total, pool.block_allocator);
+    if !memory  return null;
+
+    block := cast(*Memblock) memory;
+    block.total_size = total;
+    pool_push(*pool.out_of_band_allocations, block);
+    return cast(*u8) memory + header;
+}
+
+// The current block is retired and another taken — from the unused list when
+// a reset left one there, otherwise from the allocator.
+pool_new_block :: (pool: *Pool) -> bool {
+    if pool.current_memblock {
+        pool_push(*pool.used_memblocks, pool.current_memblock);
+        pool.current_memblock = null;
     }
+
+    header := pool_align_up(size_of(Memblock), pool.alignment);
+
+    block: *Memblock;
+    if pool.unused_memblocks {
+        block = pool.unused_memblocks;
+        pool.unused_memblocks = block.next;
+        block.next = null;
+    } else {
+        memory := alloc(pool.memblock_size, pool.block_allocator);
+        if !memory  return false;
+        block = cast(*Memblock) memory;
+        block.next = null;
+        block.total_size = pool.memblock_size;
+    }
+
+    pool.current_memblock = block;
+    pool.current_pos = cast(*u8) block + header;
+    pool.bytes_left = block.total_size - header;
+    return true;
 }
 
-pool_add_block :: (pool: *Pool($T)) -> bool {
-    #assert(size_of(T) >= size_of(*void), "A pooled item must be at least pointer-sized: a free one holds the next free one in its own storage.");
+pool_stamp :: (block: *Memblock) {
+    header := size_of(Memblock);
+    if block.total_size <= header  return;
+    memset(cast(*u8) block + header, STAMP, block.total_size - header);
+}
 
-    bytes := size_of(Pool(T).Block) + size_of(T) * pool.ITEMS_PER_BLOCK;
-    memory := alloc(bytes, pool_allocator(pool));
-    if !memory  return false;
-
-    block := cast(*Pool(T).Block) memory;
-    block.next = pool.blocks;
-    pool.blocks = block;
-    pool.allocator = pool_allocator(pool);
-    pool_thread_block(pool, block);
-    return true;
+pool_free_list :: (pool: *Pool, list: **Memblock) {
+    block := list.*;
+    while block {
+        next := block.next;
+        free(block, pool.block_allocator);
+        block = next;
+    }
+    list.* = null;
 }

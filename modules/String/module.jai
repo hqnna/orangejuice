@@ -157,12 +157,33 @@ path_extension :: (path: string) -> string {
     return slice(name, at + 1, name.count);
 }
 
-// The filename with its extension taken off.
+// The path with its extension taken off, directory and all:
+// `path_strip_extension("/home/w/rezrov.foo")` is "/home/w/rezrov".
 path_strip_extension :: (path: string) -> string {
     name := path_filename(path);
     at := find_index_from_right(name, #char ".");
-    if at <= 0  return name;
-    return slice(name, 0, at);
+    if at <= 0  return path;
+    // The dot is at `at` within the filename, so its index in the whole path
+    // is that plus wherever the filename began.
+    return slice(path, 0, (name.data - path.data) + at);
+}
+
+// The directory a path names, *with* its trailing separator:
+// `path_strip_filename("/home/w/rezrov.foo")` is "/home/w/".
+path_strip_filename :: (path: string) -> string {
+    at := find_index_from_right(path, #char "/");
+    if at < 0  return "";
+    return slice(path, 0, at + 1);
+}
+
+// Where any of `bytes` last occurs, or -1.
+find_index_of_any_from_right :: (s: string, bytes: string) -> s64 {
+    at := s.count - 1;
+    while at >= 0 {
+        if is_any(s[at], bytes)  return at;
+        at -= 1;
+    }
+    return -1;
 }
 
 // Joins with a single separator between parts, however many the parts came
@@ -184,3 +205,53 @@ path_join :: (parts: .. string, allocator := context.allocator) -> string {
     return builder_to_string(*builder, allocator);
 }
 
+
+// The last place `separator` occurs splits the string. `found` is false when
+// it does not occur at all, and then `left` is the whole string and `right` is
+// empty — which is what a caller peeling a suffix off wants.
+//
+// Nothing is allocated: both halves are views into `s`.
+split_from_right :: (s: string, separator: string) -> (found: bool, left: string, right: string) {
+    at := find_index_from_right(s, separator);
+    if at < 0  return false, s, "";
+    return true, slice(s, 0, at), slice(s, at + separator.count, s.count - at - separator.count);
+}
+
+split_from_right :: (s: string, separator: u8) -> (found: bool, left: string, right: string) {
+    at := find_index_from_right(s, separator);
+    if at < 0  return false, s, "";
+    return true, slice(s, 0, at), slice(s, at + 1, s.count - at - 1);
+}
+
+// The first occurrence, split the same way.
+split_from_left :: (s: string, separator: string) -> (found: bool, left: string, right: string) {
+    at := find_index_from_left(s, separator);
+    if at < 0  return false, s, "";
+    return true, slice(s, 0, at), slice(s, at + separator.count, s.count - at - separator.count);
+}
+
+split_from_left :: (s: string, separator: u8) -> (found: bool, left: string, right: string) {
+    at := find_index_from_left(s, separator);
+    if at < 0  return false, s, "";
+    return true, slice(s, 0, at), slice(s, at + 1, s.count - at - 1);
+}
+
+// The other spelling of `begins_with`; both names are in use.
+starts_with :: begins_with;
+
+// Whether `substring` occurs in `s`, and what follows the first occurrence —
+// which lets a caller both test and continue in one call:
+//
+//     found, rest := contains(line, "=");
+//
+contains :: (s: string, substring: string) -> (found: bool, remainder: string) {
+    at := find_index_from_left(s, substring);
+    if at < 0  return false, "";
+    return true, slice(s, at + substring.count, s.count - at - substring.count);
+}
+
+contains :: (s: string, char: u8) -> (found: bool, remainder: string) {
+    at := find_index_from_left(s, char);
+    if at < 0  return false, "";
+    return true, slice(s, at + 1, s.count - at - 1);
+}

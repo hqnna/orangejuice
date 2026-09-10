@@ -292,9 +292,19 @@ impl TypeTable {
       Some(layout) => (layout.size.max(1), layout.alignment.max(1)),
       None => return (0, 0),
     };
+    // Only the members the struct declares itself. One brought in by `using`
+    // is reachable through the member it came through, which is listed, so the
+    // reference does not repeat it here — and a walker that recurses into a
+    // `USING` member would otherwise see it twice (**L§8.4**, **L§17**).
+    // The checker keeps them in `StructInfo` because that is what resolves a
+    // name written without the path.
+    let declared: Vec<&oj_types::StructMember> = members
+      .iter()
+      .filter(|member| !member.flags.contains(oj_types::MemberFlags::IMPORTED))
+      .collect();
     // A member's type has to be laid out before the array is placed, or the
     // recursion would move the cursor out from under it.
-    let entries: Vec<(String, u64, u64, u32)> = members
+    let entries: Vec<(String, u64, u64, u32)> = declared
       .iter()
       .map(|member| {
         let name = checker.interner().resolve_lossy(member.name).into_owned();
@@ -307,7 +317,8 @@ impl TypeTable {
       })
       .collect();
 
-    let base = self.place(size * entries.len() as u64, alignment);
+    let count = entries.len();
+    let base = self.place(size * count as u64, alignment);
     for (index, (name, type_offset, offset, flags)) in entries.into_iter().enumerate() {
       let at = base + size * index as u64;
       self.write_field_string(checker, record, at, "name", name.as_bytes());
@@ -316,7 +327,7 @@ impl TypeTable {
       self.write_field_u32(checker, record, at, "flags", flags);
       self.write_field_i64(checker, record, at, "offset_into_constant_storage", -1);
     }
-    (base, members.len() as u64)
+    (base, count as u64)
   }
 
   fn fill_enum(

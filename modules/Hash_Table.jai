@@ -161,6 +161,49 @@ for_expansion :: (table: *Table($K, $V), body: Code, flags: For_Flags) #expand {
     }
 }
 
+// Every value stored under `key`, in the order the probe reaches them —
+// `table_add` puts a repeated key in a second slot rather than replacing, and
+// this is what reads them all back.
+//
+// The result is in temporary storage by default, so a caller iterating it does
+// not have to free anything; pass an allocator to keep it.
+table_find_multiple :: (table: *Table($K, $V), key: K, allocator := temp) -> [] V {
+    found: [..] V;
+    found.allocator = allocator;
+    if !table.allocated  return found;
+
+    hash := table_hash(table, key);
+    index := cast(s64) (hash & cast(u64) (table.allocated - 1));
+    while table.entries[index].hash != NEVER_OCCUPIED {
+        entry := *table.entries[index];
+        if entry.hash == hash && table_keys_match(table, entry.key, key) {
+            array_add(*found, entry.value);
+        }
+        index += 1;
+        if index >= table.allocated  index = 0;
+    }
+    return found;
+}
+
+// The same, as pointers into the table, so a caller can write through them.
+table_find_multiple_pointers :: (table: *Table($K, $V), key: K, allocator := temp) -> [] *V {
+    found: [..] *V;
+    found.allocator = allocator;
+    if !table.allocated  return found;
+
+    hash := table_hash(table, key);
+    index := cast(s64) (hash & cast(u64) (table.allocated - 1));
+    while table.entries[index].hash != NEVER_OCCUPIED {
+        entry := *table.entries[index];
+        if entry.hash == hash && table_keys_match(table, entry.key, key) {
+            array_add(*found, *entry.value);
+        }
+        index += 1;
+        if index >= table.allocated  index = 0;
+    }
+    return found;
+}
+
 #scope_module
 
 table_allocator :: (table: *Table($K, $V)) -> Allocator {

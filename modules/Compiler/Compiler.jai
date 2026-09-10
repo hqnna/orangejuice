@@ -1089,6 +1089,70 @@ copy_commonly_propagated_fields :: (from: Build_Options, to: *Build_Options) {
     to.context_size_max          = from.context_size_max;
 }
 
+// A plugin the driving metaprogram runs alongside a compilation (**C§3**).
+// Declared here rather than in `Metaprogram_Plugins` because a build file that
+// imports only `Compiler` still names the type.
+Metaprogram_Plugin :: struct {
+    // Set by the metaprogram that created the plugin: the workspace whose
+    // messages it sees, and the one it would add source to.
+    workspace: Workspace;
+
+    before_intercept:  (p: *Metaprogram_Plugin, flags: *Intercept_Flags);
+    add_source:        (p: *Metaprogram_Plugin);
+    // The workspace is not passed, because it is on the message.
+    message:           (p: *Metaprogram_Plugin, message: *Message);
+    finish:            (p: *Metaprogram_Plugin);
+    shutdown:          (p: *Metaprogram_Plugin);
+
+    // Returns where argument parsing carries on from. A plugin that does not
+    // recognise the option leaves the cursor where it found it.
+    handle_one_option: (p: *Metaprogram_Plugin, options: [] string, cursor: int) -> (new_cursor: int);
+    log_help:          (p: *Metaprogram_Plugin);
+}
+
+Optimization_Type :: enum u8 {
+    DEBUG                :: 0;
+    VERY_DEBUG           :: 1;
+    OPTIMIZED            :: 2;
+    VERY_OPTIMIZED       :: 3;
+    OPTIMIZED_SMALL      :: 4;
+    OPTIMIZED_VERY_SMALL :: 5;
+}
+
+// Sets the several options a build type implies, so a caller need not know
+// which they are. Anything it touches can still be changed afterwards.
+//
+// Debug info and optimization are kept orthogonal: an optimized build that is
+// still debuggable is usually what people want, which is why
+// `preserve_debug_info` defaults to keeping it.
+set_optimization :: (options: *Build_Options, type: Optimization_Type, preserve_debug_info := true) {
+    debug := (type == Optimization_Type.DEBUG) || (type == Optimization_Type.VERY_DEBUG);
+
+    options.optimization_level      = ifx debug then 0 else 2;
+    options.enable_bytecode_inliner = !debug;
+
+    // The runtime checks are what a debug build is for, and what an optimized
+    // one is trying not to pay for.
+    options.array_bounds_check        = debug;
+    options.cast_bounds_check         = debug;
+    options.null_pointer_check        = debug;
+    options.arithmetic_overflow_check = debug;
+
+    options.stack_trace     = debug;
+    options.emit_debug_info = debug || preserve_debug_info;
+
+    if type == {
+        case Optimization_Type.VERY_DEBUG;
+            options.llvm_options.disable_inlining = true;
+        case Optimization_Type.VERY_OPTIMIZED;
+            options.llvm_options.code_gen_optimization = 3;
+        case Optimization_Type.OPTIMIZED_SMALL;       #through;
+        case Optimization_Type.OPTIMIZED_VERY_SMALL;
+            options.llvm_options.code_gen_optimization = 1;
+        case;
+    }
+}
+
 Version_Info :: struct {
     major: s32;
     minor: s32;

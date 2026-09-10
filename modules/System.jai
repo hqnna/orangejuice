@@ -41,6 +41,17 @@ find_executable :: (name: string, allocator := context.allocator) -> string {
     return "";
 }
 
+// Who the process is running as. `USER` is what a shell sets; a process
+// started without one falls back to asking the password database.
+get_username :: (allocator := context.allocator) -> (name: string, success: bool) {
+    value, found := get_environment_variable("USER", allocator);
+    if found && value.count  return value, true;
+
+    raw := getpwuid_name(geteuid());
+    if !raw  return "", false;
+    return copy_string(to_string(raw), allocator), true;
+}
+
 get_process_id :: () -> s32 {
     return getpid();
 }
@@ -71,6 +82,29 @@ sleep_milliseconds :: (milliseconds: s64) {
         if errno() != EINTR  break;
         request = remaining;
     }
+}
+
+// glibc's password entry. Only the name is read, so the rest of the struct is
+// padding as far as this is concerned.
+passwd :: struct {
+    pw_name:   *u8;
+    pw_passwd: *u8;
+    pw_uid:    u32;
+    pw_gid:    u32;
+    pw_gecos:  *u8;
+    pw_dir:    *u8;
+    pw_shell:  *u8;
+}
+
+geteuid :: () -> u32 #foreign libc_system;
+getpwuid :: (uid: u32) -> *passwd #foreign libc_system;
+
+libc_system :: #system_library "c";
+
+getpwuid_name :: (uid: u32) -> *u8 {
+    entry := getpwuid(uid);
+    if !entry  return null;
+    return entry.pw_name;
 }
 
 #scope_module

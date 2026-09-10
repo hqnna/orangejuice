@@ -56,6 +56,64 @@ to_string :: (value: Any, allocator := context.allocator) -> string {
     return builder_to_string(*builder, allocator);
 }
 
+// --------------------------------------------------------- the formatters ---
+//
+// A formatter is a value that carries the thing to print *and* how to print
+// it, so it travels through a `%` slot as an ordinary argument:
+//
+//     print("%\n", formatInt(x, base = 16, minimum_digits = 4));
+//
+// `append_value` recognises the struct and prints what it describes rather
+// than the struct's own members.
+
+Formatter :: struct {
+    value: Any;
+}
+
+FormatInt :: struct {
+    using #as formatter: Formatter;
+
+    base           := 10;
+    minimum_digits := 1;
+    // What the digits are padded out to `minimum_digits` with.
+    padding: u8 = #char "0";
+
+    // Zero means no commas at all.
+    digits_per_comma: u16 = 0;
+    comma_string := "";
+}
+
+formatInt :: (value: Any, base := 10, minimum_digits := 1, padding: u8 = #char "0", digits_per_comma: u16 = 0, comma_string := "") -> FormatInt {
+    result: FormatInt;
+    result.value            = value;
+    result.base             = base;
+    result.minimum_digits   = minimum_digits;
+    result.padding          = padding;
+    result.digits_per_comma = digits_per_comma;
+    result.comma_string     = comma_string;
+    return result;
+}
+
+// ------------------------------------------------------ printing one thing ---
+
+// One value into a builder, formatted the way a `%` slot would format it.
+// `inside_struct_or_array` is what makes a string print with quotes when it is
+// a member and without them when it is the whole argument.
+print_item_to_builder :: (builder: *String_Builder, item: Any, inside_struct_or_array := false, may_be_uninitialized := false) {
+    if inside_struct_or_array && item.type && item.type.type == .STRING {
+        append(builder, #char "\"");
+        append(builder, (cast(*string) item.value_pointer).*);
+        append(builder, #char "\"");
+        return;
+    }
+    append_any(builder, item);
+}
+
+// A type's name, the way `print("%", T)` writes it.
+print_type_to_builder :: (builder: *String_Builder, info: *Type_Info) {
+    append_type(builder, info);
+}
+
 #scope_module
 
 // Walks the format string, taking one argument per `%`. An argument nobody
@@ -127,7 +185,14 @@ append_value :: (builder: *String_Builder, data: *void, info: *Type_Info) {
         case .STRING;    append(builder, (cast(*string) data).*);
         case .POINTER;   append_pointer(builder, (cast(**void) data).*);
         case .ENUM;      append_enum(builder, data, cast(*Type_Info_Enum) info);
-        case .STRUCT;    append_struct(builder, data, cast(*Type_Info_Struct) info);
+        case .STRUCT;
+            // A formatter describes something else; printing its own members
+            // would be printing the instructions rather than the value.
+            if info == type_info(FormatInt) {
+                append_format_int(builder, cast(*FormatInt) data);
+                return;
+            }
+            append_struct(builder, data, cast(*Type_Info_Struct) info);
         case .ARRAY;     append_array(builder, data, cast(*Type_Info_Array) info);
         case .ANY;       append_any(builder, (cast(*Any) data).*);
         case .VOID;      append(builder, "void");
@@ -192,6 +257,92 @@ append_u64 :: (builder: *String_Builder, value: u64) {
 }
 
 HEX_DIGITS :: "0123456789abcdef";
+
+// A `FormatInt` prints the integer it holds, in the base it names, padded and
+// grouped as it asks. A negative value keeps its sign outside the padding, so
+// `-7` at four digits is `-007` rather than `0-07`.
+append_format_int :: (builder: *String_Builder, format: *FormatInt) {
+    value := format.value;
+    if !value.type || value.type.type != .INTEGER {
+        append_any(builder, value);
+        return;
+    }
+
+    base := format.base;
+    if base < 2 || base > 16  base = 10;
+
+    info := cast(*Type_Info_Integer) value.type;
+    negative := false;
+    magnitude: u64;
+    if info.signed {
+        signed := read_signed(value.value_pointer, info.runtime_size);
+        negative = signed < 0;
+        // Negating S64_MIN overflows, so the magnitude is taken unsigned.
+        if negative  magnitude = (~cast(u64) signed) + 1;
+        else         magnitude = cast(u64) signed;
+    } else {
+        magnitude = read_unsigned(value.value_pointer, info.runtime_size);
+    }
+
+    // 64 digits is the most any base down to 2 can need.
+    buffer: [64] u8;
+    at := buffer.count;
+    if magnitude == 0 {
+        at -= 1;
+        buffer[at] = #char "0";
+    }
+    while magnitude > 0 {
+        at -= 1;
+        buffer[at] = HEX_DIGITS[magnitude % cast(u64) base];
+        magnitude /= cast(u64) base;
+    }
+
+    digits: string;
+    digits.data = buffer.data + at;
+    digits.count = buffer.count - at;
+
+    if negative  append(builder, #char "-");
+    for 1..format.minimum_digits - digits.count  append(builder, format.padding);
+
+    if format.digits_per_comma <= 0 || !format.comma_string.count {
+        append(builder, digits);
+        return;
+    }
+
+    // Commas fall between groups counted from the right, so the leftmost group
+    // is whatever is left over.
+    group := cast(s64) format.digits_per_comma;
+    first := digits.count % group;
+    if first == 0  first = group;
+    written := 0;
+    while written < digits.count {
+        take := ifx written == 0 then first else group;
+        if written  append(builder, format.comma_string);
+        piece: string;
+        piece.data = digits.data + written;
+        piece.count = take;
+        append(builder, piece);
+        written += take;
+    }
+}
+
+read_signed :: (data: *void, size: s64) -> s64 {
+    if size == {
+        case 1; return (cast(*s8)  data).*;
+        case 2; return (cast(*s16) data).*;
+        case 4; return (cast(*s32) data).*;
+        case;   return (cast(*s64) data).*;
+    }
+}
+
+read_unsigned :: (data: *void, size: s64) -> u64 {
+    if size == {
+        case 1; return (cast(*u8)  data).*;
+        case 2; return (cast(*u16) data).*;
+        case 4; return (cast(*u32) data).*;
+        case;   return (cast(*u64) data).*;
+    }
+}
 
 append_pointer :: (builder: *String_Builder, pointer: *void) {
     if !pointer {
@@ -337,8 +488,39 @@ append_enum :: (builder: *String_Builder, data: *void, info: *Type_Info_Enum) {
                 return;
             }
         }
+        // A flags enum is usually a combination nobody declared a name for, so
+        // it is written as the names of the bits that are set.
+        if (info.enum_type_flags & .FLAGS) && append_flag_names(builder, value, info)  return;
     }
     append_s64(builder, value);
+}
+
+// The set bits as `A | B`. False when a bit is set that no member accounts
+// for, so the caller falls back to the number rather than printing a name
+// that leaves part of the value out.
+append_flag_names :: (builder: *String_Builder, value: s64, info: *Type_Info_Enum) -> bool {
+    if value == 0  return false;
+
+    covered: s64 = 0;
+    for info.values {
+        // A member that is itself a combination would double-count, and one
+        // that is zero is the "none" name rather than a bit.
+        if it == 0  continue;
+        if (value & it) == it  covered |= it;
+    }
+    if covered != value  return false;
+
+    written := 0;
+    remaining := value;
+    for info.values {
+        if it == 0             continue;
+        if (remaining & it) != it  continue;
+        if written  append(builder, " | ");
+        append(builder, info.names[it_index]);
+        remaining &= ~it;
+        written += 1;
+    }
+    return written > 0;
 }
 
 append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct) {

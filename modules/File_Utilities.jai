@@ -12,10 +12,20 @@
 #import "String";
 
 File_Visit_Info :: struct {
-    full_name:  string;
     short_name: string;
-    // Set by the callback to stop the walk early.
-    had_error := false;
+    full_name:  string;
+
+    modification_time: Apollo_Time;
+
+    // The walker could not find out everything about this entry — a directory
+    // it may not read, most often. The names are still valid.
+    had_error:    bool;
+    is_symlink:   bool;
+    is_directory: bool;
+
+    // The callback clears this to keep the walk out of a directory it has
+    // decided it does not care about.
+    descend_into_directory := true;
 }
 
 // Calls `proc` for each entry. `recursive` descends into subdirectories;
@@ -26,13 +36,29 @@ File_Visit_Info :: struct {
 // The parameter names are the reference's, `visit_files` among them — which
 // shadows this procedure's own name, so the walking is done by the helper
 // below rather than by recursing here.
-visit_files :: (dir_name: string, recursive: bool, user_data: $T, proc: (info: *File_Visit_Info, user_data: T), visit_files := true, visit_directories := false) -> bool {
-    return walk_directory(dir_name, recursive, user_data, proc, visit_files, visit_directories);
+visit_files :: (dir_name: string, recursive: bool, user_data: $T, proc: (info: *File_Visit_Info, user_data: T), visit_files := true, visit_directories := false, visit_symlinks := true, follow_directory_symlinks := true) -> bool {
+    walk: Walk_Options;
+    walk.recursive = recursive;
+    walk.want_files = visit_files;
+    walk.want_directories = visit_directories;
+    walk.want_symlinks = visit_symlinks;
+    walk.follow_directory_symlinks = follow_directory_symlinks;
+    return walk_directory(dir_name, user_data, proc, walk);
 }
 
 #scope_module
 
-walk_directory :: (directory: string, recursive: bool, user_data: $T, proc: (info: *File_Visit_Info, user_data: T), want_files: bool, want_directories: bool) -> bool {
+// Bundled so that recursing does not mean threading six parameters through
+// every level.
+Walk_Options :: struct {
+    recursive:                 bool;
+    want_files:                bool;
+    want_directories:          bool;
+    want_symlinks:             bool;
+    follow_directory_symlinks: bool;
+}
+
+walk_directory :: (directory: string, user_data: $T, proc: (info: *File_Visit_Info, user_data: T), walk: Walk_Options) -> bool {
     c_path := to_c_string(directory, temp);
     if !c_path  return false;
 
@@ -48,30 +74,37 @@ walk_directory :: (directory: string, recursive: bool, user_data: $T, proc: (inf
         if name == "." || name == ".."  continue;
 
         full := path_join(directory, name, allocator = temp);
-        is_dir := entry.d_type == DT_DIR;
-        // A filesystem that does not fill `d_type` says UNKNOWN, so the fact
-        // has to be asked for rather than assumed.
-        if entry.d_type == DT_UNKNOWN  is_dir = is_directory(full);
 
-        if is_dir {
-            if want_directories {
-                info: File_Visit_Info;
-                info.full_name = full;
-                info.short_name = name;
+        info: File_Visit_Info;
+        info.short_name = name;
+        info.full_name = full;
+        info.is_symlink = entry.d_type == DT_LNK;
+
+        // A filesystem that does not fill `d_type` says UNKNOWN, and a symlink
+        // says what it is rather than what it points at — so either way the
+        // fact has to be asked for rather than assumed.
+        if entry.d_type == DT_DIR {
+            info.is_directory = true;
+        } else if info.is_symlink || entry.d_type == DT_UNKNOWN {
+            info.is_directory = is_directory(full);
+        }
+
+        time, time_ok := file_modification_time(full);
+        if time_ok  info.modification_time = seconds_to_apollo(time) + APOLLO_TIME_FOR_JAN_1_1970;
+        else        info.had_error = true;
+
+        if info.is_symlink && !walk.want_symlinks  continue;
+
+        if info.is_directory {
+            if walk.want_directories {
                 proc(*info, user_data);
-                if info.had_error  return false;
             }
-            if recursive {
-                if !walk_directory(full, recursive, user_data, proc, want_files, want_directories) {
-                    return false;
-                }
-            }
-        } else if want_files {
-            info: File_Visit_Info;
-            info.full_name = full;
-            info.short_name = name;
+            if !walk.recursive                                     continue;
+            if !info.descend_into_directory                        continue;
+            if info.is_symlink && !walk.follow_directory_symlinks  continue;
+            if !walk_directory(full, user_data, proc, walk)        return false;
+        } else if walk.want_files {
             proc(*info, user_data);
-            if info.had_error  return false;
         }
     }
     return true;
@@ -92,7 +125,8 @@ file_list :: (directory: string, recursive := false, allocator := context.alloca
 }
 
 copy_file :: (from: string, to: string) -> bool {
-    contents, ok := read_entire_file(from, temp);
+    push_allocator(temp);
+    contents, ok := read_entire_file(from);
     if !ok  return false;
     return write_entire_file(to, contents);
 }
@@ -162,4 +196,15 @@ get_path_of_running_executable :: (allocator := context.allocator) -> string {
     n := readlink(c_link, buffer.data, cast(u64) buffer.count);
     if n <= 0  return "";
     return copy_string(to_string(buffer.data, n), allocator);
+}
+
+// Whether the path names a directory, and whether the question could be
+// answered at all — a path nobody may look at is not the same as one that
+// exists and is a file.
+is_directory :: (path: string) -> (is_directory: bool, success: bool) {
+    c_path := to_c_string(path, temp);
+    if !c_path  return false, false;
+    info: stat_t;
+    if stat(c_path, *info) != 0  return false, false;
+    return (info.st_mode & S_IFMT) == S_IFDIR, true;
 }

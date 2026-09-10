@@ -42,7 +42,7 @@ start_file :: (handler: *Text_File_Handler, full_path: string, optional := false
     handler.line_number = 0;
     handler.failed = false;
 
-    contents, ok := read_entire_file(full_path, allocator);
+    contents, ok := read_entire_file(full_path,, allocator);
     if !ok {
         handler.failed = !optional;
         return false;

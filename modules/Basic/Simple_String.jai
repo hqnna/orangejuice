@@ -90,9 +90,6 @@ ends_with :: (s: string, suffix: string) -> bool {
     return memcmp(s.data + s.count - suffix.count, suffix.data, suffix.count) == 0;
 }
 
-contains :: (s: string, needle: string) -> bool {
-    return find_index_from_left(s, needle) >= 0;
-}
 
 // ------------------------------------------------------------- searching ---
 
@@ -168,10 +165,18 @@ trim :: (s: string, bytes := " \t\r\n") -> string {
     return trim_right(trim_left(s, bytes), bytes);
 }
 
-join :: (parts: [] string, separator := "", allocator := context.allocator) -> string {
-    total := 0;
+// `before_first` and `after_last` put the separator on the ends as well, which
+// is what building a path or a delimited record wants.
+join :: (inputs: .. string, separator := "", before_first := false, after_last := false, allocator := context.allocator) -> string {
+    parts := inputs;
+
+    separators := 0;
+    if parts.count > 1  separators += parts.count - 1;
+    if before_first     separators += 1;
+    if after_last       separators += 1;
+
+    total := separators * separator.count;
     for parts  total += it.count;
-    if parts.count > 1  total += separator.count * (parts.count - 1);
 
     result: string;
     if total <= 0  return result;
@@ -180,16 +185,18 @@ join :: (parts: [] string, separator := "", allocator := context.allocator) -> s
     result.count = total;
 
     at := 0;
-    for parts {
-        if it_index && separator.count {
-            memcpy(result.data + at, separator.data, separator.count);
-            at += separator.count;
-        }
-        if it.count {
-            memcpy(result.data + at, it.data, it.count);
-            at += it.count;
-        }
+    put :: (result: string, at: *s64, piece: string) #expand {
+        if !piece.count  return;
+        memcpy(result.data + at.*, piece.data, piece.count);
+        at.* += piece.count;
     }
+
+    if before_first  put(result, *at, separator);
+    for parts {
+        if it_index  put(result, *at, separator);
+        put(result, *at, it);
+    }
+    if after_last  put(result, *at, separator);
     return result;
 }
 
@@ -230,7 +237,12 @@ to_upper :: (byte: u8) -> u8 {
 
 // The leading integer, and whether there was one. The rest of the string comes
 // back too, so a caller parsing several in a row does not have to count.
-string_to_int :: (s: string) -> (value: s64, success: bool, remainder: string) {
+// `base` may be anything from 2 to 16; the digits above 9 are `a`-`f` in
+// either case. `T` says which integer type comes back, so a caller wanting a
+// `u16` writes `string_to_int(s, T = u16)` rather than casting afterwards.
+string_to_int :: (s: string, base := 10, $T := int) -> (value: T, success: bool, remainder: string) {
+    if base < 2 || base > 16  return 0, false, s;
+
     at := 0;
     negative := false;
     if at < s.count && (s[at] == #char "-" || s[at] == #char "+") {
@@ -240,11 +252,118 @@ string_to_int :: (s: string) -> (value: s64, success: bool, remainder: string) {
 
     start := at;
     value: s64 = 0;
-    while at < s.count && is_digit(s[at]) {
-        value = value * 10 + cast(s64) (s[at] - #char "0");
+    while at < s.count {
+        digit := digit_value(s[at]);
+        if digit < 0 || digit >= base  break;
+        value = value * base + digit;
         at += 1;
     }
     if at == start  return 0, false, s;
     if negative  value = -value;
+    return cast,no_check(T) value, true, slice(s, at, s.count - at);
+}
+
+// -1 for a byte that is not a digit in any base up to 16.
+digit_value :: (byte: u8) -> s64 {
+    if byte >= #char "0" && byte <= #char "9"  return byte - #char "0";
+    if byte >= #char "a" && byte <= #char "f"  return byte - #char "a" + 10;
+    if byte >= #char "A" && byte <= #char "F"  return byte - #char "A" + 10;
+    return -1;
+}
+
+// ------------------------------------------------------------ advancing ---
+
+// Moves a string forward over bytes already dealt with. The in-place form is
+// what a parser walking its input wants.
+advance :: inline (s: *string, amount: s64 = 1) {
+    step := amount;
+    if step > s.count  step = s.count;
+    if step < 0        step = 0;
+    s.data  += step;
+    s.count -= step;
+}
+
+advance :: inline (s: string, amount: s64 = 1) -> string #must {
+    result := s;
+    advance(*result, amount);
+    return result;
+}
+
+// Storage for a string of `count` bytes, uninitialised.
+alloc_string :: (count: s64, allocator := context.allocator) -> string {
+    result: string;
+    if count <= 0  return result;
+    result.data = cast(*u8) alloc(count, allocator);
+    if result.data  result.count = count;
+    return result;
+}
+
+// A path that names its location outright rather than relative to anywhere.
+is_absolute_path :: (path: string) -> bool {
+    return path.count > 0 && path[0] == #char "/";
+}
+
+// ------------------------------------------------------------ to floats ---
+
+// The leading float, and what follows it. Handles a sign, a decimal point and
+// an exponent; anything else stops the parse where it stands.
+string_to_float64 :: (s: string) -> (result: float64, success: bool, remainder: string) {
+    at := 0;
+    negative := false;
+    if at < s.count && (s[at] == #char "-" || s[at] == #char "+") {
+        negative = s[at] == #char "-";
+        at += 1;
+    }
+
+    start := at;
+    value: float64 = 0;
+    while at < s.count && is_digit(s[at]) {
+        value = value * 10 + cast(float64) (s[at] - #char "0");
+        at += 1;
+    }
+
+    if at < s.count && s[at] == #char "." {
+        at += 1;
+        scale: float64 = 0.1;
+        while at < s.count && is_digit(s[at]) {
+            value += cast(float64) (s[at] - #char "0") * scale;
+            scale *= 0.1;
+            at += 1;
+        }
+    }
+
+    // Nothing but a sign and a point is not a number.
+    if at == start || (at == start + 1 && s[start] == #char ".")  return 0, false, s;
+
+    if at < s.count && (s[at] == #char "e" || s[at] == #char "E") {
+        after := at + 1;
+        exponent_negative := false;
+        if after < s.count && (s[after] == #char "-" || s[after] == #char "+") {
+            exponent_negative = s[after] == #char "-";
+            after += 1;
+        }
+        if after < s.count && is_digit(s[after]) {
+            exponent := 0;
+            while after < s.count && is_digit(s[after]) {
+                exponent = exponent * 10 + cast(s64) (s[after] - #char "0");
+                after += 1;
+            }
+            step: float64 = ifx exponent_negative then 0.1 else 10.0;
+            for 1..exponent  value *= step;
+            at = after;
+        }
+    }
+
+    if negative  value = -value;
     return value, true, slice(s, at, s.count - at);
+}
+
+// The leading integer, consuming it from `line` — what a caller parsing a
+// sequence of numbers out of one string wants.
+parse_int :: (line: *string, $T: Type = int, spaces := " \t") -> (value: T, success: bool) {
+    text := trim_left(line.*, spaces);
+    value, ok, rest := string_to_int(text);
+    if !ok  return 0, false;
+    line.* = rest;
+    return cast(T) value, true;
 }

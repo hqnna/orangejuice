@@ -99,7 +99,7 @@ write_strings :: (strings: ..string, to_standard_error := false) #no_context #co
 write_string_unsynchronized :: (s: string, to_standard_error := false) #no_context {
     if !s.count  return;
 
-    fd: s32 = ifx to_standard_error then Linux.STDERR_FILENO else Linux.STDOUT_FILENO;
+    fd: s32 = ifx to_standard_error then cast(s32) Linux.STDERR_FILENO else cast(s32) Linux.STDOUT_FILENO;
     written := 0;
     while written < s.count {
         n := Linux.write(fd, s.data + written, cast(u64) (s.count - written));

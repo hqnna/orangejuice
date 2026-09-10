@@ -78,7 +78,7 @@ init :: (async: *File_Async, thread_count := 0, allocator := context.allocator) 
     if count <= 0  count = 1;
 
     async.running = true;
-    async.threads = NewArray(Thread, count, allocator);
+    async.threads = NewArray(count, Thread, allocator = allocator);
     for * async.threads {
         if !thread_init(it, worker, async, cast(u32) it_index) {
             // Whatever started already is shut down rather than left running.
@@ -248,7 +248,7 @@ worker :: (thread: *Thread) -> s64 {
         data: string;
         ok: bool;
         if kind == .READ {
-            data, ok = read_entire_file(path, async.allocator);
+            data, ok = read_entire_file(path,, async.allocator);
         } else {
             ok = write_entire_file(path, contents);
         }

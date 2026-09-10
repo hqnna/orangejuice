@@ -10,7 +10,7 @@
 #import "Basic";
 #import "Bit_Operations";
 
-introsort :: (array: [] $T, compare: (T, T) -> $R) {
+intro_sort :: (array: [] $T, compare: (T, T) -> $R) {
     if array.count < 2  return;
     // 2·floor(log2(n)) is the usual limit: deep enough that a well-behaved
     // input never reaches it, shallow enough to cap the damage.
@@ -126,4 +126,23 @@ sift_down :: (array: [] $T, low: s64, start: s64, count: s64, compare: (T, T) ->
         swap(*array[low + root], *array[low + child]);
         root = child;
     }
+}
+
+#scope_export
+
+// The reference spells it without the underscore in some places; both names
+// are the same procedure.
+introsort :: (array: [] $T, compare: (T, T) -> $R) {
+    intro_sort(array, compare);
+}
+
+// A range of the array rather than all of it, which is what a caller sorting
+// part of a buffer in place wants. `end` is one past the last element.
+intro_sort :: (array: [] $T, begin: s64, end: s64, compare: (T, T) -> $R) {
+    first := begin;
+    if first < 0  first = 0;
+    last := end;
+    if last > array.count  last = array.count;
+    if last - first < 2  return;
+    intro_sort(array_view(array, first, last - first), compare);
 }

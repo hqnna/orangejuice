@@ -498,6 +498,20 @@ impl Checker<'_> {
     let Some(definition) = self.types().struct_of(inner) else {
       return;
     };
+    // The anonymous member itself is listed, nameless, the way the reference
+    // lists it — its members are reachable through it, so the type table
+    // describes the one member rather than repeating what is inside it
+    // (**L§17**). Its contents still go in behind it, flagged `IMPORTED`, so
+    // that a name written without the path resolves.
+    let name = self.interned().intern(b"");
+    state.members.push(StructMember {
+      name,
+      type_id: inner,
+      offset,
+      flags: MemberFlags::USING,
+      imported_through: None,
+    });
+    let through = state.members.len() - 1;
     let imported: Vec<StructMember> = self
       .types()
       .struct_info(definition)
@@ -507,8 +521,8 @@ impl Checker<'_> {
         name: member.name,
         type_id: member.type_id,
         offset: offset + member.offset,
-        flags: member.flags,
-        imported_through: None,
+        flags: member.flags | MemberFlags::IMPORTED,
+        imported_through: Some(through),
       })
       .collect();
     state.members.extend(imported);

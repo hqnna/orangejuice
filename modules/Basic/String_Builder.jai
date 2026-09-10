@@ -112,6 +112,16 @@ write_builder :: (builder: *String_Builder, to_standard_error := false) {
     }
 }
 
+// The buckets go back to the allocator. `builder_to_string` has already copied
+// what was in them, which is why the usual shape is
+//
+//     builder: String_Builder;
+//     defer free_buffers(*builder);
+//
+free_buffers :: (builder: *String_Builder) {
+    reset(builder);
+}
+
 #scope_module
 
 bucket_data :: (bucket: *String_Builder.Bucket) -> *u8 {

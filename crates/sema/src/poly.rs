@@ -1551,12 +1551,14 @@ impl Checker<'_> {
       }
       return self.unify_types(pattern, TypeId::VOID_POINTER, substitution);
     }
-    // A `.{…}` or `.[…]` has no type of its own: the parameter is what says
-    // what it is (**L§5.8**). Once the other arguments have decided the
-    // variables the parameter mentions, the literal has nothing left to say
-    // and nothing to contradict, which is what lets `array_add(*things,
-    // .{"x", 3})` reach `array_add :: (array: *[..] $T, item: T)`.
-    if value.type_id == TypeId::UNTYPED_LITERAL || (value.autocast && value.is_unknown()) {
+    // A `.{…}`, a `.[…]`, a `.NAME` or a bare number has no type of its own:
+    // the parameter is what says what it is (**L§5.8**, **L§5.12**). Once the
+    // other arguments have decided the variables the parameter mentions, the
+    // literal has nothing left to say and nothing to contradict — which is
+    // what lets `array_add(*things, .{"x", 3})` reach `array_add :: (array:
+    // *[..] $T, item: T)` and `table_add(*t, 0, .ASSIGN)` reach `table_add ::
+    // (table: *Table($K, $V), key: K, value: V)`.
+    if self.types().is_untyped(value.type_id) || (value.autocast && value.is_unknown()) {
       let resolved = self.substitute(pattern, substitution);
       if !self.is_polymorphic_type(resolved) {
         return true;

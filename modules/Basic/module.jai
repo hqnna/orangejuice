@@ -13,6 +13,7 @@
 #load "Array.jai";
 #load "Simple_String.jai";
 #load "String_Builder.jai";
+#load "Apollo_Time.jai";
 
 #module_parameters (ENABLE_ASSERT := true);
 
@@ -69,12 +70,38 @@ New :: ($T: Type, $initialized := true, allocator := context.allocator) -> *T {
     return memory;
 }
 
-NewArray :: ($T: Type, count: s64, allocator := context.allocator) -> [] T {
+// The count comes first, which is the order the reference reads in:
+// `NewArray(n, Node)`.
+NewArray :: (count: s64, $T: Type, $initialized := true, allocator := context.allocator) -> [] T {
     result: [] T;
     if count <= 0  return result;
     result.data = cast(*T) alloc_zeroed(size_of(T) * count, allocator);
-    if result.data  result.count = count;
+    if !result.data  return result;
+    result.count = count;
+
+    #if initialized {
+        info := cast(*Type_Info_Struct) type_info(T);
+        if info.type == .STRUCT && info.initializer {
+            for 0..count - 1  info.initializer(result.data + it);
+        }
+    }
     return result;
+}
+
+// The program's own argument list, as strings rather than the C pointers the
+// runtime was handed. `[0]` is how the program was invoked, the way `argv`
+// has it.
+get_command_line_arguments :: () -> [] string {
+    raw := __command_line_arguments;
+    result := NewArray(raw.count, string);
+    for raw  result[it_index] = to_string(it);
+    return result;
+}
+
+// A string's bytes go back to the allocator. It is the `data` that was
+// allocated, so this is `free` on the pointer with the count dropped.
+free :: inline (s: string) {
+    free(s.data);
 }
 
 // ----------------------------------------------------- temporary storage ---
@@ -142,6 +169,27 @@ talloc :: (size: s64) -> *void {
     return alloc(size, temp);
 }
 
+// Makes `allocator` the one the rest of this block allocates from, putting
+// back whatever was there when the block ends. It is a macro rather than a
+// procedure precisely so that the `defer` belongs to the *caller's* block
+// (**L§7.5**).
+push_allocator :: (allocator: Allocator) #expand {
+    // The saved allocator is the macro's own local, not a backticked one, so
+    // two pushes in one block do not collide over the name.
+    old_allocator := context.allocator;
+    context.allocator = allocator;
+    `defer context.allocator = old_allocator;
+}
+
+// The same, spelled as the two halves of an `Allocator` — which is what a
+// caller pushing a pool writes: `push_allocator(pool_allocator_proc, *pool)`.
+push_allocator :: (proc: Allocator_Proc, data: *void) #expand {
+    old_allocator := context.allocator;
+    context.allocator.proc = proc;
+    context.allocator.data = data;
+    `defer context.allocator = old_allocator;
+}
+
 #scope_module
 
 TEMPORARY_ALIGNMENT :: 8;
@@ -189,6 +237,24 @@ temporary_add_page :: (ts: *Temporary_Storage, needed: s64) -> bool {
 #scope_export
 
 // ------------------------------------------------------------- utilities ---
+
+// ------------------------------------------------------------- about enums ---
+//
+// The names and values a `Type_Info_Enum` holds, reached from the type rather
+// than from the info — which is what lets a caller write `enum_names(T)` and
+// iterate the members of an enum it was handed as a constant.
+
+enum_names :: ($T: Type) -> [] string {
+    info := cast(*Type_Info_Enum) type_info(T);
+    if info.type != .ENUM  return .[];
+    return info.names;
+}
+
+enum_values_as_s64 :: ($T: Type) -> [] s64 {
+    info := cast(*Type_Info_Enum) type_info(T);
+    if info.type != .ENUM  return .[];
+    return info.values;
+}
 
 min :: (a: $T, b: T) -> T { return ifx a < b then a else b; }
 max :: (a: $T, b: T) -> T { return ifx a > b then a else b; }

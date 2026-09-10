@@ -81,7 +81,7 @@ radix_sort :: (values: [] s64, scratch: [] u64) -> bool {
 
 // Allocates its own scratch buffer, for a caller that does not want to.
 radix_sort :: (values: [] u64) -> bool {
-    scratch := NewArray(u64, values.count, temp);
+    scratch := NewArray(values.count, u64, allocator = temp);
     if !scratch.data && values.count  return false;
     return radix_sort(values, scratch);
 }

@@ -484,10 +484,14 @@ fn an_anonymous_union_member_contributes_its_names_to_the_struct() {
           )
         })
         .collect();
+      // The union itself is a nameless member — that is the one the type table
+      // lists, the way the reference lists it — and its own members follow it
+      // so that `v.f` resolves without the path.
       assert_eq!(
         members,
         vec![
           ("tag".to_string(), 0),
+          (String::new(), 4),
           ("f".to_string(), 4),
           ("i".to_string(), 4),
         ]

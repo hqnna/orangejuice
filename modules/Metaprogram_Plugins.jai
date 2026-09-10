@@ -18,28 +18,8 @@
 #import "Basic";
 #import "Compiler";
 
-Metaprogram_Plugin :: struct {
-    name:      string;
-    workspace: Workspace;
-
-    // Called before `compiler_begin_intercept`, so a plugin can ask for the
-    // messages it needs.
-    before_intercept: (plugin: *Metaprogram_Plugin, flags: *Intercept_Flags);
-    // Called after intercepting starts, for a plugin that adds code.
-    add_source:       (plugin: *Metaprogram_Plugin);
-    // Every message, in the order the compiler produced them.
-    message:          (plugin: *Metaprogram_Plugin, message: *Message);
-    // Called once the compilation is complete, before shutdown.
-    finish:           (plugin: *Metaprogram_Plugin);
-    // Release whatever the plugin allocated.
-    shutdown:         (plugin: *Metaprogram_Plugin);
-
-    // Lets a plugin take command-line options of its own. Returns how many
-    // arguments it consumed, and whether it recognised the first.
-    handle_one_option: (plugin: *Metaprogram_Plugin, args: [] string, index: s64) -> (new_index: s64, handled: bool);
-    // Prints the plugin's own help.
-    log_help:          (plugin: *Metaprogram_Plugin);
-}
+// `Metaprogram_Plugin` itself is declared in `Compiler`, since a build file
+// that imports only that still names the type.
 
 // Filled by the driver with a `get_plugin` call per named plugin. Until it is
 // filled, `init_plugins` finds nothing and a build runs without plugins —
@@ -81,7 +61,6 @@ init_plugins :: (names: [] string, plugins: *[..] *Metaprogram_Plugin, w: Worksp
             ok = false;
             continue;
         }
-        plugin.name = it;
         plugin.workspace = w;
         array_add(plugins, plugin);
     }
@@ -112,25 +91,21 @@ run_shutdown :: (plugins: [] *Metaprogram_Plugin) {
 
 // Offers an argument to each plugin in turn. The first to claim it decides how
 // many arguments went with it.
-handle_one_option :: (plugins: [] *Metaprogram_Plugin, args: [] string, index: s64) -> (new_index: s64, handled: bool) {
+// Offers an argument to each plugin in turn. A plugin that recognises it says
+// so by moving the cursor on; one that does not leaves it where it was.
+handle_one_option :: (plugins: [] *Metaprogram_Plugin, args: [] string, cursor: int) -> (new_cursor: int, handled: bool) {
     for plugins {
         if !it.handle_one_option  continue;
-        new_index, handled := it.handle_one_option(it, args, index);
-        if !handled  continue;
-        // A plugin that moves the index backwards would loop forever.
-        if new_index <= index {
-            compiler_report(tprint("Plugin % did not advance the argument index.", it.name), mode = .ERROR);
-            return index + 1, true;
-        }
-        return new_index, true;
+        moved := it.handle_one_option(it, args, cursor);
+        if moved <= cursor  continue;
+        return moved, true;
     }
-    return index, false;
+    return cursor, false;
 }
 
 log_plugin_help :: (plugins: [] *Metaprogram_Plugin) {
     for plugins {
         if !it.log_help  continue;
-        log("---- Help for plugin '%': ----\n", it.name);
         it.log_help(it);
         log("\n");
     }

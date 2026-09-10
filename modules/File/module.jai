@@ -23,31 +23,44 @@ File_Error :: enum {
 
 // ---------------------------------------------------------- whole files ---
 
-// The whole file as one string the caller owns. `ok` is false when it could
-// not be read, and the string is then empty.
-read_entire_file :: (path: string, allocator := context.allocator) -> (contents: string, ok: bool) {
+// The whole file as one string the caller owns, out of `context.allocator`.
+// `ok` is false when it could not be read, and the string is then empty.
+//
+// `zero_terminated` puts a byte after the last one — not counted in the
+// string, so the result is both a Jai string and a C one. `log_errors` is what
+// a caller probing for an optional file turns off.
+read_entire_file :: (name: string, zero_terminated := false, log_errors := true) -> (contents: string, ok: bool) {
     empty: string;
 
-    c_path := to_c_string(path, temp);
+    c_path := to_c_string(name, temp);
     if !c_path  return empty, false;
 
     fd := open(c_path, O_RDONLY);
-    if fd < 0  return empty, false;
+    if fd < 0 {
+        if log_errors  log_error("Could not open \"%\" for reading.\n", name);
+        return empty, false;
+    }
     defer close(fd);
 
     info: stat_t;
-    if fstat(fd, *info) != 0  return empty, false;
-    if (info.st_mode & S_IFMT) == S_IFDIR  return empty, false;
+    if fstat(fd, *info) != 0 {
+        if log_errors  log_error("Could not read \"%\".\n", name);
+        return empty, false;
+    }
+    if (info.st_mode & S_IFMT) == S_IFDIR {
+        if log_errors  log_error("\"%\" is a directory, not a file.\n", name);
+        return empty, false;
+    }
 
     if info.st_size <= 0 {
         // Zero-length, or something whose size the kernel does not know —
         // /proc entries report zero and still have contents.
-        streamed, streamed_ok := read_until_end(fd, allocator);
-        return streamed, streamed_ok;
+        return read_until_end(fd, context.allocator, zero_terminated);
     }
 
     contents: string;
-    contents.data = cast(*u8) alloc(info.st_size, allocator);
+    extra := ifx zero_terminated then 1 else 0;
+    contents.data = cast(*u8) alloc(info.st_size + extra);
     if !contents.data  return empty, false;
 
     got := 0;
@@ -55,13 +68,15 @@ read_entire_file :: (path: string, allocator := context.allocator) -> (contents:
         n := read(fd, contents.data + got, cast(u64) (info.st_size - got));
         if n < 0 {
             if errno() == EINTR  continue;
-            free(contents.data, allocator);
+            free(contents.data);
+            if log_errors  log_error("Could not read \"%\".\n", name);
             return empty, false;
         }
         if n == 0  break;
         got += n;
     }
     contents.count = got;
+    if zero_terminated  contents.data[got] = 0;
     return contents, true;
 }
 
@@ -188,7 +203,7 @@ file_exists :: (path: string) -> bool {
     return stat(c_path, *info) == 0;
 }
 
-is_directory :: (path: string) -> bool {
+path_is_directory :: (path: string) -> bool {
     c_path := to_c_string(path, temp);
     if !c_path  return false;
     info: stat_t;
@@ -237,7 +252,7 @@ file_move :: (from: string, to: string) -> bool {
 }
 
 make_directory_if_it_does_not_exist :: (path: string, recursive := false) -> bool {
-    if is_directory(path)  return true;
+    if path_is_directory(path)  return true;
 
     if recursive {
         // Make each prefix in turn. The root is skipped: a leading separator
@@ -246,7 +261,7 @@ make_directory_if_it_does_not_exist :: (path: string, recursive := false) -> boo
         while at < path.count {
             if path[at] == #char "/" && at > 0 {
                 prefix := slice(path, 0, at);
-                if !is_directory(prefix)  make_one_directory(prefix);
+                if !path_is_directory(prefix)  make_one_directory(prefix);
             }
             at += 1;
         }
@@ -273,7 +288,7 @@ make_one_directory :: (path: string) -> bool {
 
 // For a file whose size the kernel does not report — a pipe, or something
 // under /proc — read until it stops giving anything.
-read_until_end :: (fd: s32, allocator: Allocator) -> (contents: string, ok: bool) {
+read_until_end :: (fd: s32, allocator: Allocator, zero_terminated := false) -> (contents: string, ok: bool) {
     builder: String_Builder;
     init_string_builder(*builder, temp);
 
@@ -291,5 +306,12 @@ read_until_end :: (fd: s32, allocator: Allocator) -> (contents: string, ok: bool
         piece.count = n;
         append(*builder, piece);
     }
-    return builder_to_string(*builder, allocator), true;
+
+    // The terminator is appended into the builder and then dropped from the
+    // count, so it sits in the same allocation without being part of the
+    // string.
+    if zero_terminated  append(*builder, cast(u8) 0);
+    result := builder_to_string(*builder, allocator);
+    if zero_terminated && result.count  result.count -= 1;
+    return result, true;
 }

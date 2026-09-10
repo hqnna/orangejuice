@@ -134,6 +134,37 @@ WEXITSTATUS :: (status: s32) -> s32 {
     return (status >> 8) & 0xff;
 }
 
+WIFSIGNALED :: (status: s32) -> bool {
+    // A low byte that is neither 0 (exited) nor 0x7f (stopped) is a signal
+    // number; the +1 >> 1 is the idiomatic way to say "not 0 and not 0x7f".
+    return ((status & 0x7f) + 1) >> 1 > 0;
+}
+
+WTERMSIG :: (status: s32) -> s32 {
+    return status & 0x7f;
+}
+
+// waitpid options.
+WNOHANG   :: 1;
+WUNTRACED :: 2;
+
+// -------------------------------------------------------------- signals ---
+
+kill :: (pid: s32, signal: s32) -> s32 #foreign libc;
+
+SIGINT  :: 2;
+SIGKILL :: 9;
+SIGTERM :: 15;
+
+// ------------------------------------------------------ descriptor flags ---
+
+fcntl :: (fd: s32, command: s32, argument: s32) -> s32 #foreign libc;
+
+F_GETFD :: 1;
+F_SETFD :: 2;
+F_GETFL :: 3;
+F_SETFL :: 4;
+
 // --------------------------------------------------------------- errors ---
 
 EPERM  :: 1;
@@ -228,6 +259,21 @@ htons :: (value: u16) -> u16 #foreign libc;
 ntohs :: (value: u16) -> u16 #foreign libc;
 htonl :: (value: u32) -> u32 #foreign libc;
 inet_addr :: (text: *u8) -> u32 #foreign libc;
+
+// ------------------------------------------------- shared memory ---
+
+shm_open   :: (name: *u8, flags: s32, mode: u32) -> s32 #foreign librt;
+shm_unlink :: (name: *u8) -> s32 #foreign librt;
+ftruncate  :: (fd: s32, length: s64) -> s32 #foreign libc;
+
+MAP_SHARED :: 0x01;
+
+#scope_module
+
+// glibc folded librt into libc; naming libc works on a modern system.
+librt :: #system_library "c";
+
+#scope_export
 
 // ------------------------------------------------------ file watching ---
 

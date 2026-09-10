@@ -844,6 +844,9 @@ impl Lowering<'_, '_> {
     }
     let source = self.body_source;
     let returns = self.returns.clone();
+    if self.forwarded_return(node, arguments, &returns) {
+      return;
+    }
     // `return second = "Dolly";` fills the slot it names; the ones it does not
     // name take the defaults the header gave them (**L§7.2**).
     let mut written: Vec<Option<NodeId>> = vec![None; returns.len().max(arguments.len())];
@@ -899,6 +902,58 @@ impl Lowering<'_, '_> {
     // (**L§6.6**).
     self.run_defers_to(0);
     self.emit_return(values);
+  }
+
+  /// `return f();` where `f` returns as many values as the header declares
+  /// hands all of them on, rather than the first with the rest defaulted
+  /// (**L§7.2**). The call is made once and its results become the return.
+  ///
+  /// Whether that is what was written is decided from the call's plan *before*
+  /// anything is emitted, so a call that returns some other number of values
+  /// falls through to the ordinary path with nothing lowered twice.
+  fn forwarded_return(
+    &mut self,
+    node: NodeId,
+    arguments: &[ast::Argument],
+    returns: &[TypeId],
+  ) -> bool {
+    if returns.len() < 2 || arguments.len() != 1 || arguments[0].name.is_some() {
+      return false;
+    }
+    let source = self.body_source;
+    let expression = arguments[0].expression;
+    if !matches!(
+      self.checker.tree_of(source).map(|ast| ast.data(expression)),
+      Some(NodeData::ProcedureCall(_))
+    ) {
+      return false;
+    }
+
+    let scope = self.checker.scope_for(source, expression, self.body_scope);
+    let Some(plan) = self.checker.call_plan(scope, source, expression) else {
+      return false;
+    };
+    if plan.returns.len() != returns.len() {
+      return false;
+    }
+
+    let Some(results) = self.emit_planned_call(scope, source, expression, plan, &[]) else {
+      return true;
+    };
+    let mut values = Vec::new();
+    for (index, value) in results.into_iter().enumerate() {
+      let Some(target) = returns.get(index).copied() else {
+        return true;
+      };
+      let Some(converted) = self.convert(source, expression, value, target) else {
+        return true;
+      };
+      values.push(converted);
+    }
+    let _ = node;
+    self.run_defers_to(0);
+    self.emit_return(values);
+    true
   }
 
   /// Which return value a `return name = value;` names (**L§7.2**).

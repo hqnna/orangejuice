@@ -228,3 +228,82 @@ dereference :: (value: Any) -> (pointed_at: Any, ok: bool) {
     result.value_pointer = target;
     return result, true;
 }
+
+// The name of the member a value equals, from the value itself rather than
+// from a `Type_Info_Enum` the caller had to find — which is what makes
+// `enum_value_to_name(token.kind)` work on any enum at all.
+//
+// A value matching no member comes back as "", not as its number.
+enum_value_to_name :: (value: $T) -> string {
+    base := type_info(T);
+    if base.type != .ENUM  return "";
+    return enum_name(cast(*Type_Info_Enum) base, cast(s64) value);
+}
+
+// The member with that name, as a value of the enum itself.
+enum_name_to_value :: ($T: Type, name: string) -> (value: T, found: bool) {
+    base := type_info(T);
+    if base.type != .ENUM  return cast,no_check(T) 0, false;
+
+    info := cast(*Type_Info_Enum) base;
+    for info.names {
+        if it == name  return cast,no_check(T) info.values[it_index], true;
+    }
+    return cast,no_check(T) 0, false;
+}
+
+// ------------------------------------------------------------ storing ints ---
+
+// Writes `value` through `pointer` as the integer type `info` describes, but
+// only when it fits — a caller parsing text into a field it found by
+// reflection has no other way to know the number is in range.
+//
+// `low` and `high` come back so a diagnostic can say what the range was. They
+// are meaningful whether or not the store happened.
+range_check_and_store :: (value: $T, info: *Type_Info_Integer, pointer: *void) -> (success: bool, low: T, high: T) {
+    #assert(T == u64 || T == s64, "range_check_and_store takes a u64 or an s64.");
+
+    size := info.runtime_size;
+    low, high := integer_range(T, info);
+    if value < low || value > high  return false, low, high;
+
+    if size == {
+        case 1; (cast(*s8)  pointer).* = cast,no_check(s8)  value;
+        case 2; (cast(*s16) pointer).* = cast,no_check(s16) value;
+        case 4; (cast(*s32) pointer).* = cast,no_check(s32) value;
+        case 8; (cast(*s64) pointer).* = cast,no_check(s64) value;
+        case;   return false, low, high;
+    }
+    return true, low, high;
+}
+
+#scope_module
+
+// The widest and narrowest value the described integer holds, expressed in the
+// caller's own type — which is why an unsigned caller sees a low of zero and a
+// signed one sees the negative bound.
+integer_range :: ($T: Type, info: *Type_Info_Integer) -> (low: T, high: T) {
+    bits := info.runtime_size * 8;
+
+    #if T == u64 {
+        if info.signed {
+            // A signed slot's top is one bit narrower; its negative half is
+            // out of reach for an unsigned value anyway.
+            if bits >= 64  return 0, cast(u64) 0x7fff_ffff_ffff_ffff;
+            return 0, (cast(u64) 1 << (bits - 1)) - 1;
+        }
+        if bits >= 64  return 0, 0xffff_ffff_ffff_ffff;
+        return 0, (cast(u64) 1 << bits) - 1;
+    } else {
+        if info.signed {
+            if bits >= 64  return cast(s64) 0x8000_0000_0000_0000, 0x7fff_ffff_ffff_ffff;
+            magnitude := cast(s64) 1 << (bits - 1);
+            return -magnitude, magnitude - 1;
+        }
+        // An unsigned slot cannot take a negative value at all.
+        if bits >= 64  return 0, 0x7fff_ffff_ffff_ffff;
+        return 0, (cast(s64) 1 << bits) - 1;
+    }
+}
+
+#scope_export
