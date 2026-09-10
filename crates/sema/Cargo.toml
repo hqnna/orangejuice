@@ -7,6 +7,8 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+indexmap.workspace = true
+rustc-hash.workspace = true
 oj-diag.workspace = true
 oj-lexer.workspace = true
 oj-meta.workspace = true

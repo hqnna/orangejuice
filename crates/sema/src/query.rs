@@ -5,7 +5,7 @@
 //! checker did and asks these questions as it goes, so the two never disagree
 //! about which procedure a call names or which type an expression has.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use oj_diag::SourceId;
 use oj_lexer::Symbol;

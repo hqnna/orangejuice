@@ -368,6 +368,7 @@ dependencies = [
  "oj-syntax",
  "oj-testsupport",
  "oj-types",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -437,6 +438,7 @@ dependencies = [
  "oj-source",
  "oj-syntax",
  "oj-testsupport",
+ "rustc-hash",
  "tempfile",
  "walkdir",
 ]
@@ -445,6 +447,7 @@ dependencies = [
 name = "oj-sema"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "insta",
  "oj-diag",
  "oj-lexer",
@@ -453,6 +456,7 @@ dependencies = [
  "oj-syntax",
  "oj-testsupport",
  "oj-types",
+ "rustc-hash",
  "tempfile",
  "walkdir",
 ]
@@ -535,6 +539,12 @@ name = "regex-lite"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustix"

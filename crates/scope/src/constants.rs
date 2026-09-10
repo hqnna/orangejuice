@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use oj_diag::SourceId;
 use oj_lexer::{Interner, Symbol};
@@ -310,7 +310,7 @@ mod tests {
         tree,
         scope,
         interner: Interner::new(),
-        builtins: HashMap::new(),
+        builtins: HashMap::default(),
       }
     }
 
@@ -374,7 +374,7 @@ mod tests {
       }
 
       let asts = OneFile(parsed.ast);
-      let bindings = HashMap::new();
+      let bindings = HashMap::default();
       let evaluator = Evaluator::new(&self.tree, &asts, &self.builtins, &bindings, &self.interner);
       evaluator.eval(
         self.scope,

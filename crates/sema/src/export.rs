@@ -12,7 +12,7 @@
 //! leaves the pointer null rather than dragging that declaration's whole
 //! subtree in behind it (`docs/spec.md` §10).
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use oj_diag::SourceId;
 use oj_meta::{
@@ -73,11 +73,11 @@ impl<'c, 'p> Exporter<'c, 'p> {
       checker,
       nodes,
       touched: Vec::new(),
-      reached: HashSet::new(),
+      reached: HashSet::default(),
       generation,
       parent_block: std::ptr::null(),
       owning_statement: std::ptr::null(),
-      type_addresses: std::collections::HashMap::new(),
+      type_addresses: std::collections::HashMap::default(),
     }
   }
 

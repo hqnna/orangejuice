@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use oj_diag::{Diagnostic, SourceId, Span};
 use oj_lexer::{Interner, Symbol};
@@ -293,7 +293,9 @@ pub struct Checker<'a> {
   /// The bodies of the structs whose members have not been resolved yet, and
   /// the ones being resolved right now, which is what makes a struct that
   /// contains itself by value an error rather than a hang.
-  pending_bodies: HashMap<StructId, PendingBody>,
+  /// Insertion-ordered: which struct is completed next must not depend on the
+  /// order a hash map happens to iterate in.
+  pending_bodies: indexmap::IndexMap<StructId, PendingBody, rustc_hash::FxBuildHasher>,
   completing: Vec<(StructId, SourceId, NodeId)>,
   /// The shared `declaration_properties` of each name in a compound
   /// declaration (**L§4.5**): `a, b: float;` declares two names off one type.
@@ -357,6 +359,10 @@ pub struct Checker<'a> {
   /// The runs being worked out right now, which is what makes a `#run` that
   /// depends on itself an error rather than a hang.
   pub(crate) runs_in_flight: HashSet<(Option<InstanceId>, SourceId, NodeId)>,
+  /// What each `#modify` answered for the constants it was handed, so that a
+  /// block is compiled and run once rather than once per candidate an overload
+  /// set offers at every call site (**L§7.8**).
+  pub(crate) modify_results: HashMap<crate::modify::ModifyKey, Option<Vec<(DeclId, Const)>>>,
   run_index: usize,
   /// How many static `#if`s nobody could decide the checker is inside. The
   /// reference never typechecks a rejected branch (**L§6.10**); orangejuice
@@ -399,7 +405,7 @@ const TEMPORARY_STORAGE_SIZE: i64 = 32768;
 impl<'a> Checker<'a> {
   pub fn new(program: &'a Program<'a>) -> Self {
     let interner = program.interner();
-    let mut scope_of_node = HashMap::new();
+    let mut scope_of_node = HashMap::default();
     let mut references_seen = 0usize;
     for reference in program.references().iter() {
       scope_of_node
@@ -414,58 +420,59 @@ impl<'a> Checker<'a> {
       .map(|(source, node, scope)| (scope, (source, node)))
       .collect();
 
-    let compound_properties = HashMap::new();
-    let iterators = HashMap::new();
+    let compound_properties = HashMap::default();
+    let iterators = HashMap::default();
 
     let mut checker = Self {
       program,
       interner,
       nodes: None,
       nodes_generation: 0,
-      code_addresses: HashMap::new(),
-      type_info_flags: HashMap::new(),
+      code_addresses: HashMap::default(),
+      type_info_flags: HashMap::default(),
       types: Types::new(),
       names: Names::new(interner),
-      states: HashMap::new(),
+      states: HashMap::default(),
       finished: Vec::new(),
       scope_of_node: std::cell::RefCell::new(scope_of_node),
       references_seen: std::cell::Cell::new(references_seen),
-      struct_scopes: HashMap::new(),
-      struct_of_scope: HashMap::new(),
-      struct_instances: HashMap::new(),
-      enum_scopes: HashMap::new(),
+      struct_scopes: HashMap::default(),
+      struct_of_scope: HashMap::default(),
+      struct_instances: HashMap::default(),
+      enum_scopes: HashMap::default(),
       aggregate_owners,
-      decl_constants: HashMap::new(),
-      pending_bodies: HashMap::new(),
+      decl_constants: HashMap::default(),
+      pending_bodies: indexmap::IndexMap::default(),
       completing: Vec::new(),
       compound_properties,
       iterators,
       context: None,
-      aggregate_types: HashMap::new(),
-      member_defaults: HashMap::new(),
+      aggregate_types: HashMap::default(),
+      member_defaults: HashMap::default(),
       stack: Vec::new(),
       decl_nodes: None,
       decl_nodes_indexed: 0,
       diagnostics: Vec::new(),
-      reported: HashSet::new(),
+      reported: HashSet::default(),
       depth: 0,
       compile_time: None,
-      backticked_owner: HashMap::new(),
-      runs: HashMap::new(),
-      run_tuples: HashMap::new(),
+      backticked_owner: HashMap::default(),
+      runs: HashMap::default(),
+      run_tuples: HashMap::default(),
       compile_time_depth: 0,
-      runs_in_flight: HashSet::new(),
+      runs_in_flight: HashSet::default(),
+      modify_results: HashMap::default(),
       run_index: 0,
       undecided_static_ifs: 0,
       instances: Vec::new(),
-      instance_cache: HashMap::new(),
+      instance_cache: HashMap::default(),
       current_instance: None,
       pending_instances: Vec::new(),
-      checked_instances: HashSet::new(),
-      modify_in_flight: HashSet::new(),
+      checked_instances: HashSet::default(),
+      modify_in_flight: HashSet::default(),
       call_site: None,
-      loop_expansions: HashMap::new(),
-      argument_instances: HashMap::new(),
+      loop_expansions: HashMap::default(),
+      argument_instances: HashMap::default(),
       units_seen: 0,
     };
     checker.refresh_units();
@@ -684,7 +691,7 @@ impl<'a> Checker<'a> {
       }
       return None;
     }
-    let body = self.pending_bodies.remove(&definition)?;
+    let body = self.pending_bodies.shift_remove(&definition)?;
     self.completing.push((definition, body.source, body.node));
     Some(body)
   }

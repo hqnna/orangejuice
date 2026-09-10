@@ -6,7 +6,7 @@
 //! and the modifiers the loop was written with. The macro exports `` `it `` and
 //! `` `it_index ``, and those are what the loop's own iterators are.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use oj_diag::SourceId;
 use oj_lexer::Symbol;

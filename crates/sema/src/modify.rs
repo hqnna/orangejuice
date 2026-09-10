@@ -18,6 +18,16 @@ use crate::poly::{Instance, InstanceId};
 /// The prefix every `#modify` entry point's symbol takes.
 pub const MODIFY_SYMBOL_PREFIX: &str = "__oj_modify_";
 
+/// What decides a `#modify`'s answer: the header it was written on and the
+/// constants solving handed it (**L§7.8**). Running one means compiling a
+/// module and giving it to the JIT, and overload resolution solves every
+/// candidate at every call site, so the answer is remembered.
+pub(crate) type ModifyKey = (
+  SourceId,
+  NodeId,
+  Vec<(DeclId, TypeId, crate::poly::ConstKey)>,
+);
+
 /// One `#modify` block, as the checker worked it out.
 #[derive(Clone, Debug)]
 pub struct ModifyRequest {
@@ -114,6 +124,45 @@ impl Checker<'_> {
       return Some(bindings);
     }
 
+    // A `#modify` is a function of the header and the constants solving handed
+    // it, and running one means building a module and giving it to the JIT.
+    // Overload resolution solves *every* candidate at *every* call site, and
+    // deduplication happens after the block has spoken, so without this the
+    // same block is compiled and run again for every call the program makes
+    // (**L§7.8**).
+    let key: ModifyKey = (
+      source,
+      header,
+      bindings
+        .iter()
+        .map(|(id, value)| (*id, value.type_id, crate::poly::const_key(value)))
+        .collect(),
+    );
+    if let Some(decided) = self.modify_results.get(&key) {
+      return decided.clone();
+    }
+    let (decided, settled) =
+      self.run_modify_uncached(source, header, constants, arguments, outer_scope, bindings);
+    // A block that answered by way of the re-entrancy guard has not really
+    // spoken yet, so its answer is not one to remember.
+    if settled {
+      self.modify_results.insert(key, decided.clone());
+    }
+    decided
+  }
+
+  /// The blocks themselves, and whether what they said is an answer worth
+  /// remembering.
+  fn run_modify_uncached(
+    &mut self,
+    source: SourceId,
+    header: NodeId,
+    constants: ScopeId,
+    arguments: ScopeId,
+    outer_scope: ScopeId,
+    bindings: Vec<(DeclId, Const)>,
+  ) -> (Option<Vec<(DeclId, Const)>>, bool) {
+    let blocks = self.modify_blocks(source, header);
     let mut bindings = bindings;
     for block in blocks {
       let variables: Vec<ModifyVariable> = bindings
@@ -128,7 +177,7 @@ impl Checker<'_> {
       // under binds nothing and only says what their types are.
       let instance = self.value_instance(source, header, constants, outer_scope, &variables);
       if !self.modify_in_flight.insert(instance) {
-        return Some(bindings);
+        return (Some(bindings), false);
       }
       let request = ModifyRequest {
         source,
@@ -142,7 +191,7 @@ impl Checker<'_> {
           .map_or(Span::at(0), |ast| ast.node(block).span),
       };
       let Some(engine) = self.compile_time.clone() else {
-        return Some(bindings);
+        return (Some(bindings), false);
       };
       self.enter_compile_time();
       let outcome = engine.modify(self, &request);
@@ -154,13 +203,13 @@ impl Checker<'_> {
             binding.1 = value;
           }
         }
-        ModifyOutcome::Rejected(_) => return None,
+        ModifyOutcome::Rejected(_) => return (None, true),
         // A block that could not be run leaves the candidate as it was
         // solved, so one unfinished corner does not reject working code.
-        ModifyOutcome::Failed => return Some(bindings),
+        ModifyOutcome::Failed => return (Some(bindings), false),
       }
     }
-    Some(bindings)
+    (Some(bindings), true)
   }
 
   pub(crate) fn modify_blocks(&self, source: SourceId, header: NodeId) -> Vec<NodeId> {
