@@ -397,6 +397,7 @@ fn run_workspace_once(
   // (**L§11.6**).
   let lower_options = oj_ir::LowerOptions {
     stack_trace: options.stack_trace,
+    backtrace_on_crash: options.backtrace_on_crash,
   };
   // Only an executable has to have a `main`: a library and an object file hold
   // whatever their exports reach (**L§11.6**, **C§4**).

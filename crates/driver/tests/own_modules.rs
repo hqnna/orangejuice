@@ -102,7 +102,7 @@ fn print_formats_what_the_type_table_describes() {
     "42 -17 9223372036854775807\n\
      true false\n\
      GREEN BLUE\n\
-     {3, 4, origin}\n\
+     {3, 4, \"origin\"}\n\
      [1, 2, 3]\n\
      100%\n"
   );
@@ -213,4 +213,67 @@ fn preload_declares_what_the_compiler_looks_up() {
     );
   }
   let _: &Path = preload.as_path();
+}
+
+#[test]
+fn a_crash_names_itself_and_walks_the_stack() {
+  // A program that dies of a signal should say what happened rather than
+  // leaving a silent core file (**C§13**). The generated entry point installs
+  // `Runtime_Support_Crash_Handler` unless `-no_backtrace_on_crash` asks it
+  // not to, and the wording is the reference's.
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("crash.jai");
+  std::fs::write(
+    &path,
+    "#import \"Basic\";\n\
+     read :: (p: *int) -> int { return p.*; }\n\
+     main :: () {\n  \
+       print(\"before\\n\");\n  \
+       p: *int;\n  \
+       print(\"%\\n\", read(p));\n\
+     }\n",
+  )
+  .expect("the input should be writable");
+
+  // SAFETY: cargo runs each integration test binary in its own process, and
+  // nothing else in this one reads it.
+  unsafe {
+    std::env::set_var(oj_testsupport::JAI_DIR_ENV, own_distribution());
+  }
+
+  let options = oj_driver::BuildOptions::new();
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  assert!(
+    !output.status.success(),
+    "the program should die of the signal it got"
+  );
+
+  let errors = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    errors.contains("Program Exception: SEGV_MAPERR"),
+    "the fault should be named, but stderr was:\n{errors}"
+  );
+  assert!(
+    errors.contains("Null Pointer Exception. Attempt to dereference a null pointer."),
+    "a null dereference should say so, but stderr was:\n{errors}"
+  );
+  assert!(
+    errors.lines().filter(|line| line.contains("[0x")).count() >= 2,
+    "the stack should be walked, but stderr was:\n{errors}"
+  );
 }

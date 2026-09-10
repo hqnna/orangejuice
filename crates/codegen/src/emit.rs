@@ -1549,6 +1549,14 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       }
       None => context.as_pointer_value(),
     };
+    // The handler goes in before anything the program does, so that a crash on
+    // the very first statement still says what happened (**C§13**).
+    if let Some(handler) = self.program.crash_handler_init {
+      self
+        .builder
+        .build_direct_call(self.functions[handler.0 as usize], &[], "")
+        .map_err(|error| error.to_string())?;
+    }
     // The trace info records name procedures, whose addresses only this module
     // knows, so they are filled before anything can trace (**C§13**).
     if let Some(initializer) = self.program.stack_trace_init {

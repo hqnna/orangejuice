@@ -163,11 +163,17 @@ pub struct Options {
   /// `Build_Options.stack_trace` (**C§4**): every Jai-convention procedure
   /// keeps a `Stack_Trace_Node`, which `-release` turns off.
   pub stack_trace: bool,
+  /// `Build_Options.backtrace_on_crash` (**C§4**): the generated entry point
+  /// installs the handler that names a fatal signal and walks the stack.
+  pub backtrace_on_crash: bool,
 }
 
 impl Default for Options {
   fn default() -> Self {
-    Self { stack_trace: true }
+    Self {
+      stack_trace: true,
+      backtrace_on_crash: true,
+    }
   }
 }
 
@@ -181,6 +187,7 @@ pub fn lower_with_roots(
 ) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::Executable);
   lowering.stack_trace = options.stack_trace;
+  lowering.backtrace_on_crash = options.backtrace_on_crash;
   lowering.run();
   lowering.make_live(live);
   lowering.finish()
@@ -191,6 +198,7 @@ pub fn lower_with_roots(
 pub fn lower_library(checker: &mut Checker, runtime_support: bool, options: Options) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::Executable);
   lowering.stack_trace = options.stack_trace;
+  lowering.backtrace_on_crash = options.backtrace_on_crash;
   lowering.run_exports();
   if runtime_support {
     lowering.export_runtime_support();
@@ -286,6 +294,11 @@ struct Lowering<'c, 'p> {
   /// `Runtime_Support.__jai_runtime_init`, which the generated entry point
   /// calls before the program (**C§13**).
   runtime_init: Option<ProcId>,
+  /// `Runtime_Support.__jai_install_crash_handler`, called from the same place
+  /// right after it (**C§13**).
+  crash_handler_init: Option<ProcId>,
+  /// `Build_Options.backtrace_on_crash` (**C§4**).
+  backtrace_on_crash: bool,
   /// `Build_Options.stack_trace`: every Jai-convention procedure keeps a
   /// `Stack_Trace_Node` of its own (**C§13**).
   stack_trace: bool,
@@ -350,6 +363,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       asm_registers: HashMap::default(),
       asm_register_aliases: HashMap::default(),
       runtime_init: None,
+      crash_handler_init: None,
+      backtrace_on_crash: true,
       stack_trace: true,
       trace_types: None,
       trace_infos: Vec::new(),
@@ -421,6 +436,15 @@ impl<'c, 'p> Lowering<'c, 'p> {
     // and the temporary storage a `#Context` starts with (**C§13**).
     if let Some(init) = self.checker.procedure_named("__jai_runtime_init") {
       self.runtime_init = Some(self.procedure_id(init));
+    }
+    // The crash handler goes in beside it: a program that dies of a signal
+    // should say what happened rather than leaving a core file behind
+    // (**C§13**). Rooting it here is what gets it lowered at all, since IR
+    // generation follows calls and nothing in the program calls it.
+    if self.backtrace_on_crash
+      && let Some(init) = self.checker.procedure_named("__jai_install_crash_handler")
+    {
+      self.crash_handler_init = Some(self.procedure_id(init));
     }
     self.drain_queue();
     // A global initializer may be the first thing to reach a procedure, so
@@ -582,6 +606,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       diagnostics,
       entry,
       runtime_init,
+      crash_handler_init,
       context_type,
       trace_init,
       debug_files,
@@ -619,6 +644,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
         globals,
         entry,
         runtime_init,
+        crash_handler_init,
         global_init,
         stack_trace_init: trace_init,
         context_type,

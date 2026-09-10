@@ -100,13 +100,7 @@ formatInt :: (value: Any, base := 10, minimum_digits := 1, padding: u8 = #char "
 // `inside_struct_or_array` is what makes a string print with quotes when it is
 // a member and without them when it is the whole argument.
 print_item_to_builder :: (builder: *String_Builder, item: Any, inside_struct_or_array := false, may_be_uninitialized := false) {
-    if inside_struct_or_array && item.type && item.type.type == .STRING {
-        append(builder, #char "\"");
-        append(builder, (cast(*string) item.value_pointer).*);
-        append(builder, #char "\"");
-        return;
-    }
-    append_any(builder, item);
+    append_any(builder, item, inside_struct_or_array);
 }
 
 // A type's name, the way `print("%", T)` writes it.
@@ -158,19 +152,25 @@ format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) ->
     return builder_string_length(builder);
 }
 
-// ------------------------------------------------------------ dispatching ---
+// `nested` says the value is a member or an element rather than a whole
+// argument, which is what decides whether a string is quoted: `print("%", s)`
+// writes the text, and the same string inside a struct writes `"text"`, so
+// that a comma in it cannot be read as the next member.
 
-append_any :: (builder: *String_Builder, value: Any) {
-    if !value.type {
-        append(builder, "(null type)");
+append_any :: (builder: *String_Builder, value: Any, nested := false) {
+    // An `Any` missing either half is the empty one — there is nothing to read
+    // and nothing to read it as — and it is written as the literal it would
+    // be, measured against the reference.
+    if !value.type || !value.value_pointer {
+        append(builder, "Any.{}");
         return;
     }
-    append_value(builder, value.value_pointer, value.type);
+    append_value(builder, value.value_pointer, value.type, nested);
 }
 
-append_value :: (builder: *String_Builder, data: *void, info: *Type_Info) {
+append_value :: (builder: *String_Builder, data: *void, info: *Type_Info, nested := false) {
     if !info {
-        append(builder, "(null type)");
+        append(builder, "Any.{}");
         return;
     }
     if !data {
@@ -182,7 +182,10 @@ append_value :: (builder: *String_Builder, data: *void, info: *Type_Info) {
         case .INTEGER;   append_integer(builder, data, cast(*Type_Info_Integer) info);
         case .FLOAT;     append_float(builder, data, info);
         case .BOOL;      append(builder, ifx (cast(*bool) data).* then "true" else "false");
-        case .STRING;    append(builder, (cast(*string) data).*);
+        case .STRING;
+            if nested  append(builder, #char "\"");
+            append(builder, (cast(*string) data).*);
+            if nested  append(builder, #char "\"");
         case .POINTER;   append_pointer(builder, (cast(**void) data).*);
         case .ENUM;      append_enum(builder, data, cast(*Type_Info_Enum) info);
         case .STRUCT;
@@ -194,7 +197,7 @@ append_value :: (builder: *String_Builder, data: *void, info: *Type_Info) {
             }
             append_struct(builder, data, cast(*Type_Info_Struct) info);
         case .ARRAY;     append_array(builder, data, cast(*Type_Info_Array) info);
-        case .ANY;       append_any(builder, (cast(*Any) data).*);
+        case .ANY;       append_any(builder, (cast(*Any) data).*, nested);
         case .VOID;      append(builder, "void");
         case .PROCEDURE; append_pointer(builder, (cast(**void) data).*);
         case .TYPE;      append_type(builder, (cast(**Type_Info) data).*);
@@ -532,7 +535,7 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
         if member.flags & .CONSTANT  continue;
         if written  append(builder, ", ");
         written += 1;
-        append_value(builder, cast(*u8) data + member.offset_in_bytes, member.type);
+        append_value(builder, cast(*u8) data + member.offset_in_bytes, member.type, true);
     }
     append(builder, "}");
 }
@@ -562,7 +565,7 @@ append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array) 
     index := 0;
     while index < count {
         if index  append(builder, ", ");
-        append_value(builder, elements + index * stride, info.element_type);
+        append_value(builder, elements + index * stride, info.element_type, true);
         index += 1;
     }
     append(builder, "]");

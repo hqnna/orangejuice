@@ -1031,17 +1031,24 @@ Build_Options :: struct {
 
     optimization_level:                       s32;
     emit_debug_info                           := true;
-    backtrace_on_crash                        := true;
     stack_trace                               := true;
-    array_bounds_check                        := true;
-    cast_bounds_check                         := true;
-    null_pointer_check                        := true;
-    arithmetic_overflow_check                 := true;
     enable_bytecode_inliner                   := true;
 
     runtime_support_definitions               := Runtime_Support_Definitions.ENTRY_POINT_AND_INIT;
+    // Only meaningful where Runtime_Support defines the entry point, since
+    // that is what installs the handler.
+    backtrace_on_crash:        enum u8 { OFF; ON; } = .ON;
+
+    // Each safety check is off, on, or — for the two that can report without
+    // dying — on but non-fatal. `ALWAYS` keeps the array check even where a
+    // `#no_abc` asked for it to go.
+    array_bounds_check:        enum u8 { OFF; ON; ALWAYS; }      = .ON;
+    cast_bounds_check:         enum u8 { OFF; NONFATAL; FATAL; } = .FATAL;
+    null_pointer_check:        enum u8 { OFF; ON; }              = .ON;
+    arithmetic_overflow_check: enum u8 { OFF; NONFATAL; FATAL; } = .OFF;
+
     use_custom_link_command                   := false;
-    dead_code_elimination                     := true;
+    dead_code_elimination:     enum u8 { NONE; ALL; MODULES_ONLY; } = .MODULES_ONLY;
 
     import_path:                              [] string;
     compile_time_command_line:                [] string;
@@ -1133,10 +1140,17 @@ set_optimization :: (options: *Build_Options, type: Optimization_Type, preserve_
 
     // The runtime checks are what a debug build is for, and what an optimized
     // one is trying not to pay for.
-    options.array_bounds_check        = debug;
-    options.cast_bounds_check         = debug;
-    options.null_pointer_check        = debug;
-    options.arithmetic_overflow_check = debug;
+    if debug {
+        options.array_bounds_check        = .ON;
+        options.cast_bounds_check         = .FATAL;
+        options.null_pointer_check        = .ON;
+        options.arithmetic_overflow_check = .FATAL;
+    } else {
+        options.array_bounds_check        = .OFF;
+        options.cast_bounds_check         = .OFF;
+        options.null_pointer_check        = .OFF;
+        options.arithmetic_overflow_check = .OFF;
+    }
 
     options.stack_trace     = debug;
     options.emit_debug_info = debug || preserve_debug_info;

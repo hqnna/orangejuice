@@ -387,3 +387,14 @@ __jai_runtime_init :: (argc: s32, argv: **u8) -> *#Context #c_call {
 // @Volatile: called after `main` returns (**C§13**).
 __jai_runtime_fini :: (_context: *void) #c_call {
 }
+
+// @Volatile: called by the generated entry point right after
+// `__jai_runtime_init`, unless `Build_Options.backtrace_on_crash` is `.OFF`
+// (**C§13**). Nothing in a program calls this, so the compiler roots it by
+// name — which is also what keeps the handler out of a `#run`, since compile
+// time has no generated entry point and a crash there is the compiler's to
+// report.
+__jai_install_crash_handler :: () #c_call {
+    Handler :: #import "Runtime_Support_Crash_Handler";
+    Handler.init();
+}

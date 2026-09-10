@@ -648,6 +648,12 @@ pub struct Program {
   /// The generated procedure that runs the global initializers the front end
   /// could not fold into data, called before `main`.
   pub global_init: Option<ProcId>,
+  /// `Runtime_Support_Crash_Handler.init` by way of the wrapper Runtime_Support
+  /// exports, which the generated entry point calls before the program so that
+  /// a crash names itself instead of dying silently (**C§13**). Absent when the
+  /// program does not reach Runtime_Support, or when `-no_backtrace_on_crash`
+  /// asked for it to be left out.
+  pub crash_handler_init: Option<ProcId>,
   /// The generated procedure that fills in the `Stack_Trace_Procedure_Info` of
   /// every procedure that keeps a stack trace node (**C§13**). It runs before
   /// the global initializers, since one of those may already trace.
