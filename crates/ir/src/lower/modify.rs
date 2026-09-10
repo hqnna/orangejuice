@@ -62,6 +62,7 @@ impl Lowering<'_, '_> {
       }],
       direct_return: None,
       return_class: None,
+      variadic: false,
     };
     self.procedures.push(Procedure {
       symbol: modify.symbol.clone(),

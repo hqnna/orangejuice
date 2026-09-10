@@ -939,6 +939,7 @@ impl Lowering<'_, '_> {
     operands: &Operands,
   ) -> Option<String> {
     let form = instruction.form;
+    let rotate_bytes = form.text == "bswap" && instruction.scalar_bits == 16;
     let mut text = String::new();
     if instruction.locked {
       text.push_str("lock ");
@@ -950,7 +951,13 @@ impl Lowering<'_, '_> {
       if form.vex && instruction.vex {
         text.push('v');
       }
-      text.push_str(form.text);
+      // `bswap` has no 16-bit form the integrated assembler will take, and a
+      // 16-bit byte swap *is* a rotate by eight, which is what the reference
+      // means by emulating it (**L§15**).
+      match rotate_bytes {
+        true => text.push_str("rol"),
+        false => text.push_str(form.text),
+      }
       // AVX512 has no untyped `vmovdqu`: a 512-bit move names the lane width it
       // moves in (**L§15**).
       if instruction.vector_bits == 512 && matches!(form.text, "movdqu" | "movdqa") {
@@ -978,12 +985,16 @@ impl Lowering<'_, '_> {
           let register = &operands.registers[*index];
           let bits = match register.class {
             AsmClass::Vec => instruction.vector_bits,
+            _ if form.byte_operands.contains(&position) => 8,
             _ => instruction.scalar_bits,
           };
           text.push_str(&register_name(register.class, register.assigned, bits));
         }
         Operand::Slot(index) => {
-          let used = instruction.bits_for(operands.slots[*index].class);
+          let used = match form.byte_operands.contains(&position) {
+            true => 8,
+            false => instruction.bits_for(operands.slots[*index].class),
+          };
           text.push_str(&slot_name(operands, *index, used));
         }
         Operand::Memory {
@@ -1052,6 +1063,9 @@ impl Lowering<'_, '_> {
         }
       }
     }
+    if rotate_bytes {
+      text.push_str(", 8");
+    }
     // The embedded rounding an instruction was told to use is an operand of
     // its own, after the ones it works on (**L§15**).
     if let Some(rounding) = rounding {
@@ -1097,6 +1111,20 @@ impl Lowering<'_, '_> {
 
 /// x86 lets one operand of an instruction be in memory, so a value the block
 /// left to the back end may only be addressed on the stack when it is the only
+/// Which of an instruction's operands are actually written out, which is what
+/// the assembler sees: a form that picks writes only what it picked.
+fn written_positions(instruction: &Resolved) -> Vec<usize> {
+  match instruction.form.operands {
+    Ops::None => Vec::new(),
+    Ops::All => (0..instruction.operands.len()).collect(),
+    Ops::Pick(picked) => picked
+      .iter()
+      .copied()
+      .filter(|position| *position < instruction.operands.len())
+      .collect(),
+  }
+}
+
 /// one of its instruction that could be. Everything else has to be a register.
 fn pin_to_registers(resolved: &[Resolved], operands: &mut Operands) {
   for instruction in resolved {
@@ -1120,7 +1148,18 @@ fn pin_to_registers(resolved: &[Resolved], operands: &mut Operands) {
         slot.register_only = true;
       }
     }
-    if !addressed && direct.len() < 2 {
+    // An instruction whose *written* operands are all slots and immediates has
+    // no register to take its width from, so x86 cannot tell how wide a memory
+    // operand would be: `imul [rsp + 48]` is ambiguous where `imul rcx` is not
+    // (**L§15**). The implicit operands of a `mul` or a `div` are not written,
+    // which is what `Basic`'s `ConvertToApollo` runs into.
+    let has_register = written_positions(instruction).into_iter().any(|position| {
+      matches!(
+        instruction.operands.get(position),
+        Some(Operand::Register(_))
+      )
+    });
+    if !addressed && direct.len() < 2 && has_register {
       continue;
     }
     for index in direct {
@@ -1312,6 +1351,10 @@ struct Form {
   vex: bool,
   /// A memory operand is written without a width.
   bare_memory: bool,
+  /// The operands the encoding always writes eight bits wide, whatever the
+  /// instruction works at: the shift count of a `shl`, `sar`, `shld` or
+  /// `shrd` is `cl` and nothing else (**L§15**).
+  byte_operands: &'static [usize],
 }
 
 enum Ops {
@@ -1333,6 +1376,7 @@ const fn form(text: &'static str, operands: Ops, class: AsmClass) -> Form {
     writes: &[0],
     vex: false,
     bare_memory: false,
+    byte_operands: &[],
   }
 }
 
@@ -1397,13 +1441,13 @@ static FORMS: &[(&str, Form)] = &[
   ("inc", form("inc", Ops::All, AsmClass::Gpr)),
   ("dec", form("dec", Ops::All, AsmClass::Gpr)),
   ("bswap", form("bswap", Ops::All, AsmClass::Gpr)),
-  ("shl", implicit("shl", Ops::All, AsmClass::Gpr, &[(1, 1)])),
-  ("shr", implicit("shr", Ops::All, AsmClass::Gpr, &[(1, 1)])),
-  ("sar", implicit("sar", Ops::All, AsmClass::Gpr, &[(1, 1)])),
-  ("rol", implicit("rol", Ops::All, AsmClass::Gpr, &[(1, 1)])),
-  ("ror", implicit("ror", Ops::All, AsmClass::Gpr, &[(1, 1)])),
-  ("shld", implicit("shld", Ops::All, AsmClass::Gpr, &[(2, 1)])),
-  ("shrd", implicit("shrd", Ops::All, AsmClass::Gpr, &[(2, 1)])),
+  ("shl", Form { byte_operands: &[1], ..implicit("shl", Ops::All, AsmClass::Gpr, &[(1, 1)]) }),
+  ("shr", Form { byte_operands: &[1], ..implicit("shr", Ops::All, AsmClass::Gpr, &[(1, 1)]) }),
+  ("sar", Form { byte_operands: &[1], ..implicit("sar", Ops::All, AsmClass::Gpr, &[(1, 1)]) }),
+  ("rol", Form { byte_operands: &[1], ..implicit("rol", Ops::All, AsmClass::Gpr, &[(1, 1)]) }),
+  ("ror", Form { byte_operands: &[1], ..implicit("ror", Ops::All, AsmClass::Gpr, &[(1, 1)]) }),
+  ("shld", Form { byte_operands: &[2], ..implicit("shld", Ops::All, AsmClass::Gpr, &[(2, 1)]) }),
+  ("shrd", Form { byte_operands: &[2], ..implicit("shrd", Ops::All, AsmClass::Gpr, &[(2, 1)]) }),
   ("bt", reads("bt", Ops::All, AsmClass::Gpr)),
   ("bts", form("bts", Ops::All, AsmClass::Gpr)),
   ("btr", form("btr", Ops::All, AsmClass::Gpr)),

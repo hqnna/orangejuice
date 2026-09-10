@@ -428,6 +428,11 @@ pub struct Abi {
   /// which is the `ReturnPointer` parameter either way as far as the IR is
   /// concerned.
   pub return_class: Option<oj_types::Classification>,
+  /// The callee is a C-variadic procedure — a `#foreign` header whose last
+  /// parameter is `..Any` (**L§7.11**, **L§12.2**). The `[] Any` slot is not a
+  /// parameter at all then: each argument written past the fixed ones is
+  /// passed on its own, the way C spells `...`.
+  pub variadic: bool,
 }
 
 /// One procedure of the program, in the IR the back end consumes.
@@ -547,6 +552,7 @@ pub fn abi_of(
       parameters: Vec::new(),
       direct_return: None,
       return_class: None,
+      variadic: false,
     };
   };
 
@@ -575,7 +581,14 @@ pub fn abi_of(
     None => None,
   };
 
-  for argument in &signature.arguments {
+  // A `#c_call` whose last parameter is `..Any` is a C-variadic procedure:
+  // the `[] Any` slot is not a parameter, and each argument written past the
+  // fixed ones is passed on its own (**L§7.11**, **L§12.2**).
+  let variadic = c_call && signature.vararg_index.is_some();
+  for (index, argument) in signature.arguments.iter().enumerate() {
+    if variadic && signature.vararg_index == Some(index as u32) {
+      continue;
+    }
     let scalar = is_scalar(types, *argument);
     parameters.push(AbiParameter {
       type_id: *argument,
@@ -610,6 +623,7 @@ pub fn abi_of(
     parameters,
     direct_return,
     return_class,
+    variadic,
   }
 }
 

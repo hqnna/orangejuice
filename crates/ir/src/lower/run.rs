@@ -19,13 +19,41 @@ pub struct Run {
   pub header: NodeId,
   /// The block that header carries.
   pub block: NodeId,
-  /// The type the run produces, `void` when it produces nothing.
+  /// The type the run produces, `void` when it produces nothing. A run whose
+  /// expression is a call with several returns produces all of them, and this
+  /// is the first.
   pub result: TypeId,
+  /// Every value the run produces, first one first (**L§4.5**). A run with one
+  /// value has just that one here; `A, B :: #run f();` has as many as `f`
+  /// returns, and the wrapper writes each at its own offset in the buffer the
+  /// caller handed it.
+  pub results: Vec<TypeId>,
   /// The single expression a `#run expr` evaluates. A run whose body is a
   /// block of statements has none, and returns through its header instead.
   pub value: Option<NodeId>,
   /// The symbol the JIT looks the wrapper up under.
   pub symbol: String,
+}
+
+/// Where each of a run's values goes in the buffer the caller hands the
+/// wrapper, and how big and how aligned that buffer has to be. The wrapper and
+/// whoever reads the answer back both build from this, so the two cannot
+/// disagree about where a value landed.
+pub fn run_result_layout(checker: &mut Checker, results: &[TypeId]) -> (Vec<u64>, usize, usize) {
+  let mut offsets = Vec::with_capacity(results.len());
+  let mut end = 0u64;
+  let mut alignment = 1u64;
+  for type_id in results {
+    let (size, align) = match checker.layout(*type_id) {
+      Some(layout) => (layout.size.max(1), layout.alignment.max(1)),
+      None => (1, 1),
+    };
+    alignment = alignment.max(align);
+    end = end.next_multiple_of(align);
+    offsets.push(end);
+    end += size;
+  }
+  (offsets, end.max(1) as usize, alignment.max(1) as usize)
 }
 
 /// Lowers one `#run` into a program the JIT can compile.
@@ -58,6 +86,7 @@ impl Lowering<'_, '_> {
       }],
       direct_return: None,
       return_class: None,
+      variadic: false,
     };
     self.procedures.push(Procedure {
       symbol: run.symbol.clone(),
@@ -160,6 +189,19 @@ impl Lowering<'_, '_> {
     let scope = self
       .checker
       .scope_for(run.source, expression, self.body_scope);
+    // `A, B :: #run f();` takes every value the call returns, each written
+    // where the buffer's layout says (**L§4.5**).
+    if run.results.len() > 1 {
+      let (offsets, _, _) = run_result_layout(self.checker, &run.results);
+      let targets: Vec<Option<(ValueId, TypeId)>> = run
+        .results
+        .iter()
+        .zip(&offsets)
+        .map(|(type_id, offset)| Some((self.offset(out, *offset, *type_id), *type_id)))
+        .collect();
+      self.call_into(scope, run.source, expression, &targets);
+      return;
+    }
     let Some(value) = self.expression(scope, run.source, expression, Some(run.result)) else {
       return;
     };

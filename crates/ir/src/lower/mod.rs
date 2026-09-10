@@ -9,7 +9,7 @@ pub use modify::{
   MODIFY_ACCEPT, MODIFY_REASON, MODIFY_VARIABLE_SIZE, MODIFY_VARIABLES, Modify, lower_modify,
   modify_result_size,
 };
-pub use run::{Run, lower_run};
+pub use run::{Run, lower_run, run_result_layout};
 
 pub use Options as LowerOptions;
 
@@ -235,11 +235,21 @@ struct Lowering<'c, 'p> {
   /// local per expansion, so the instantiation is part of the key
   /// (**L§7.13**).
   local_of_decl: HashMap<(Option<InstanceId>, DeclId), LocalId>,
+  /// A name that shares another local's storage: every member of an anonymous
+  /// `union` written as a statement is the same address read as its own type
+  /// (**L§8.6**), which is how `Math`'s `frexp` reads a `float64` as bits.
+  union_members: HashMap<(Option<InstanceId>, DeclId), (LocalId, TypeId)>,
   /// The constants whose value is being built right now, so that one that
   /// names itself stops instead of looping.
   constants: std::collections::HashSet<DeclId>,
   loops: Vec<Loop>,
   insert_controls: Vec<InsertControls>,
+  /// How deep the lowering is inside an `#insert` of a `Code` that was written
+  /// outside the macro being spliced. A `return` means what it meant where it
+  /// was written (**L§13.1**), so one written in a procedure body returns from
+  /// that procedure however many macros it was inserted through — which is what
+  /// `Hash_Table`'s `Walk_Table` searches with.
+  inserted_from_outside: u32,
   /// The macros whose bodies are being spliced in right now, innermost last
   /// (**L§7.13**).
   expansions: Vec<Expansion>,
@@ -315,9 +325,11 @@ impl<'c, 'p> Lowering<'c, 'p> {
       current: BlockId(0),
       current_procedure: None,
       local_of_decl: HashMap::new(),
+      union_members: HashMap::new(),
       constants: std::collections::HashSet::new(),
       loops: Vec::new(),
       insert_controls: Vec::new(),
+      inserted_from_outside: 0,
       expansions: Vec::new(),
       call_sites: Vec::new(),
       defers: Vec::new(),
@@ -789,6 +801,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
         }],
         direct_return: None,
         return_class: None,
+        variadic: false,
       },
       locals: Vec::new(),
       blocks: Vec::new(),
@@ -930,7 +943,20 @@ impl<'c, 'p> Lowering<'c, 'p> {
       return;
     }
     let program = self.checker.program();
-    let scope = program.tree().decl(user).scope;
+    // The name is looked up from the *file* the `#foreign` was written in, not
+    // from the scope its own declaration landed in: a binding written before a
+    // `#scope_file` belongs to the module, while the `#library` it names is
+    // written after it (**L§11.1**, **L§12.2**).
+    let declared = program.tree().decl(user);
+    let scope = declared
+      .source
+      .and_then(|source| {
+        program
+          .units()
+          .find(|unit| unit.source == source)
+          .map(|unit| unit.scope)
+      })
+      .unwrap_or(declared.scope);
     let symbol = program.interner().intern(name.as_bytes());
     let mut resolved = None;
     if let oj_scope::Resolution::Found(candidates) = program.tree().lookup(scope, symbol) {

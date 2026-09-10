@@ -102,19 +102,37 @@ pub fn link_line(request: &Request) -> LinkLine {
   }
   // One library named by many `#foreign` procedures is one `-l`, and a system
   // library `pkg-config` knows takes the flags it gives instead (**C§11**).
-  let mut named: Vec<(&str, bool)> = Vec::new();
+  let mut named: Vec<String> = Vec::new();
   for library in &request.libraries {
-    let entry = (link_name(library), library.system);
-    if !named.contains(&entry) {
-      named.push(entry);
+    let name = link_name(library);
+    let flag = match library.system.then(|| pkg_config_flags(name)).flatten() {
+      Some(flags) => {
+        for flag in flags {
+          if !named.contains(&flag) {
+            named.push(flag);
+          }
+        }
+        continue;
+      }
+      // A library the compiler built is `<name>.so`, not `lib<name>.so`, so a
+      // plain `#library "helper"` names a file the `-l` spelling would never
+      // find: the one that is actually there is asked for by name (**L§12.2**).
+      None => match library_file(library) {
+        Some(file) => format!("-l:{file}"),
+        None => format!("-l{name}"),
+      },
+    };
+    if !named.contains(&flag) {
+      named.push(flag);
     }
   }
-  for (name, system) in named {
-    match system.then(|| pkg_config_flags(name)).flatten() {
-      Some(flags) => arguments.extend(flags),
-      None => arguments.push(format!("-l{name}")),
-    }
-  }
+  arguments.extend(named);
+
+  // A static archive a module ships names what it needs and nothing more:
+  // `stb_image.a` calls `pow`, which on this platform is a library of its own
+  // rather than part of libc. The reference links glibc's own linker script,
+  // which pulls it in; going through the C driver, it is named (**C§11**).
+  arguments.push(String::from("-lm"));
 
   // The reference links every executable so that it finds its own libraries
   // and so that its symbols are visible to `dlopen` (**C§11**).
@@ -127,6 +145,24 @@ pub fn link_line(request: &Request) -> LinkLine {
     program: driver(),
     arguments,
   }
+}
+
+/// The file a non-system `#library` actually names, when one is there beside
+/// the file that declared it (**L§12.2**). A library the compiler built is
+/// `<name>.so`, which is not what `-l<name>` looks for.
+fn library_file(library: &Library) -> Option<String> {
+  if library.system {
+    return None;
+  }
+  let directory = library.directory.as_ref()?;
+  // A static archive is preferred where both are there: the shared object a
+  // module ships is named by a path relative to the module, which is not a
+  // name the loader could find beside the executable (measured against the
+  // reference, which links `stb_image_write.a`).
+  ["a", "so"]
+    .into_iter()
+    .map(|extension| format!("{}.{extension}", library.name))
+    .find(|file| directory.join(file).is_file())
 }
 
 /// What follows `-l`. A `#library,system "libc"` names the *file* the loader

@@ -31,6 +31,7 @@ impl Lowering<'_, '_> {
     self.value_types.clear();
     self.current = BlockId(0);
     self.local_of_decl.clear();
+    self.union_members.clear();
     self.asm_registers.clear();
     self.asm_register_aliases.clear();
     self.loops.clear();
@@ -359,6 +360,18 @@ impl Lowering<'_, '_> {
           self.run_defers(&scope);
         }
       }
+      // `union { a: float64; b: u64; }` written as a statement declares no
+      // name of its own: its members are locals that share one piece of
+      // storage (**L§8.6**), which is how `Math`'s `frexp` reads a `float64`
+      // as its bits. An anonymous `struct` statement needs nothing: its
+      // members do not overlap, so they are ordinary locals.
+      NodeData::Struct(payload)
+        if payload
+          .textual_flags
+          .contains(oj_syntax::ast::StructFlags::UNION) =>
+      {
+        self.anonymous_union(source, node);
+      }
       NodeData::Declaration(_) => self.declaration_statement(node),
       NodeData::CompoundDeclaration(_) => self.compound_declaration(node),
       NodeData::Return { arguments, flags } => {
@@ -512,11 +525,23 @@ impl Lowering<'_, '_> {
             if remaps {
               self.insert_controls.push(controls);
             }
+            // A `return` means what it meant where the code was written
+            // (**L§13.1**): quoted code written in a procedure body returns
+            // from that procedure however many macros it was inserted
+            // through, which is what `Hash_Table`'s `Walk_Table` searches
+            // with. Code written inside a macro keeps the macro's meaning.
+            let from_outside = !self.checker.program().is_in_macro(expansion.scope);
+            if from_outside {
+              self.inserted_from_outside += 1;
+            }
             let previous_source = std::mem::replace(&mut self.body_source, expansion.source);
             let previous_scope = std::mem::replace(&mut self.body_scope, expansion.scope);
             self.statement(expansion.root);
             self.body_source = previous_source;
             self.body_scope = previous_scope;
+            if from_outside {
+              self.inserted_from_outside -= 1;
+            }
             if remaps {
               self.insert_controls.pop();
             }
@@ -561,6 +586,40 @@ impl Lowering<'_, '_> {
     for frame in frames {
       self.run_defers(&frame);
     }
+  }
+
+  /// One anonymous `union` written as a statement: its members are names for
+  /// one piece of storage, each read as its own type (**L§8.6**). Every member
+  /// of a union sits at offset zero, so what they share is the address.
+  fn anonymous_union(&mut self, source: SourceId, node: NodeId) {
+    let scope = self.checker.scope_for(source, node, self.body_scope);
+    let type_id = self.checker.denoted_type(scope, source, node);
+    if self.checker.types().is_unknown(type_id) {
+      self.unsupported(source, node, "this union", "M7");
+      return;
+    }
+    let local = self.new_local(String::from("union"), type_id);
+    let Some(NodeData::Struct(payload)) = self.checker.tree_of(source).map(|ast| ast.data(node))
+    else {
+      return;
+    };
+    let Some(block) = payload.block else {
+      return;
+    };
+    let Some(NodeData::Block(body)) = self.checker.tree_of(source).map(|ast| ast.data(block))
+    else {
+      return;
+    };
+    for member in body.statements.clone() {
+      let Some(decl) = self.checker.decl_at(source, member) else {
+        continue;
+      };
+      let member_type = self.checker.decl_type(decl).value;
+      let key = self.local_key(decl);
+      self.union_members.insert(key, (local, member_type));
+    }
+    let address = self.local_address(local);
+    self.clear(address, type_id);
   }
 
   fn declaration_statement(&mut self, node: NodeId) {
@@ -658,14 +717,23 @@ impl Lowering<'_, '_> {
     else {
       return;
     };
-    let names: Vec<NodeId> = arguments.iter().map(|argument| argument.node).collect();
+    let names: Vec<(NodeId, oj_syntax::ast::CommaModifier)> = arguments
+      .iter()
+      .map(|argument| (argument.node, argument.modifier))
+      .collect();
 
     // `a, b = f();` assigns to names that already exist; only `:=` and a
-    // typed form declare them (**L§4.5**).
-    let assigns = compound.operator_type.is_some();
+    // typed form declare them. One name may declare itself while the others
+    // assign: `declaration:, offset, success = f();` (**L§4.5**).
+    let is_declaration = compound.operator_type.is_none();
     let mut places = Vec::new();
-    for name in &names {
-      if assigns {
+    for (name, modifier) in &names {
+      let declares = match modifier {
+        oj_syntax::ast::CommaModifier::Declare => true,
+        oj_syntax::ast::CommaModifier::Assign => false,
+        oj_syntax::ast::CommaModifier::None => is_declaration,
+      };
+      if !declares {
         let scope = self.checker.scope_for(source, *name, self.body_scope);
         places.push(
           self
@@ -769,7 +837,7 @@ impl Lowering<'_, '_> {
   /// `return` inside a macro returns from the macro; `` `return `` returns
   /// from the procedure it expanded into (**L§7.13**).
   fn return_statement(&mut self, node: NodeId, arguments: &[ast::Argument], backticked: bool) {
-    if !backticked && !self.expansions.is_empty() {
+    if !backticked && self.inserted_from_outside == 0 && !self.expansions.is_empty() {
       self.macro_return(node, arguments);
       return;
     }
@@ -1037,14 +1105,10 @@ impl Lowering<'_, '_> {
       false => self.terminate(Terminator::Jump(join)),
     }
 
-    let breaks = Loop {
-      break_block: join,
-      continue_block: join,
-      depth: self.defers.len(),
-      label: None,
-      removal: None,
-    };
-    self.loops.push(breaks);
+    // A `case` is not a loop: there is no fallthrough to break out of
+    // (**L§6.4**), so a `break` written in one leaves the loop around the
+    // switch. Measured against the reference, which is what
+    // `examples/output_types` relies on to leave its message loop.
     for (index, case) in cases.iter().enumerate() {
       let Some(NodeData::Case(payload)) = self.checker.tree_of(source).map(|ast| ast.data(*case))
       else {
@@ -1059,7 +1123,6 @@ impl Lowering<'_, '_> {
       };
       self.terminate(Terminator::Jump(next));
     }
-    self.loops.pop();
     let _ = node;
     self.current = join;
   }
@@ -1485,7 +1548,7 @@ impl Lowering<'_, '_> {
     let source = self.body_source;
     let instance = expansion.instance;
     let previous_instance = self.checker.enter_instance(Some(instance));
-    let expanded = self.expand_for_body(node, payload, expansion);
+    let expanded = self.expand_for_body(node, payload, expansion, previous_instance);
     self.checker.enter_instance(previous_instance);
     if expanded.is_none() {
       self.unsupported(source, node, "this 'for_expansion'", "M7");
@@ -1497,6 +1560,7 @@ impl Lowering<'_, '_> {
     node: NodeId,
     payload: &ast::ForNode,
     expansion: LoopExpansion,
+    outer: Option<InstanceId>,
   ) -> Option<()> {
     let source = self.body_source;
     let instance = expansion.instance;
@@ -1525,7 +1589,10 @@ impl Lowering<'_, '_> {
       let key = self.local_key(exported);
       self.local_of_decl.insert(key, local);
       if let Some(written) = written {
-        let previous = self.checker.enter_instance(None);
+        // The loop's own `it` belongs to whatever instantiation the loop was
+        // written in, not to the expansion: a `for` inside a polymorphic body
+        // has one `it` per specialization (**L§7.8**, **L§7.14**).
+        let previous = self.checker.enter_instance(outer);
         let key = self.local_key(written);
         self.checker.enter_instance(previous);
         self.local_of_decl.insert(key, local);
@@ -2133,6 +2200,7 @@ impl Lowering<'_, '_> {
     self.value_types.clear();
     self.current = BlockId(0);
     self.local_of_decl.clear();
+    self.union_members.clear();
     self.asm_registers.clear();
     self.asm_register_aliases.clear();
     self.loops.clear();
@@ -2170,6 +2238,7 @@ impl Lowering<'_, '_> {
       }],
       direct_return: None,
       return_class: None,
+      variadic: false,
     };
     self.procedures.push(Procedure {
       symbol: String::from(GLOBAL_INIT_SYMBOL),

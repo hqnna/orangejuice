@@ -1,4 +1,4 @@
-//! Expressions: values, places, conversions and calls.
+//! Expressions: values, places, conversions an calls.
 
 use super::*;
 
@@ -807,6 +807,28 @@ impl Lowering<'_, '_> {
     if let Some(count) = self.count_of(value) {
       return self.truth(source, node, count);
     }
+    // A fixed array's count is a constant, so whether it holds anything is
+    // decided here (**L§5.9**) — measured against the reference, which is what
+    // `Treemap`'s `if node.border` over a `[4] float` reads.
+    if let oj_types::TypeKind::Array {
+      kind: ArrayKind::Fixed(count),
+      ..
+    } = *self
+      .checker
+      .types()
+      .kind(self.checker.types().underlying(value.type_id))
+    {
+      let dest = self.value(TypeId::BOOL);
+      self.emit(Inst::Const {
+        dest,
+        value: Constant::Int(i128::from(count != 0)),
+      });
+      return Some(Val {
+        id: dest,
+        type_id: TypeId::BOOL,
+        indirect: false,
+      });
+    }
     if !self.is_scalar(value.type_id) {
       self.unsupported(source, node, "a truth value for this type", "M7");
       return None;
@@ -949,9 +971,26 @@ impl Lowering<'_, '_> {
     })
   }
 
+  /// The storage a member of an anonymous `union` statement stands for: the
+  /// union's own, read as the member's type (**L§8.6**). Every member of a
+  /// union sits at offset zero, so what they share is the address.
+  fn union_member_place(&mut self, decl: DeclId) -> Option<Val> {
+    let (local, member_type) = self.union_members.get(&self.local_key(decl)).copied()?;
+    let address = self.local_address(local);
+    let slot = self.offset(address, 0, member_type);
+    Some(Val {
+      id: slot,
+      type_id: member_type,
+      indirect: true,
+    })
+  }
+
   /// The storage a local declaration stands for, once the statement that
   /// declared it has run.
   pub(super) fn declaration_place(&mut self, decl: DeclId) -> Option<Val> {
+    if let Some(shared) = self.union_member_place(decl) {
+      return Some(shared);
+    }
     let local = self.local_of_decl.get(&self.local_key(decl)).copied()?;
     let address = self.local_address(local);
     Some(Val {
@@ -968,6 +1007,9 @@ impl Lowering<'_, '_> {
     decl: DeclId,
     type_id: TypeId,
   ) -> Option<Val> {
+    if let Some(shared) = self.union_member_place(decl) {
+      return Some(shared);
+    }
     if let Some(local) = self.local_of_decl.get(&self.local_key(decl)).copied() {
       let address = self.local_address(local);
       let local_type = self.locals[local.0 as usize].type_id;
@@ -995,9 +1037,13 @@ impl Lowering<'_, '_> {
       }
       DeclKind::Variable | DeclKind::Parameter | DeclKind::Iterator => {
         // A name that is not a local of this procedure is a global; a
-        // parameter that is not is one a milestone the front end lacks would
-        // have bound.
+        // parameter that is not is a constant of somewhere rather than
+        // anybody's local — a `#module_parameters` one (**L§11.3**), or an
+        // argument a polymorphic struct was baked with (**L§8.5**).
         if info.kind != DeclKind::Variable {
+          if info.kind == DeclKind::Parameter {
+            return self.constant_parameter_value(source, node, decl, type_id);
+          }
           self.unsupported(source, node, "this name", "M7");
           return None;
         }
@@ -1042,8 +1088,19 @@ impl Lowering<'_, '_> {
           self.unsupported(source, node, "this constant", "M7");
           return None;
         }
+        // A constant written in a baked polymorphic struct's body means what
+        // it means under that specialization: `hash_function ::
+        // given_hash_function` in `Table` is whichever procedure the
+        // instantiation was given (**L§8.5**).
+        let entered = self
+          .checker
+          .decl_instance(decl)
+          .map(|instance| self.checker.enter_instance(Some(instance)));
         let scope = self.checker.scope_for(declared, expression, info.scope);
         let value = self.expression(scope, declared, expression, Some(type_id));
+        if let Some(previous) = entered {
+          self.checker.enter_instance(previous);
+        }
         self.constants.remove(&decl);
         value
       }
@@ -1052,6 +1109,58 @@ impl Lowering<'_, '_> {
         None
       }
     }
+  }
+
+  /// A parameter that is nobody's local is a constant of somewhere: what the
+  /// `#import` gave a `#module_parameters` one (**L§11.3**), or what a
+  /// polymorphic struct was baked with (**L§8.5**). Its value is that
+  /// expression, or the default the declaration wrote, built where it stands.
+  fn constant_parameter_value(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    decl: DeclId,
+    type_id: TypeId,
+  ) -> Option<Val> {
+    // A struct argument is a constant of the specialization that bound it, so
+    // it is read under that instantiation rather than under whoever is asking
+    // (**L§8.5**).
+    let entered = self
+      .checker
+      .decl_instance(decl)
+      .map(|instance| self.checker.enter_instance(Some(instance)));
+    let bound = self.checker.decl_constant(decl);
+    if let Some(previous) = entered {
+      self.checker.enter_instance(previous);
+    }
+    if let Some(constant) = bound {
+      return self.constant_value(&constant, type_id);
+    }
+    let info = self.checker.program().tree().decl(decl);
+    let written = match self.checker.program().module_binding(decl) {
+      Some(binding) => Some((binding.source, binding.expression, binding.scope)),
+      None => {
+        let (declared, at) = (info.source?, info.node?);
+        match self.checker.tree_of(declared).map(|ast| ast.data(at)) {
+          Some(NodeData::Declaration(declaration)) => declaration
+            .expression
+            .map(|expression| (declared, expression, info.scope)),
+          _ => None,
+        }
+      }
+    };
+    let Some((declared, expression, scope)) = written else {
+      self.unsupported(source, node, "this name", "M7");
+      return None;
+    };
+    if !self.constants.insert(decl) {
+      self.unsupported(source, node, "this name", "M7");
+      return None;
+    }
+    let scope = self.checker.scope_for(declared, expression, scope);
+    let value = self.expression(scope, declared, expression, Some(type_id));
+    self.constants.remove(&decl);
+    value
   }
 
   // ---------------------------------------------------------- literals ------
@@ -1426,7 +1535,7 @@ impl Lowering<'_, '_> {
     want: Option<TypeId>,
   ) -> Option<Val> {
     if operator == OperatorType::DOT {
-      return self.member_value(scope, source, node, left, right, info);
+      return self.member_value(scope, source, node, left, right, info, want);
     }
     if operator == OperatorType::ARRAY_SUBSCRIPT {
       return self.subscript_value(scope, source, node, left, right);
@@ -1487,7 +1596,7 @@ impl Lowering<'_, '_> {
     // defaults to: `1 << n` is an `s64` (**L§5.2**, **L§5.10**). When neither
     // operand has a type of its own — `.WEST | .EAST` — what asked for the
     // value is what says which enum they belong to (**L§5.12**).
-    let result = match self.checker.types().is_untyped(info.type_id) {
+    let result = match self.checker.types().is_untyped(info.type_id) || info.autocast {
       true => want.unwrap_or_else(|| self.checker.hardened(info.type_id)),
       false => self.checker.hardened(info.type_id),
     };
@@ -1853,6 +1962,7 @@ impl Lowering<'_, '_> {
     })
   }
 
+  #[allow(clippy::too_many_arguments)]
   fn member_value(
     &mut self,
     scope: ScopeId,
@@ -1861,11 +1971,25 @@ impl Lowering<'_, '_> {
     left: NodeId,
     right: NodeId,
     info: &Expr,
+    want: Option<TypeId>,
   ) -> Option<Val> {
     // A name reached through a module or a type is a declaration, not storage
     // (**L§5.3**).
     if let [only] = info.overloads[..] {
       return self.declaration_value(source, node, only, info.type_id);
+    }
+    // An overload set reached through a module is narrowed the same way a bare
+    // name is: `set_scissor = Simp.set_scissor;` means the one the slot's type
+    // asks for (**L§7.5**).
+    if info.overloads.len() > 1
+      && let Some(target) = want
+      && let Some(chosen) = info
+        .overloads
+        .iter()
+        .copied()
+        .find(|decl| self.checker.decl_type(*decl).value == target)
+    {
+      return self.declaration_value(source, node, chosen, target);
     }
     if info.overloads.len() > 1 {
       self.error(
@@ -2334,6 +2458,25 @@ impl Lowering<'_, '_> {
   /// `overrides` gives values for declared parameters the caller has already
   /// lowered, by parameter index: `a += b` hands over the place `a` that way,
   /// since evaluating it a second time is not what the operator means.
+  /// One argument of a resolved call. A default the *header* wrote means what
+  /// it means under the specialization being called — `fallback := T.{}` is
+  /// that instantiation's `T` — rather than under whatever the call site
+  /// happens to be inside (**L§7.4**, **L§7.8**).
+  fn planned_argument(
+    &mut self,
+    argument: oj_sema::PlannedArgument,
+    target: TypeId,
+  ) -> Option<Val> {
+    let previous = argument
+      .instance
+      .map(|instance| self.checker.enter_instance(Some(instance)));
+    let value = self.expression(argument.scope, argument.source, argument.node, Some(target));
+    if let Some(previous) = previous {
+      self.checker.enter_instance(previous);
+    }
+    value
+  }
+
   pub(super) fn emit_planned_call(
     &mut self,
     scope: ScopeId,
@@ -2381,11 +2524,32 @@ impl Lowering<'_, '_> {
       // a constant that merely holds one is called through its value
       // (**L§7.5**).
       (None, Some(decl)) if self.checker.procedure_body(decl).is_some() => {
+        // A procedure declared inside a baked polymorphic struct is one per
+        // specialization: `Table(int, int)`'s `compare_function` and
+        // `Table(float, int)`'s are two procedures out of one body, so the
+        // instantiation the callee was reached through is what tells them
+        // apart (**L§8.5**).
+        let entered = plan
+          .owner_instance
+          .map(|instance| self.checker.enter_instance(Some(instance)));
         let id = self.procedure_id(decl);
+        if let Some(previous) = entered {
+          self.checker.enter_instance(previous);
+        }
         (Callee::Direct(id), self.procedures[id.0 as usize].flags)
       }
       (None, Some(decl)) => {
-        let value = self.declaration_value(source, node, decl, plan.type_id)?;
+        // A name reached through a baked polymorphic struct is that
+        // specialization's: `table.hash_function` is whichever procedure it
+        // was given (**L§8.5**).
+        let entered = plan
+          .owner_instance
+          .map(|instance| self.checker.enter_instance(Some(instance)));
+        let value = self.declaration_value(source, node, decl, plan.type_id);
+        if let Some(previous) = entered {
+          self.checker.enter_instance(previous);
+        }
+        let value = value?;
         let pointer = self.scalar(value);
         let mut flags = ProcedureFlags::empty();
         if let Some(signature) = self.checker.types().procedure_of(plan.type_id)
@@ -2463,12 +2627,7 @@ impl Lowering<'_, '_> {
               None => {
                 let argument = *plan.arguments.get(given)?;
                 given += 1;
-                self.expression(
-                  argument.scope,
-                  argument.source,
-                  argument.node,
-                  Some(parameter.type_id),
-                )?
+                self.planned_argument(argument, parameter.type_id)?
               }
             },
           };
@@ -2478,6 +2637,26 @@ impl Lowering<'_, '_> {
             _ => arguments.push(self.address_of(value)),
           }
         }
+      }
+    }
+
+    // A C-variadic callee takes what was written past its fixed parameters one
+    // argument at a time, each as the value it is rather than as an `Any`
+    // (**L§7.11**, **L§12.2**).
+    if abi.variadic
+      && let Some((_, _, extra)) = &plan.varargs
+    {
+      let extra = extra.clone();
+      for argument in extra {
+        let previous = argument
+          .instance
+          .map(|instance| self.checker.enter_instance(Some(instance)));
+        let value = self.expression(argument.scope, argument.source, argument.node, None);
+        if let Some(previous) = previous {
+          self.checker.enter_instance(previous);
+        }
+        let Some(value) = value else { continue };
+        arguments.push(self.scalar(value));
       }
     }
 
@@ -2786,12 +2965,7 @@ impl Lowering<'_, '_> {
         continue;
       }
       let value = match (written, &plan.varargs) {
-        (Some(argument), _) => self.expression(
-          argument.scope,
-          argument.source,
-          argument.node,
-          Some(type_id),
-        )?,
+        (Some(argument), _) => self.planned_argument(argument, type_id)?,
         (None, Some((_, view, extra))) => {
           let extra = extra.clone();
           self.gather_varargs(*view, &extra, plan.varargs_spread)?
@@ -3052,6 +3226,27 @@ impl Lowering<'_, '_> {
       return self.truth(source, node, value);
     }
 
+    // `cast,force(T) x` between two aggregates the same size over is a
+    // reinterpretation of the storage the value already has (**L§5.6**), which
+    // is how `Basic`'s `S128` and `U128` are the same bytes. Nothing narrower
+    // reaches here: the checker is what decided the cast was allowed.
+    if !self.is_scalar(from) && !self.is_scalar(to) {
+      let sizes = (
+        self.checker.layout(from).map(|layout| layout.size),
+        self.checker.layout(to).map(|layout| layout.size),
+      );
+      if let (Some(from_size), Some(to_size)) = sizes
+        && from_size == to_size
+      {
+        let address = self.address_of(value);
+        let reinterpreted = self.offset(address, 0, target);
+        return Some(Val {
+          id: reinterpreted,
+          type_id: target,
+          indirect: true,
+        });
+      }
+    }
     if !self.is_scalar(from) || !self.is_scalar(to) {
       self.unsupported(source, node, "this conversion", "M7");
       return None;

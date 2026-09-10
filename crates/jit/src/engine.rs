@@ -85,6 +85,7 @@ impl Engine {
       header: request.header,
       block: request.block,
       result: request.result,
+      results: request.results.clone(),
       value: request.value,
       symbol: request.symbol.clone(),
     };
@@ -114,13 +115,9 @@ impl Engine {
     self.orc.add_module(module)?;
     let address = self.orc.lookup(&request.symbol)?;
 
-    let (size, alignment) = match checker.layout(request.result) {
-      Some(layout) => (
-        layout.size.max(1) as usize,
-        layout.alignment.max(1) as usize,
-      ),
-      None => (1, 1),
-    };
+    // A run behind a compound declaration writes every value it produced into
+    // one buffer, each where the shared layout says (**L§4.5**).
+    let (offsets, size, alignment) = oj_ir::run_result_layout(checker, &request.results);
     // A `Type` a run produced is an address into the type table image, so it
     // is read back through where that image ended up (**L§17**).
     let table = lowered
@@ -144,6 +141,24 @@ impl Engine {
     if request.result == TypeId::VOID {
       return Ok(RunOutcome::Void);
     }
+    // Several values means a compound declaration is receiving them, and each
+    // one is read out of the slot the wrapper wrote it to (**L§4.5**).
+    if request.results.len() > 1 {
+      let mut values = Vec::with_capacity(request.results.len());
+      for (type_id, offset) in request.results.iter().zip(&offsets) {
+        let size = checker.layout(*type_id).map_or(0, |layout| layout.size) as usize;
+        let start = *offset as usize;
+        let bytes = buffer
+          .as_slice()
+          .get(start..start + size)
+          .ok_or_else(|| String::from("the run's values did not fit the storage it was given"))?;
+        let value = read_value(checker.types(), *type_id, bytes).ok_or_else(|| {
+          String::from("orangejuice cannot bring this kind of value back from compile time yet")
+        })?;
+        values.push(value);
+      }
+      return Ok(RunOutcome::Values(values));
+    }
     if checker.types().underlying(request.result) == TypeId::TYPE {
       return match table.and_then(|(base, image)| read_type(base, image, buffer.as_slice())) {
         Some(type_id) => Ok(RunOutcome::Value(oj_sema::Const::type_value(type_id))),
@@ -160,6 +175,15 @@ impl Engine {
         true => usize::from_ne_bytes(bytes[..8].try_into().expect("eight bytes")),
         false => 0,
       };
+      // A tree the metaprogram edited is handed back as the source it now
+      // reads as, which the `#insert` parses and splices where it stands
+      // (**C§3.3**); one nothing touched is the program it already is.
+      if let Some(text) = checker.rewritten_code_at(address) {
+        return Ok(RunOutcome::Value(oj_sema::Const::new(
+          request.result,
+          oj_sema::Value::String(text.into_bytes().into_boxed_slice()),
+        )));
+      }
       return match checker.code_at_address(address) {
         Some((source, node, scope)) => Ok(RunOutcome::Value(oj_sema::Const::new(
           request.result,

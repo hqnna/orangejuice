@@ -213,6 +213,10 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         _ => parameters.push(pointer.into()),
       }
     }
+    // A `#foreign` header whose last parameter is `..Any` is a C-variadic
+    // procedure, and LLVM has to be told so for a call to be built the way the
+    // platform passes one (**L§7.11**, **L§12.2**).
+    let variadic = abi.variadic;
     match (&abi.return_class, abi.direct_return) {
       (Some(Classification::Registers(classes)), _) => {
         let type_id = abi
@@ -222,10 +226,10 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
           .unwrap_or(TypeId::VOID);
         self
           .coerced_type(type_id, classes)
-          .fn_type(&parameters, false)
+          .fn_type(&parameters, variadic)
       }
-      (_, Some(type_id)) => self.llvm_type(type_id).fn_type(&parameters, false),
-      _ => self.context.void_type().fn_type(&parameters, false),
+      (_, Some(type_id)) => self.llvm_type(type_id).fn_type(&parameters, variadic),
+      _ => self.context.void_type().fn_type(&parameters, variadic),
     }
   }
 

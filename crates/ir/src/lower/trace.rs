@@ -413,6 +413,7 @@ impl Lowering<'_, '_> {
         parameters: Vec::new(),
         direct_return: None,
         return_class: None,
+        variadic: false,
       },
       locals: Vec::new(),
       blocks: Vec::new(),
