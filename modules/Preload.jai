@@ -367,9 +367,12 @@ __command_line_arguments: [] *u8;
 // cannot recurse through the machinery that reports it.
 __runtime_support_disable_stack_trace := false;
 
-// The workspace being compiled, which is 0 in a program that is running
-// rather than being compiled (**C§3.1**).
-get_current_workspace :: () -> Workspace #compiler;
+// The workspace being compiled. The compiler answers this while compile-time
+// code runs; the body is what a program that is merely *running* gets, and
+// **L§17** says that is 0.
+get_current_workspace :: () -> Workspace #compiler {
+    return 0;
+}
 
 // ------------------------------------------------------------ intrinsics ---
 

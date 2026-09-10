@@ -335,6 +335,17 @@ runtime_support_default_allocator_proc :: (mode: Allocator_Mode, requested_size:
     }
 }
 
+// A hook the compiler answers while compile-time code is running, so a
+// debugger can be attached to it (**L§17**).
+compile_time_debug_break :: () #compiler #no_context;
+
+// Stops in a debugger. `int3` is the breakpoint instruction on x86-64; a
+// program running without a debugger attached takes SIGTRAP and dies, which is
+// what asking to break means.
+debug_break :: () #no_context {
+    #asm { int3; }
+}
+
 // --------------------------------------------------------- starting up ---
 
 #scope_module

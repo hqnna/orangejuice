@@ -20,6 +20,10 @@
 
 Linux :: #import "Linux";
 
+// `debug_break` and the check-failure procedures live there; **L§17** puts
+// them in Runtime_Support rather than here.
+Runtime_Support :: #import "Runtime_Support";
+
 #scope_export
 
 // ------------------------------------------------------------ allocation ---
@@ -224,13 +228,9 @@ assert :: (condition: bool, format := "", args: ..Any, loc := #caller_location) 
             message := ifx format.count then tprint(format, ..args) else "";
             should_break := context.assertion_failed(loc, message);
             context.handling_assertion_failure = false;
-            if should_break  debug_break();
+            if should_break  Runtime_Support.debug_break();
         }
     }
-}
-
-debug_break :: () #no_context {
-    #asm { int3; }
 }
 
 // ------------------------------------------------------------- the process ---
