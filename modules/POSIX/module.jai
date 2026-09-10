@@ -186,3 +186,43 @@ munmap :: (address: *void, length: u64) -> s32 #foreign libc;
 #scope_module
 
 libc :: #system_library "c";
+
+#scope_export
+
+// ----------------------------------------------------------- threads ---
+
+// `pthread_t` is a pointer-sized handle on Linux. The attribute and mutex
+// types are opaque blocks the library sizes; these are the x86-64 sizes and
+// are @Volatile with glibc.
+pthread_t :: u64;
+
+pthread_attr_t :: struct { opaque: [56] u8; }
+pthread_mutex_t :: struct { opaque: [40] u8; }
+pthread_cond_t :: struct { opaque: [48] u8; }
+
+pthread_create  :: (thread: *pthread_t, attributes: *pthread_attr_t, start: (*void) -> *void #c_call, argument: *void) -> s32 #foreign pthread;
+pthread_join    :: (thread: pthread_t, result: **void) -> s32 #foreign pthread;
+pthread_detach  :: (thread: pthread_t) -> s32 #foreign pthread;
+pthread_self    :: () -> pthread_t #foreign pthread;
+
+pthread_mutex_init    :: (mutex: *pthread_mutex_t, attributes: *void) -> s32 #foreign pthread;
+pthread_mutex_destroy :: (mutex: *pthread_mutex_t) -> s32 #foreign pthread;
+pthread_mutex_lock    :: (mutex: *pthread_mutex_t) -> s32 #foreign pthread;
+pthread_mutex_trylock :: (mutex: *pthread_mutex_t) -> s32 #foreign pthread;
+pthread_mutex_unlock  :: (mutex: *pthread_mutex_t) -> s32 #foreign pthread;
+
+pthread_cond_init      :: (cond: *pthread_cond_t, attributes: *void) -> s32 #foreign pthread;
+pthread_cond_destroy   :: (cond: *pthread_cond_t) -> s32 #foreign pthread;
+pthread_cond_wait      :: (cond: *pthread_cond_t, mutex: *pthread_mutex_t) -> s32 #foreign pthread;
+pthread_cond_signal    :: (cond: *pthread_cond_t) -> s32 #foreign pthread;
+pthread_cond_broadcast :: (cond: *pthread_cond_t) -> s32 #foreign pthread;
+
+// How many cores the process may run on.
+sysconf :: (name: s32) -> s64 #foreign libc;
+_SC_NPROCESSORS_ONLN :: 84;
+
+#scope_module
+
+// glibc folded libpthread into libc itself in 2.34; naming libc for both is
+// what works on a modern system and does no harm on an older one.
+pthread :: #system_library "c";
