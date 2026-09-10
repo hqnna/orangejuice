@@ -853,12 +853,17 @@ impl Nodes {
   }
 
   /// Takes the picture of every exported node that later tells whether a
-  /// metaprogram has written to it. Nothing the compiler fills in itself may
-  /// happen after this.
+  /// metaprogram has written to it. A node already pictured keeps the picture
+  /// it has, so a change made to one before the next export is not lost: the
+  /// compiler exports on demand, so there is no one moment after which nothing
+  /// of its own is filled in.
   pub fn freeze(&mut self) {
     for (address, (_, size)) in &self.origin {
       let bytes = unsafe { std::slice::from_raw_parts(*address as *const u8, *size) };
-      self.shadow.insert(*address, bytes.to_vec());
+      self
+        .shadow
+        .entry(*address)
+        .or_insert_with(|| bytes.to_vec());
     }
   }
 

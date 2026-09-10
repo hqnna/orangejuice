@@ -584,7 +584,8 @@ unsafe extern "C" fn compiler_wait_for_message(_context: *mut c_void) -> *const 
       true => crate::Compiled::default(),
       false => compile(&workspace),
     };
-    with(|meta| meta.queue_messages(&compiled));
+    let id = workspace.id;
+    with(|meta| meta.queue_messages(id, &compiled));
   }
   with(|meta| meta.next_message())
     .flatten()

@@ -44,6 +44,7 @@ pub use message::{
   ErrorCode, ImportStatus, Kind, Message, MessageComplete, MessageFailedImport, MessageFile,
   MessageImport, MessagePhase, ModuleType, Phase, Stored,
 };
+pub use rewrite::Rewriter;
 pub use state::{
   BuildOptionsLayout, Compiled, CompiledFailedImport, CompiledFile, CompiledModule, Compiler,
   DataSegment, DuringCompileLayout, GlobalData, Intercept, Meta, ProvidedImport, Report,

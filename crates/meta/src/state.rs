@@ -74,6 +74,10 @@ pub struct BuildOptionsLayout {
   pub intermediate_path: Option<u64>,
   /// `import_path`, which a fresh `Build_Options` already names (**C§4**).
   pub import_path: Option<u64>,
+  /// `os_target` and `cpu_target`, which orangejuice only produces output for
+  /// when they are `LINUX` and `X64` (`docs/spec.md` §2).
+  pub os_target: Option<u64>,
+  pub cpu_target: Option<u64>,
 }
 
 /// Where the `Build_Options_During_Compile` members the driver acts on sit
@@ -206,6 +210,18 @@ impl Workspace {
     self.options.get(offset).copied()
   }
 
+  /// One four-byte member of the build options — `os_target` and `cpu_target`
+  /// are `enum u32`s (**C§4**, **L§17**).
+  pub fn option_u32(
+    &self,
+    layout: &BuildOptionsLayout,
+    member: impl FnOnce(&BuildOptionsLayout) -> Option<u64>,
+  ) -> Option<u32> {
+    let offset = member(layout)? as usize;
+    let bytes = self.options.get(offset..offset + 4)?;
+    Some(u32::from_le_bytes(bytes.try_into().ok()?))
+  }
+
   /// One `string` member of a `Build_Options_During_Compile` a metaprogram
   /// set, or `None` when it set none at all.
   pub fn during_compile_string(
@@ -235,6 +251,31 @@ impl Workspace {
   ) -> Option<String> {
     let offset = member(layout)? as usize;
     read_string(self.options.get(offset..offset + size_of::<Str>())?)
+  }
+  /// One `[] string` member of the build options, read back out of the bytes
+  /// the metaprogram wrote (**C§4**). `import_path` is the one the driver acts
+  /// on: a metaprogram that adds a directory to it means a `#import` in the
+  /// workspace it drives to search there.
+  pub fn option_strings(
+    &self,
+    layout: &BuildOptionsLayout,
+    member: impl FnOnce(&BuildOptionsLayout) -> Option<u64>,
+  ) -> Option<Vec<String>> {
+    let offset = member(layout)? as usize;
+    let bytes = self.options.get(offset..offset + size_of::<Slice>())?;
+    let count = i64::from_ne_bytes(bytes[..8].try_into().ok()?);
+    let data = usize::from_ne_bytes(bytes[8..16].try_into().ok()?) as *const Str;
+    if count <= 0 || data.is_null() {
+      return Some(Vec::new());
+    }
+    let items = unsafe { std::slice::from_raw_parts(data, count as usize) };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+      let raw =
+        unsafe { std::slice::from_raw_parts((&raw const *item).cast::<u8>(), size_of::<Str>()) };
+      out.push(read_string(raw)?);
+    }
+    Some(out)
   }
 }
 
@@ -311,13 +352,17 @@ pub struct CompiledFile {
   pub from_a_string: bool,
 }
 
-/// What one metaprogram is watching (**C§3.1**).
+/// What one metaprogram is watching (**C§3.1**). The reference has one
+/// message stream per compiler, so a metaprogram may intercept several
+/// workspaces and read all of their messages from it — which is what
+/// `examples/output_types` does with four.
 #[derive(Debug, Default)]
 pub struct Intercept {
-  pub workspace: i64,
+  /// The workspaces being watched, in the order they were intercepted.
+  pub workspaces: Vec<i64>,
   pub flags: u32,
-  /// Whether the workspace has been compiled and its messages queued.
-  pub compiled: bool,
+  /// The workspaces already compiled and queued.
+  pub compiled: Vec<i64>,
   /// Whether `COMPLETE` has been handed over, after which waiting is an error.
   pub finished: bool,
   /// A `provide_import` arrived, so the workspace is compiled again with the
@@ -551,26 +596,29 @@ impl Meta {
       .find(|workspace| workspace.id == handle)
   }
 
-  /// Starts watching a workspace (**C§3.1**). Only one at a time, which is
-  /// what the reference's single message stream amounts to.
+  /// Starts watching a workspace (**C§3.1**). Several may be watched at once;
+  /// their messages share the one stream the reference has.
   pub fn begin_intercept(&mut self, workspace: i64, flags: u32) {
     let workspace = if workspace == -1 {
       self.current
     } else {
       workspace
     };
-    self.intercept = Some(Intercept {
-      workspace,
-      flags,
-      ..Intercept::default()
-    });
+    let intercept = self.intercept.get_or_insert_with(Intercept::default);
+    intercept.flags |= flags;
+    if !intercept.workspaces.contains(&workspace) {
+      intercept.workspaces.push(workspace);
+    }
   }
 
   pub fn end_intercept(&mut self) {
-    if let Some(intercept) = self.intercept.take()
-      && let Some(workspace) = self.workspace(intercept.workspace)
-    {
-      workspace.intercepted = true;
+    let Some(intercept) = self.intercept.take() else {
+      return;
+    };
+    for id in intercept.workspaces {
+      if let Some(workspace) = self.workspace(id) {
+        workspace.intercepted = true;
+      }
     }
   }
 
@@ -832,15 +880,17 @@ impl Meta {
   /// The workspace that has to be compiled before the next message can be
   /// handed over, if there is one. The caller does the compiling, since it
   /// re-enters the compiler and this state must not be borrowed while it does.
+  /// Several workspaces may be watched at once, and they compile in the order
+  /// they were intercepted (**C§3.1**).
   pub fn workspace_awaiting_compilation(&self) -> Option<Workspace> {
     let intercept = self.intercept.as_ref()?;
-    if intercept.compiled && !intercept.recompile {
-      return None;
-    }
+    let pending = intercept.workspaces.iter().find(|id| {
+      intercept.recompile && intercept.compiled.contains(id) || !intercept.compiled.contains(id)
+    })?;
     self
       .workspaces
       .iter()
-      .find(|workspace| workspace.id == intercept.workspace)
+      .find(|workspace| workspace.id == *pending)
       .cloned()
   }
 
@@ -848,10 +898,7 @@ impl Meta {
   /// reference sends (**C§3.2**): one `IMPORT` per module instantiation and
   /// one `FILE` per file, then the phases, an `ERROR` for each error, and
   /// `COMPLETE` last.
-  pub fn queue_messages(&mut self, compiled: &Compiled) {
-    let Some(workspace) = self.intercept.as_ref().map(|i| i.workspace) else {
-      return;
-    };
+  pub fn queue_messages(&mut self, workspace: i64, compiled: &Compiled) {
     let head = |kind: Kind| Message { kind, workspace };
     // A `provide_import` starts the workspace over, so what is left of the
     // previous stream is not what happened (**C§3.2**). The messages
@@ -1002,9 +1049,7 @@ impl Meta {
           message: head(Kind::Complete),
           error_code: ErrorCode::None,
         })));
-        if let Some(intercept) = self.intercept.as_mut() {
-          intercept.compiled = true;
-        }
+        self.mark_compiled(workspace);
         return;
       }
       self.push_message(Stored::Phase(Box::new(MessagePhase {
@@ -1029,9 +1074,7 @@ impl Meta {
       },
     })));
 
-    if let Some(intercept) = self.intercept.as_mut() {
-      intercept.compiled = true;
-    }
+    self.mark_compiled(workspace);
     // A workspace whose compilation failed has failed, whether or not its
     // metaprogram says so: that is what makes the compiler exit non-zero when
     // the program it was asked to build did not build (**C§2.1**). A workspace
@@ -1082,6 +1125,16 @@ impl Meta {
       self.messages.push(stored);
     }
     self.nodes.borrow_mut().attach_files(&by_path);
+  }
+
+  /// Records that a watched workspace has been compiled and its messages
+  /// queued, so the stream moves on to the next one.
+  fn mark_compiled(&mut self, workspace: i64) {
+    if let Some(intercept) = self.intercept.as_mut()
+      && !intercept.compiled.contains(&workspace)
+    {
+      intercept.compiled.push(workspace);
+    }
   }
 
   fn push_message(&mut self, message: Stored) {

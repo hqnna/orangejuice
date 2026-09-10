@@ -14,8 +14,9 @@
 //! allocate.
 
 use crate::code::{
-  CodeBinaryOperator, CodeBlock, CodeCase, CodeIdent, CodeIf, CodeLiteral, CodeLoopControl,
-  CodeNode, CodeProcedureCall, CodeReturn, CodeUnaryOperator, CodeWhile, Key, Nodes, literal_type,
+  CodeBinaryOperator, CodeBlock, CodeCase, CodeDeclaration, CodeIdent, CodeIf, CodeLiteral,
+  CodeLoopControl, CodeNode, CodeProcedureCall, CodeReturn, CodeTypeInstantiation,
+  CodeUnaryOperator, CodeWhile, Key, Nodes, literal_type,
 };
 
 /// The `Code_Node.Kind` values this printer knows (**C§5.3**).
@@ -31,7 +32,13 @@ mod kind {
   pub const LOOP_CONTROL: u8 = 11;
   pub const CASE: u8 = 12;
   pub const RETURN: u8 = 14;
+  pub const TYPE_INSTANTIATION: u8 = 17;
+  pub const DECLARATION: u8 = 25;
 }
+
+/// `Code_Declaration.Flags`.
+const IS_CONSTANT: u32 = 0x1;
+const IS_UNINITIALIZED: u32 = 0x80;
 
 /// `Code_Literal.value_flags`.
 const FLOAT_LITERAL: u32 = 0x4;
@@ -98,6 +105,18 @@ impl<'n> Rewriter<'n> {
       nodes,
       changed: nodes.changed_spans(),
       unsupported: None,
+    }
+  }
+
+  /// The source of any one node, which is what an `#insert` of a `Code` the
+  /// metaprogram edited needs: `compiler_get_nodes` hands out a tree it may
+  /// write to, and what is spliced has to be what it left there (**C§3.3**).
+  pub fn expression(&mut self, node: *const CodeNode) -> Result<String, u8> {
+    let mut out = String::new();
+    self.node(node, &mut out);
+    match self.unsupported {
+      Some(kind) => Err(kind),
+      None => Ok(out),
     }
   }
 
@@ -223,6 +242,51 @@ impl<'n> Rewriter<'n> {
         out.push(' ');
         self.block(loop_.block, out);
       }
+      // `name: T = value`, with whichever of the two halves was written
+      // (**L§5.1**). A constant keeps its `::`, and an uninitialized
+      // declaration its `---`.
+      kind::DECLARATION => {
+        let declaration = unsafe { &*node.cast::<CodeDeclaration>() };
+        out.push_str(&unsafe { declaration.entry.name.string_lossy() });
+        let constant = declaration.flags & IS_CONSTANT != 0;
+        out.push_str(match declaration.type_inst.is_null() {
+          true => match constant {
+            true => " ::",
+            false => " :=",
+          },
+          false => ": ",
+        });
+        if !declaration.type_inst.is_null() {
+          self.node(declaration.type_inst.cast::<CodeNode>(), out);
+          out.push_str(match constant {
+            true => " :",
+            false => " =",
+          });
+        }
+        out.push(' ');
+        match declaration.flags & IS_UNINITIALIZED != 0 {
+          true => out.push_str("---"),
+          false => self.node(declaration.expression, out),
+        }
+      }
+      // A type slot is whatever expression names the type, with the pointer
+      // and array wrappers the instantiation records around it (**L§3.13**).
+      kind::TYPE_INSTANTIATION => {
+        let inst = unsafe { &*node.cast::<CodeTypeInstantiation>() };
+        if !inst.pointer_to.is_null() {
+          out.push('*');
+          self.node(inst.pointer_to.cast::<CodeNode>(), out);
+        } else if !inst.array_element_type.is_null() {
+          out.push('[');
+          self.node(inst.array_dimension, out);
+          out.push(']');
+          self.node(inst.array_element_type.cast::<CodeNode>(), out);
+        } else if !inst.type_valued_expression.is_null() {
+          self.node(inst.type_valued_expression, out);
+        } else {
+          self.stop(kind);
+        }
+      }
       kind::IF => self.conditional(node.cast::<CodeIf>(), out),
       kind::CASE => {
         let case = unsafe { &*node.cast::<CodeCase>() };
@@ -305,11 +369,22 @@ impl<'n> Rewriter<'n> {
     let call = unsafe { &*call };
     self.node(call.procedure_expression, out);
     out.push('(');
-    for (index, argument) in self.arguments(call.arguments_unsorted).iter().enumerate() {
+    // An argument the call site named keeps its name: `join(xs, separator="!")`
+    // means something else read back as four positional arguments (**L§7.4**).
+    for (index, argument) in self
+      .named_arguments(call.arguments_unsorted)
+      .iter()
+      .enumerate()
+    {
       if index > 0 {
         out.push_str(", ");
       }
-      self.node(*argument, out);
+      if !argument.name.is_null() {
+        let name = unsafe { &*argument.name };
+        out.push_str(&unsafe { name.name.string_lossy() });
+        out.push_str(" = ");
+      }
+      self.node(argument.expression, out);
     }
     out.push(')');
   }
@@ -329,19 +404,25 @@ impl<'n> Rewriter<'n> {
   /// The expressions of a `[] Code_Argument`, whose members are a node and the
   /// name it was passed under.
   fn arguments(&self, slice: crate::abi::Slice) -> Vec<*const CodeNode> {
+    self
+      .named_arguments(slice)
+      .iter()
+      .map(|argument| argument.expression)
+      .collect()
+  }
+
+  /// The `[] Code_Argument` itself, for the one caller that has to keep the
+  /// name an argument was written under.
+  fn named_arguments(&self, slice: crate::abi::Slice) -> &'n [crate::code::CodeArgument] {
     if slice.data.is_null() || slice.count <= 0 {
-      return Vec::new();
+      return &[];
     }
-    let arguments = unsafe {
+    unsafe {
       std::slice::from_raw_parts(
         slice.data.cast::<crate::code::CodeArgument>(),
         slice.count as usize,
       )
-    };
-    arguments
-      .iter()
-      .map(|argument| argument.expression)
-      .collect()
+    }
   }
 
   fn stop(&mut self, kind: u8) {
