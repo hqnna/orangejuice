@@ -1649,3 +1649,151 @@ fn a_workspace_is_compiled_once_and_numbered_by_the_one_above_it() {
     .expect("the program the workspace produced runs");
   assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
 }
+
+#[test]
+fn several_workspaces_share_the_one_message_stream() {
+  // The reference has one message stream per compiler, so a metaprogram may
+  // intercept several workspaces and read all of their messages from it
+  // (**C§3.1**) — which is what `examples/output_types` does with four.
+  let fixture = Fixture::new();
+  let Some(report) = build_watching(
+    &fixture,
+    "TEXT :: \"main :: () {}\";\n\
+     #run {\n  \
+       first := compiler_create_workspace(\"first\");\n  \
+       second := compiler_create_workspace(\"second\");\n  \
+       compiler_begin_intercept(first);\n  \
+       add_build_string(TEXT, first);\n  \
+       compiler_begin_intercept(second);\n  \
+       add_build_string(TEXT, second);\n  \
+       completed := 0;\n  \
+       while true {\n    \
+         message := compiler_wait_for_message();\n    \
+         if !message  compiler_report(\"the stream ran out\");\n    \
+         if !message  break;\n    \
+         if message.kind == .COMPLETE {\n      \
+           completed += 1;\n      \
+           if completed >= 2  break;\n    \
+         }\n  \
+       }\n  \
+       if completed != 2  compiler_report(\"only one workspace completed\");\n  \
+       set_build_options_dc(.{do_output=false});\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert!(!report.failed, "{}", report.diagnostics.join(""));
+}
+
+#[test]
+fn a_watched_workspaces_diagnostics_say_which_workspace_they_are() {
+  // The compilation a diagnostic came from is not the one the command line
+  // named, so the compiler says which workspace it belongs to first
+  // (**C§12**), measured against the reference.
+  let fixture = Fixture::new();
+  let Some(report) = build_watching(
+    &fixture,
+    "#run {\n\
+       w := compiler_create_workspace(\"Target Program\");\n\
+       compiler_begin_intercept(w);\n\
+       add_build_string(\"main :: () { undefined_thing(); }\", w);\n\
+       while true {\n\
+         message := compiler_wait_for_message();\n\
+         if message.kind == .COMPLETE  break;\n\
+       }\n\
+       compiler_end_intercept(w);\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(report.failed, "the workspace should fail");
+  assert_eq!(
+    report.diagnostics.first().map(String::as_str),
+    Some("\nIn Workspace 2 (\"Target Program\"):\n"),
+    "got {:#?}",
+    report.diagnostics
+  );
+}
+
+#[test]
+fn an_insert_splices_the_code_a_metaprogram_wrote_to() {
+  // `compiler_get_nodes` hands out a tree the metaprogram may edit in place,
+  // and what the `#insert` splices is what it left there rather than the
+  // program the address was exported from (**C§3.3**) — which is what
+  // `how_to/630` uppercases its literals with.
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     shout :: (code: Code) -> Code {\n  \
+       root, expressions := compiler_get_nodes(code);\n  \
+       for expressions {\n    \
+         if it.kind != .LITERAL  continue;\n    \
+         literal := cast(*Code_Literal) it;\n    \
+         if literal.value_type != .STRING  continue;\n    \
+         if literal._string == \"quiet\"  literal._string = \"LOUD\";\n    \
+         if literal._string == \"also quiet\"  literal._string = \"ALSO LOUD\";\n  \
+       }\n  \
+       return compiler_get_code(root);\n\
+     }\n\
+     play :: (c: Code) #expand {\n  \
+       modified :: #run shout(c);\n  \
+       #insert,scope() modified;\n\
+     }\n\
+     main :: () {\n  \
+       quoted :: #code { word := \"quiet\"; print(\"%\\n\", word); };\n  \
+       play(quoted);\n  \
+       play(#code print(\"%\\n\", \"also quiet\"));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  let executable = fixture.path("main");
+  assert_built(&report, &executable);
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "LOUD\nALSO LOUD\n");
+}
+
+#[test]
+fn a_rewritten_call_keeps_the_names_its_arguments_were_written_under() {
+  // A named argument means something else read back as a positional one
+  // (**L§7.4**), so the printer that rebuilds an edited tree keeps the name.
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     shout :: (code: Code) -> Code {\n  \
+       root, expressions := compiler_get_nodes(code);\n  \
+       for expressions {\n    \
+         if it.kind != .LITERAL  continue;\n    \
+         literal := cast(*Code_Literal) it;\n    \
+         if literal.value_type != .STRING  continue;\n    \
+         if literal._string == \"a\"  literal._string = \"A\";\n  \
+       }\n  \
+       return compiler_get_code(root);\n\
+     }\n\
+     joined :: (first: string, second := \"b\", separator := \"-\") {\n  \
+       print(\"%1%2%3\\n\", first, separator, second);\n\
+     }\n\
+     play :: (c: Code) #expand {\n  \
+       modified :: #run shout(c);\n  \
+       #insert,scope() modified;\n\
+     }\n\
+     main :: () {\n  \
+       play(#code joined(\"a\", separator = \"+\"));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  let executable = fixture.path("main");
+  assert_built(&report, &executable);
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "A+b\n");
+}

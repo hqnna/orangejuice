@@ -3836,3 +3836,1045 @@ fn a_location_of_a_name_is_where_a_constant_was_declared() {
     "-5\n-4\n-3\n4\n",
   );
 }
+
+#[test]
+fn a_break_inside_a_case_leaves_the_loop_around_the_switch() {
+  // An `if ==` case has no fallthrough to break out of (**L§6.4**), so a
+  // `break` written in one leaves the enclosing loop — measured against the
+  // reference, and what `examples/output_types` relies on to leave its message
+  // loop.
+  assert_output(
+    "main :: () {\n  \
+       n := 0;\n  \
+       while true {\n    \
+         n += 1;\n    \
+         if n == {\n      \
+           case 1; put(\"one\\n\");\n      \
+           case 2; put(\"two\\n\"); break;\n      \
+           case;   put(\"more\\n\");\n    \
+         }\n    \
+         if n > 5  break;\n  \
+       }\n  \
+       put_number(n);\n\
+     }\n",
+    "one\ntwo\n2\n",
+  );
+}
+
+/// Builds a program that imports a module written beside it, which is what a
+/// `#module_parameters` test needs: the arguments live at the `#import`.
+fn assert_output_with_module(module: &str, body: &str, expected: &str) {
+  let Some(jai_dir) = oj_testsupport::jai_dir() else {
+    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+    return;
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let modules = directory.path().join("modules").join("Parameterized");
+  std::fs::create_dir_all(&modules).expect("the module directory should be creatable");
+  std::fs::write(modules.join("module.jai"), module).expect("the module should be writable");
+  let path = directory.path().join("program.jai");
+  std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
+
+  let mut options = oj_driver::BuildOptions::new();
+  options.import_dirs = vec![directory.path().join("modules")];
+  unsafe {
+    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+  }
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+}
+
+#[test]
+fn a_module_parameter_takes_the_argument_the_import_gave_it() {
+  // `#import "M"(N = 7)` is what `N` is inside the module, not the default its
+  // declaration wrote (**L§11.3**).
+  assert_output_with_module(
+    "#module_parameters(N := 1, M := 2);\n\
+     #scope_export\n\
+     sum :: () -> int { return N * 10 + M; }\n",
+    "Given :: #import \"Parameterized\"(7, M = 3);\n\
+     main :: () { put_number(Given.sum()); }\n",
+    "73\n",
+  );
+}
+
+#[test]
+fn a_module_parameter_a_default_covers_keeps_that_default() {
+  assert_output_with_module(
+    "#module_parameters(N := 1, M := 2);\n\
+     #scope_export\n\
+     sum :: () -> int { return N * 10 + M; }\n",
+    "Given :: #import \"Parameterized\";\n\
+     main :: () { put_number(Given.sum()); }\n",
+    "12\n",
+  );
+}
+
+#[test]
+fn a_static_if_in_a_module_folds_its_module_parameters() {
+  // The `#if` that decides which half of a module exists reads the parameters
+  // as the constants they are, which is what keeps a `#import "Windows"` in
+  // the branch nobody took out of a Linux build (**L§11.3**).
+  assert_output_with_module(
+    "#module_parameters(ENABLED := false);\n\
+     #scope_export\n\
+     #if !ENABLED {\n  \
+       answer :: () -> int { return 1; }\n\
+     } else {\n  \
+       W :: #import \"Windows\";\n  \
+       answer :: () -> int { return 2; }\n\
+     }\n",
+    "Given :: #import \"Parameterized\";\n\
+     main :: () { put_number(Given.answer()); }\n",
+    "1\n",
+  );
+}
+
+#[test]
+fn a_name_that_misses_in_a_body_nothing_instantiates_is_not_reported() {
+  // A polymorphic body only exists once something instantiates it, so nothing
+  // written there is checked until then (**L§7.8**) — which is what lets
+  // `executable_formats` compile with a `Ranlib_Symbol` that is file-scope in
+  // the file it was declared in.
+  assert_output(
+    "never_called :: ($T: Type) -> int {\n  \
+       X :: Nonexistent_Name(T);\n  \
+       return size_of(X);\n\
+     }\n\
+     main :: () { put_number(1); }\n",
+    "1\n",
+  );
+}
+
+#[test]
+fn a_name_that_misses_in_a_body_a_call_site_instantiated_is_reported() {
+  let Some(diagnostics) = diagnostics_of(
+    "is_called :: ($T: Type) -> int {\n  \
+       X :: Nonexistent_Name(T);\n  \
+       return size_of(X);\n\
+     }\n\
+     main :: () { put_number(is_called(s32)); }\n",
+  ) else {
+    return;
+  };
+  assert!(
+    diagnostics.contains("Undeclared identifier 'Nonexistent_Name'."),
+    "{diagnostics}"
+  );
+}
+
+#[test]
+fn a_code_constant_handed_to_a_macro_is_the_program_it_quotes() {
+  // A macro's `Code` parameter takes the argument unevaluated, except when the
+  // argument already *is* a `Code`: then it hands over what it holds
+  // (**L§13.1**).
+  assert_output(
+    "play :: (c: Code) #expand { #insert c; }\n\
+     main :: () {\n  \
+       quoted :: #code put(\"named\\n\");\n  \
+       play(quoted);\n  \
+       play(#code put(\"inline\\n\"));\n\
+     }\n",
+    "named\ninline\n",
+  );
+}
+
+#[test]
+fn an_inserted_code_block_declares_its_own_names() {
+  // A `#code`'s contents are not walked where they were written, so the
+  // `#insert` is what opens the block's scope and declares what it holds
+  // (**L§13.1**).
+  assert_output(
+    "main :: () {\n  \
+       quoted :: #code { n := 41; put_number(n + 1); };\n  \
+       #insert quoted;\n\
+     }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn a_compound_constant_takes_one_value_of_the_run_it_was_given() {
+  // `A, B :: #run f();` runs `f` once and gives each name one of its returns
+  // (**L§4.5**, **L§12.1**), which is what `Basic.clamp_to_another_integer_type`
+  // reads its three constants out of.
+  assert_output(
+    "two :: () -> (a: int, b: int) { return 4, 5; }\n\
+     A, B :: #run two();\n\
+     main :: () {\n  \
+       #assert A == 4;\n  \
+       #assert B == 5;\n  \
+       put_number(A * 10 + B);\n\
+     }\n",
+    "45\n",
+  );
+}
+
+#[test]
+fn a_compound_constant_from_a_run_takes_each_return_type() {
+  assert_output(
+    "shape :: () -> (yes: bool, size: int) { return true, 12; }\n\
+     main :: () {\n  \
+       YES, SIZE :: #run shape();\n  \
+       #assert YES;\n  \
+       put_number(SIZE);\n\
+     }\n",
+    "12\n",
+  );
+}
+
+#[test]
+fn a_name_declared_as_a_bake_is_that_bake() {
+  // `h :: formatHex;` over a `#bake_arguments` is callable the way the bake
+  // itself is (**L§5.11**, **L§7.10**), which is what `debug_info` writes its
+  // size assertions with.
+  assert_output(
+    "add :: (a: int, b: int) -> int { return a + b; }\n\
+     add_ten :: #bake_arguments add(b = 10);\n\
+     h :: add_ten;\n\
+     main :: () {\n  \
+       put_number(add_ten(1));\n  \
+       put_number(h(2));\n\
+     }\n",
+    "11\n12\n",
+  );
+}
+
+#[test]
+fn file_info_directives_name_the_file_they_were_written_in() {
+  // `#file`, `#filepath` and `#line` are where the directive stands
+  // (**L§5.14**) — the fully-pathed name, the directory with its trailing
+  // separator, and the line — which is what `GetRect` loads its images with.
+  let Some(built) = build_and_run(
+    "main :: () {\n  \
+       put(#filepath);\n  \
+       put(\"\\n\");\n  \
+       put(#file);\n  \
+       put(\"\\n\");\n  \
+       put_number(#line);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  let mut lines = built.output.lines();
+  let directory = lines.next().expect("the directory");
+  let file = lines.next().expect("the file");
+  let line = lines.next().expect("the line");
+  assert!(
+    directory.ends_with(std::path::MAIN_SEPARATOR),
+    "'{directory}' should keep its trailing separator"
+  );
+  assert_eq!(file, format!("{directory}program.jai"));
+  // The prelude is in front of the body, so the `#line` is the one the whole
+  // file has rather than the one the body was written at.
+  assert!(line.parse::<u32>().expect("a line number") > 1);
+}
+
+#[test]
+fn a_member_a_using_brought_in_is_reachable_through_the_type() {
+  // A member the flattening added is not in the struct's own scope
+  // (**L§8.4**), and `type_of(Header.magic)` still finds it — which is what
+  // `debug_info` asserts its header sizes with.
+  assert_output(
+    "Header :: union {\n  \
+       using data: struct { magic: [30] u8; page: s32; }\n  \
+       raw: [64] u8;\n\
+     }\n\
+     main :: () {\n  \
+       put_number(size_of(type_of(Header.magic)));\n  \
+       put_number(size_of(type_of(Header.raw)));\n\
+     }\n",
+    "30\n64\n",
+  );
+}
+
+#[test]
+fn a_layout_the_compiler_asked_for_while_running_is_not_a_cycle() {
+  // A `#modify` is lowered against a type table image that measures every type
+  // of the program, including whichever struct body is being resolved right
+  // now — that is not the struct containing itself (**L§8.3**), which is what
+  // `Bindings_Generator`'s context struct runs into.
+  let Some(built) = build_and_run(
+    "#import \"Hash_Table\";\n\
+     Thing :: struct { name: string; }\n\
+     #add_context generator: *struct {\n  \
+       by_name: Table(string, *Thing);\n  \
+       count: s64;\n\
+     };\n\
+     main :: () {\n  \
+       put_number(ifx context.generator then 1 else 0);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "0\n");
+}
+
+#[test]
+fn a_forced_cast_between_two_aggregates_reinterprets_the_bytes() {
+  // `cast,force(T) x` over two structs the same size over is the storage read
+  // as the other type (**L§5.6**), which is how `Basic`'s `S128` and `U128`
+  // are the same bytes.
+  assert_output(
+    "Signed :: struct { low: u64; high: s64; }\n\
+     Unsigned :: struct { low: u64; high: u64; }\n\
+     main :: () {\n  \
+       a: Signed;\n  \
+       a.low = 5;\n  \
+       a.high = -1;\n  \
+       b := cast,force(Unsigned) a;\n  \
+       put_number(cast(int) b.low);\n  \
+       put_number(cast,no_check(int)(b.high == 0xffff_ffff_ffff_ffff));\n\
+     }\n",
+    "5\n1\n",
+  );
+}
+
+#[test]
+fn an_asm_instruction_with_nothing_but_slots_narrows_them_to_registers() {
+  // `imul [rsp + 48]` is ambiguous where `imul rcx` is not, and a shift count
+  // is `cl` whatever the instruction works at (**L§15**) — both of which
+  // `Basic`'s 128-bit arithmetic writes.
+  assert_output(
+    "main :: () {\n  \
+       m: s64 = 7;\n  \
+       count: s64 = 3;\n  \
+       low: s64 = ---;\n  \
+       high: s64 = ---;\n  \
+       #asm {\n    \
+         result_high: gpr === d;\n    \
+         result_low:  gpr === a;\n    \
+         mov result_low, 11;\n    \
+         imul result_high, result_low, m;\n    \
+         mov low, result_low;\n    \
+         mov high, result_high;\n  \
+       }\n  \
+       put_number(low);\n  \
+       put_number(high);\n  \
+       shifted: s64 = 1;\n  \
+       #asm { count === c; }\n  \
+       #asm { shl shifted, count; }\n  \
+       put_number(shifted);\n\
+     }\n",
+    "77\n0\n8\n",
+  );
+}
+
+#[test]
+fn a_return_in_inserted_code_leaves_the_procedure_it_was_written_in() {
+  // Quoted code means what it meant where it was written (**L§13.1**), so a
+  // `return` in it leaves the procedure however many macros it was inserted
+  // through — which is what `Hash_Table`'s `Walk_Table` searches with.
+  assert_output(
+    "walk :: (code: Code) #expand {\n  \
+       `index := 0;\n  \
+       while `index < 4 {\n    \
+         #insert code;\n    \
+         `index += 1;\n  \
+       }\n\
+     }\n\
+     find :: (values: [] int, wanted: int) -> int {\n  \
+       walk(#code {\n    \
+         entry := values[index];\n    \
+         if entry == wanted  return index;\n  \
+       });\n  \
+       return -1;\n\
+     }\n\
+     main :: () {\n  \
+       v: [4] int;\n  \
+       v[0] = 10; v[1] = 20; v[2] = 30; v[3] = 40;\n  \
+       put_number(find(v, 30));\n  \
+       put_number(find(v, 99));\n\
+     }\n",
+    "2\n-1\n",
+  );
+}
+
+#[test]
+fn a_hash_table_finds_what_was_added_to_it() {
+  // `Table`'s own `compare_function` is a constant of the specialization
+  // wherever it is read from (**L§8.5**), and `Walk_Table`'s inserted `#code`
+  // returns from the procedure it was written in (**L§13.1**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     main :: () {\n  \
+       t: Table(string, int);\n  \
+       init(*t, 16);\n  \
+       table_add(*t, \"abc\", 7);\n  \
+       table_add(*t, \"def\", 9);\n  \
+       a, found_a := table_find(*t, \"abc\");\n  \
+       b, found_b := table_find(*t, \"def\");\n  \
+       _, missing := table_find(*t, \"ghi\");\n  \
+       print(\"% % % % %\\n\", a, found_a, b, found_b, missing);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "7 true 9 true false\n");
+}
+
+#[test]
+fn a_procedure_pattern_is_solved_after_the_variables_it_mentions() {
+  // `reduce :: (operation: (x: T, total: T) -> T, values: ..$T)` asks the
+  // first argument for a shape it cannot know until `T` is bound by the rest
+  // (**L§7.9**), so a procedure pattern is the last parameter a call site
+  // solves — which is what `examples/reduce.jai` is.
+  assert_output(
+    "sum :: (x, total) => x + total;\n\
+     add :: (a: int, b: int) -> int { return a + b; }\n\
+     reduce :: (operation: (x: T, total: T) -> T, values: .. $T) -> T {\n  \
+       total: T;\n  \
+       for values  total = operation(it, total);\n  \
+       return total;\n\
+     }\n\
+     main :: () {\n  \
+       put_number(reduce(add, 1, 2, 3));\n  \
+       put_number(reduce(sum, 1, 2, 3));\n\
+     }\n",
+    "6\n6\n",
+  );
+}
+
+#[test]
+fn a_local_whose_initializer_waits_for_a_macro_is_typed_when_the_body_is() {
+  // A `` `x `` a macro declares only exists once it has expanded (**L§7.13**),
+  // so a local made from it could not be typed in the pass before the bodies
+  // were checked — which is what `Simp` reaches its own state through.
+  assert_output(
+    "State :: struct { width: int; }\n\
+     #add_context state_pointer: *State;\n\
+     check_init :: () #expand {\n  \
+       `state := context.state_pointer;\n\
+     }\n\
+     use :: () {\n  \
+       check_init();\n  \
+       held := state;\n  \
+       slot := *state.width;\n  \
+       slot.* = 42;\n  \
+       put_number(held.width);\n\
+     }\n\
+     main :: () {\n  \
+       storage: State;\n  \
+       context.state_pointer = *storage;\n  \
+       use();\n\
+     }\n",
+    "42\n",
+  );
+}
+
+#[test]
+fn an_anonymous_union_statement_shares_one_piece_of_storage() {
+  // `union { a: float64; b: u64; }` written as a statement declares names for
+  // one piece of storage (**L§8.6**), which is how `Math`'s `frexp` reads a
+  // `float64` as its bits.
+  assert_output(
+    "main :: () {\n  \
+       union {\n    \
+         f: float64;\n    \
+         u: u64;\n  \
+       }\n  \
+       f = 1.0;\n  \
+       put_number(cast,no_check(int)(u == 0x3ff0_0000_0000_0000));\n  \
+       u = 0x4000_0000_0000_0000;\n  \
+       put_number(cast(int) f);\n\
+     }\n",
+    "1\n2\n",
+  );
+}
+
+#[test]
+fn a_literal_prefers_the_overload_of_the_type_it_defaults_to() {
+  // A float literal fits both a `float32` and a `float64` parameter, so what
+  // settles the tie is the type it would have taken on its own (**L§5.10**) —
+  // which is what keeps `Math`'s `sqrt :: (x: float)` from calling itself.
+  assert_output(
+    "width :: (x: float32) -> int { return 32; }\n\
+     width :: (x: float64) -> int { return 64; }\n\
+     main :: () {\n  \
+       put_number(width(1.5));\n  \
+       put_number(width(cast(float64) 1.5));\n  \
+       n := 3;\n  \
+       put_number(width(cast(float32) n));\n\
+     }\n",
+    "32\n64\n32\n",
+  );
+}
+
+#[test]
+fn a_restriction_written_as_an_array_of_types_allows_any_of_them() {
+  // `$T/MyVectors` over `MyVectors :: Type.[Vector2, Vector3]` allows any one
+  // of them and nothing else (**L§7.8**), and a pointer is not the thing it
+  // points at — which is what tells `Math.normalize`'s two overloads apart.
+  assert_output(
+    "V2 :: struct { x: float; }\n\
+     V3 :: struct { x: float; y: float; }\n\
+     Mine :: Type.[V2, V3];\n\
+     scale :: (v: *$T/Mine, by := 2.0, fallback := T.{}) -> float {\n  \
+       v.x *= by;\n  \
+       return v.x;\n\
+     }\n\
+     scale :: (v: $T/Mine, by := 2.0, fallback := T.{}) -> T {\n  \
+       w := v;\n  \
+       inline scale(*w, by, fallback);\n  \
+       return w;\n\
+     }\n\
+     main :: () {\n  \
+       a: V2; a.x = 5;\n  \
+       put_number(cast(int) scale(*a));\n  \
+       b: V3; b.x = 5;\n  \
+       put_number(cast(int) scale(b).x);\n\
+     }\n",
+    "10\n10\n",
+  );
+}
+
+#[test]
+fn a_backticked_name_a_static_if_chose_is_the_branch_it_kept() {
+  // A macro may declare the same `` `x `` in each branch of a `#if`, the way
+  // `Hash_Table`'s `for_expansion` writes `` `it := *entry.value `` under
+  // `.POINTER` and `` `it := entry.value `` otherwise (**L§6.10**,
+  // **L§7.13**): what the caller reads is the branch the condition kept,
+  // decided under the expansion that wrote it.
+  assert_output(
+    "give :: ($want_pointer: bool, v: *int) #expand {\n  \
+       #if want_pointer {\n    \
+         `chosen := v;\n  \
+       } else {\n    \
+         `chosen := v.*;\n  \
+       }\n\
+     }\n\
+     main :: () {\n  \
+       n := 7;\n  \
+       give(false, *n);\n  \
+       put_number(chosen);\n\
+     }\n",
+    "7\n",
+  );
+}
+
+#[test]
+fn a_for_expansion_chooses_its_iterator_by_the_flags_it_was_given() {
+  assert_output(
+    "Bag :: struct { values: [3] int; }\n\
+     for_expansion :: (bag: *Bag, body: Code, flags: For_Flags) #expand {\n  \
+       for v, i: bag.values {\n    \
+         #if flags & .POINTER {\n      \
+           `it := *v;\n    \
+         } else {\n      \
+           `it := v;\n    \
+         }\n    \
+         `it_index := i;\n    \
+         #insert body;\n  \
+       }\n\
+     }\n\
+     main :: () {\n  \
+       b: Bag;\n  \
+       b.values[1] = 7;\n  \
+       for b  put_number(it * 10 + it_index);\n\
+     }\n",
+    "0\n71\n2\n",
+  );
+}
+
+#[test]
+fn a_library_the_compiler_built_is_linked_by_the_file_it_is() {
+  // A Jai dynamic library is `<name>.so`, which `-l<name>` would never find,
+  // so a non-system `#library` names the file that is actually there
+  // (**L§12.2**) — which is what `examples/dll` links against.
+  let request = oj_link::Request {
+    objects: vec![std::path::PathBuf::from("program.o")],
+    libraries: vec![oj_ir::Library {
+      name: String::from("helper"),
+      system: false,
+      directory: Some(std::path::PathBuf::from("/nonexistent")),
+    }],
+    output: std::path::PathBuf::from("program"),
+    output_type: oj_link::OutputType::Executable,
+    additional_arguments: Vec::new(),
+  };
+  // Nothing is there, so it stays the plain spelling.
+  let line = oj_link::link_line(&request);
+  assert!(line.arguments.iter().any(|argument| argument == "-lhelper"));
+}
+
+#[test]
+fn a_using_of_a_value_widens_the_scope_of_a_module_for_its_importers() {
+  // A module that writes `using gl;` hands its importers the members of `gl`
+  // the way it hands them any other name (**L§6.8**, **L§11.2**), which is
+  // what makes `glClearColor` a name after `#import "GL"`.
+  assert_output_with_module(
+    "Procs :: struct {\n  \
+       count: int;\n  \
+       twice :: (x: int) -> int { return x * 2; }\n\
+     }\n\
+     procs: Procs;\n\
+     using procs;\n",
+    "#import \"Parameterized\";\n\
+     main :: () {\n  \
+       put_number(twice(21));\n  \
+       put_number(count);\n\
+     }\n",
+    "42\n0\n",
+  );
+}
+
+#[test]
+fn a_procedure_name_is_true_where_a_static_if_reads_it() {
+  // `#if given_hash_function` in `Hash_Table` asks whether the specialization
+  // was handed one: a procedure name is never null, whatever address the back
+  // end gives it (**L§5.9**), and the constant that aliases it is that
+  // specialization's (**L§8.5**).
+  assert_output(
+    "seven :: (k: int) -> int { return k * 7; }\n\
+     Box :: struct (Key: Type, given: (Key) -> int = null) {\n  \
+       #if given {\n    \
+         chosen :: given;\n  \
+       } else {\n    \
+         chosen :: x => 999;\n  \
+       }\n  \
+       value: int;\n\
+     }\n\
+     main :: () {\n  \
+       given: Box(int, seven);\n  \
+       put_number(given.chosen(3));\n  \
+       fallback: Box(int);\n  \
+       put_number(fallback.chosen(3));\n\
+     }\n",
+    "21\n999\n",
+  );
+}
+
+#[test]
+fn a_hash_table_with_its_own_hash_function_uses_it() {
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     seven :: (k: int) -> u32 { return cast(u32)(k * 7); }\n\
+     main :: () {\n  \
+       t: Table(int, int, seven);\n  \
+       print(\"%\\n\", t.hash_function(3));\n  \
+       init(*t, 8);\n  \
+       table_add(*t, 3, 30);\n  \
+       v, ok := table_find(*t, 3);\n  \
+       print(\"% %\\n\", v, ok);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "21\n30 true\n");
+}
+
+#[test]
+fn two_tables_of_different_keys_do_not_share_one_compare_function() {
+  // A procedure declared inside a baked polymorphic struct is one per
+  // specialization, so `Table(int, int)`'s `compare_function` and
+  // `Table(float, int)`'s are two symbols rather than one (**L§8.5**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     main :: () {\n  \
+       a: Table(int, int);\n  \
+       init(*a);\n  \
+       table_add(*a, 1, 2);\n  \
+       b: Table(float, int);\n  \
+       init(*b);\n  \
+       table_add(*b, 1.0, 3);\n  \
+       v1, ok1 := table_find(*a, 1);\n  \
+       v2, ok2 := table_find(*b, 1.0);\n  \
+       print(\"% % % %\\n\", v1, ok1, v2, ok2);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "2 true 3 true\n");
+}
+
+#[test]
+fn a_baked_code_parameter_takes_the_expression_the_call_site_wrote() {
+  // `$c: Code` bakes the syntax rather than what it evaluates to, and `c.type`
+  // is the type of the expression it quotes (**L§13.1**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     f :: ($c: Code) -> u32 {\n  \
+       T :: c.type;\n  \
+       print(\"T is %\\n\", T);\n  \
+       return 42;\n\
+     }\n\
+     main :: () { f(2 + 3 + 4); f(\"Hello, Sailor!\"); }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "T is s64\nT is string\n");
+}
+
+#[test]
+fn an_untyped_struct_literal_tells_two_overloads_apart() {
+  // A `.{…}` converts to every struct, so what it was written as is what
+  // chooses between two candidates (**L§5.7**, **L§7.5**).
+  assert_output(
+    "V2 :: struct { x: int; y: int; }\n\
+     V3 :: struct { x: int; y: int; z: int; }\n\
+     f :: (p: V2) -> int { return 2; }\n\
+     f :: (p: V3) -> int { return 3; }\n\
+     main :: () {\n  \
+       put_number(f(.{1, 2}));\n  \
+       put_number(f(.{1, 2, 3}));\n\
+     }\n",
+    "2\n3\n",
+  );
+}
+
+#[test]
+fn an_untyped_struct_literal_reaches_a_polymorphic_parameter() {
+  // `array_add(*things, .{…})` takes `T` from the pointer and lets the literal
+  // be whatever the parameter says (**L§5.7**, **L§7.8**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Thing :: struct { name: string; n: int; }\n\
+     main :: () {\n  \
+       things: [..] Thing;\n  \
+       array_add(*things, .{\"x\", 3});\n  \
+       print(\"% %\\n\", things.count, things[0].n);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "1 3\n");
+}
+
+#[test]
+fn a_shift_by_a_narrow_integer_is_an_s64() {
+  // A shift keeps its left operand's type, and a literal there defaults the
+  // way an untyped integer does anywhere else (**L§5.10**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     FLAG :: 1 << 3;\n\
+     main :: () {\n  \
+       a: u8 = 3;\n  \
+       b := 1 << a;\n  \
+       x: u8 = FLAG;\n  \
+       print(\"% % %\\n\", type_of(b), b, x);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "s64 8 8\n");
+}
+
+#[test]
+fn an_autocast_operand_takes_the_other_ones_type() {
+  // `xx n - 1` has no type of its own: `for i: a..xx n-1` is what asks for one
+  // (**L§5.6**).
+  assert_output(
+    "main :: () {\n  \
+       required: u32 = 4;\n  \
+       for i: 2..xx required-1 put_number(i);\n  \
+       start: s64 = 10;\n  \
+       put_number(start + xx required);\n\
+     }\n",
+    "2\n3\n14\n",
+  );
+}
+
+#[test]
+fn two_integer_constants_of_unlike_types_agree_on_the_wider_one() {
+  // `Math.U64_MAX / (size_of(Key) + size_of(Value))` mixes a `u64` with an
+  // `s64` and is a `u64`, where the same operator on two variables is
+  // rejected (**L§5.10**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Math :: #import \"Math\";\n\
+     M :: Math.U64_MAX / (size_of(int) + size_of(string));\n\
+     main :: () { print(\"% %\\n\", type_of(M), M); }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "u64 768614336404564650\n");
+}
+
+#[test]
+fn a_null_constant_takes_the_pointer_type_it_was_declared_with() {
+  // `offset: *T : null;` is a `*T`, which is what makes `*offset.member` the
+  // member's offset (**L§3.2**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     V :: struct { a: float; b: float; c: float; }\n\
+     main :: () {\n  \
+       offset: *V : null;\n  \
+       q := *offset.c;\n  \
+       print(\"% %\\n\", type_of(q), cast(int) q);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "*float32 8\n");
+}
+
+#[test]
+fn a_call_through_a_procedure_type_takes_the_defaults_it_was_written_with() {
+  // The defaults live on the annotation: `f: (enable := false);` is callable
+  // with nothing (**L§7.2**).
+  assert_output(
+    "Procs :: struct { f: (enable := false); }\n\
+     procs: Procs;\n\
+     real :: (enable := false) { put_number(cast(int) enable); }\n\
+     main :: () {\n  \
+       procs.f = real;\n  \
+       procs.f();\n  \
+       procs.f(true);\n\
+     }\n",
+    "0\n1\n",
+  );
+}
+
+#[test]
+fn a_using_of_a_value_shadows_a_name_declared_further_out() {
+  // Inside `{ using procs; … }`, `f` is the member rather than the procedure
+  // of that name (**L§6.8**).
+  assert_output(
+    "Procs :: struct { f: (a: int); }\n\
+     procs: Procs;\n\
+     f :: (r: string) { put(\"outer\\n\"); }\n\
+     real :: (a: int) { put_number(a); }\n\
+     main :: () {\n  \
+       using procs;\n  \
+       if !f  f = real;\n  \
+       f(7);\n\
+     }\n",
+    "7\n",
+  );
+}
+
+#[test]
+fn a_name_declares_itself_after_the_value_it_is_given() {
+  // A local is not in scope in its own initializer: `type, ok := get_type(t,
+  // type)` reads the parameter, not the name it is declaring (**L§6.13**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Id :: #type,distinct u32;\n\
+     get_one :: (xs: [] int, id: Id) -> int, bool {\n  \
+       if id >= 1  return xs[0], true;\n  \
+       return -1, false;\n\
+     }\n\
+     outer :: (xs: [] int, id: Id) -> int, bool {\n  \
+       id2, ok := get_one(xs, id);\n  \
+       return id2, ok;\n\
+     }\n\
+     main :: () {\n  \
+       xs := int.[7];\n  \
+       v, ok := outer(xs, 2);\n  \
+       print(\"% %\\n\", v, ok);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "7 true\n");
+}
+
+#[test]
+fn one_name_of_a_compound_declaration_may_declare_itself() {
+  // `declaration:, offset, success = f();` declares the first and assigns to
+  // the rest (**L§4.5**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     g :: () -> string, int, bool { return \"a\", 1, true; }\n\
+     main :: () {\n  \
+       offset := 0;\n  \
+       success := false;\n  \
+       declaration:, offset, success = g();\n  \
+       print(\"% % %\\n\", declaration, offset, success);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "a 1 true\n");
+}
+
+#[test]
+fn a_pointer_is_indexed_beside_a_subscript_operator() {
+  // Only a struct can overload `[]`, so `str.data[i]` on a `*u8` is an index
+  // whatever `operator []`s the program declares elsewhere (**L§5.4**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Boxed :: struct { values: [4] int; }\n\
+     operator [] :: (b: Boxed, index: int) -> int { return b.values[index]; }\n\
+     main :: () {\n  \
+       text := \"hello\";\n  \
+       print(\"%\\n\", text.data[1]);\n  \
+       b: Boxed;\n  \
+       b.values[2] = 9;\n  \
+       print(\"%\\n\", b[2]);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "101\n9\n");
+}
+
+#[test]
+fn a_module_alias_reaches_the_module_it_names() {
+  // `P :: Posix;` names whatever `Posix` names (**L§11.2**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     B :: #import \"Basic\";\n\
+     main :: () {\n  \
+       P :: B;\n  \
+       P.print(\"hi %\\n\", 1);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "hi 1\n");
+}
+
+#[test]
+fn a_struct_pointer_reaches_a_parameter_written_as_the_family() {
+  // `max_load_factor(map)` hands a `*Pdb_Map(K, V)` to a `Pdb_Map`
+  // (**L§7.6**, **L§8.5**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Map :: struct (K: Type, V: Type) { keys: [] K; values: [] V; }\n\
+     load :: (m: Map) -> int { return m.keys.count * 2 / 3 + 1; }\n\
+     use :: (m: *Map($K, $V)) -> int { return load(m); }\n\
+     main :: () {\n  \
+       m: Map(int, string);\n  \
+       print(\"%\\n\", use(*m));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "1\n");
+}
+
+#[test]
+fn a_for_expansion_inside_a_polymorphic_body_names_its_own_it() {
+  // The loop's `it` belongs to the instantiation the loop was written in, not
+  // to the expansion (**L§7.8**, **L§7.14**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     to_array_by_pointer :: (table: $T/Table) -> [..] *T.Value_Type {\n  \
+       result: [..] *T.Value_Type;\n  \
+       for * table  array_add(*result, it);\n  \
+       return result;\n\
+     }\n\
+     main :: () {\n  \
+       t: Table(int, int);\n  \
+       init(*t);\n  \
+       table_add(*t, 1, 2);\n  \
+       a := to_array_by_pointer(t);\n  \
+       print(\"% %\\n\", a.count, a[0].*);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "1 2\n");
+}
+
+#[test]
+fn a_sixteen_bit_byte_swap_is_a_rotate() {
+  // `bswap` has no 16-bit form the integrated assembler will take, and a
+  // 16-bit byte swap *is* a rotate by eight (**L§15**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Bit_Operations\";\n\
+     main :: () {\n  \
+       a: u16 = 0x1234;\n  \
+       b: u32 = 0x12345678;\n  \
+       print(\"% %\\n\", formatInt(byte_swap(a), base = 16), formatInt(byte_swap(b), base = 16));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "3412 78563412\n");
+}
+
+#[test]
+fn a_library_is_found_from_the_file_the_foreign_header_was_written_in() {
+  // A binding written before a `#scope_file` belongs to the module, while the
+  // `#library` it names is written after it (**L§11.1**, **L§12.2**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     stb :: #import \"stb_image_write\";\n\
+     main :: () {\n  \
+       write := stb.stbi_write_png;\n  \
+       print(\"%\\n\", write != null);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "true\n");
+}
+
+#[test]
+fn a_foreign_header_with_any_varargs_is_a_c_variadic_call() {
+  // `syscall :: (__sysno: s64, __args: ..Any) -> s64 #foreign libc;` is C's
+  // `...`: each argument past the fixed ones is passed on its own rather than
+  // gathered into a `[] Any`, which is what `stat` needs (**L§7.11**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"File_Utilities\";\n\
+     main :: () {\n  \
+       print(\"% %\\n\", file_exists(\"/tmp\"), is_directory(\"/tmp\"));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "true true\n");
+}
+
+#[test]
+fn an_insert_with_an_empty_scope_resolves_where_it_is_written() {
+  // `#insert,scope() code` resolves the quoted names at the insertion point
+  // rather than where the `#code` was written, and a `Code` that names a piece
+  // of program tests true (**L§13.1**, **L§13.2**).
+  assert_output(
+    "f :: (x: int, $code := #code,null) -> int {\n  \
+       #if code {\n    \
+         v := #insert,scope() code;\n  \
+       } else {\n    \
+         v := x;\n  \
+       }\n  \
+       return v * 2;\n\
+     }\n\
+     main :: () {\n  \
+       put_number(f(3));\n  \
+       put_number(f(3, #code x + 10));\n\
+     }\n",
+    "6\n26\n",
+  );
+}
+
+#[test]
+fn a_run_inside_an_unsolved_specialization_does_not_execute() {
+  // A call written inside a polymorphic body is solved against *that* body's
+  // variables while it is checked on its own; the shape that produces is not a
+  // call site's, so nothing in it runs (**L§7.8**, **L§12.1**).
+  assert_output(
+    "needs_a_size :: ($T: Type) -> bool {\n  \
+       #assert size_of(T) > 0;\n  \
+       return true;\n\
+     }\n\
+     outer :: (value: *$T) -> bool {\n  \
+       return needs_a_size(T);\n\
+     }\n\
+     main :: () {\n  \
+       put_number(1);\n\
+     }\n",
+    "1\n",
+  );
+}

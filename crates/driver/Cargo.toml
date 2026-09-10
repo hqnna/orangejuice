@@ -19,6 +19,7 @@ oj-sema.workspace = true
 oj-types.workspace = true
 
 [dev-dependencies]
+oj-ir.workspace = true
 oj-link.workspace = true
 oj-meta.workspace = true
 oj-testsupport.workspace = true
