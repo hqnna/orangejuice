@@ -29,6 +29,10 @@ pub struct RunRequest {
   pub block: NodeId,
   /// The type the run produces, `void` when it produces nothing.
   pub result: TypeId,
+  /// Every value the run produces, first one first: `A, B :: #run f();` takes
+  /// as many as `f` returns, and the run executes once for all of them
+  /// (**L§4.5**). A run with one value has just `result` here.
+  pub results: Vec<TypeId>,
   /// The single expression a `#run expr` evaluates. A run whose body is a
   /// block of statements has none and returns through its header instead.
   pub value: Option<NodeId>,
@@ -43,6 +47,9 @@ pub struct RunRequest {
 pub enum RunOutcome {
   /// The run produced this value.
   Value(Const),
+  /// The run produced several values, which is what a call with several
+  /// returns behind a compound declaration does (**L§4.5**).
+  Values(Vec<Const>),
   /// The run produced nothing, which is what a statement `#run` does.
   Void,
   /// The run could not be executed. The engine has already reported why.
@@ -107,6 +114,15 @@ impl Checker<'_> {
     if self.program().is_uninstantiated(written) && key.0.is_none() {
       return Expr::UNKNOWN;
     }
+    // A specialization solved against another body's variables is a shape
+    // rather than a call site's: its constants are still variables, so nothing
+    // written in it can run yet (**L§7.8**, **L§12.1**).
+    if key
+      .0
+      .is_some_and(|instance| self.instance_is_unsolved(instance))
+    {
+      return Expr::UNKNOWN;
+    }
     if !self.runs_in_flight.insert(key) {
       let span = self
         .ast(source)
@@ -118,6 +134,91 @@ impl Checker<'_> {
     self.runs_in_flight.remove(&key);
     self.runs.insert(key, result.clone());
     result
+  }
+
+  /// The values a `#run` behind a compound declaration produces (**L§4.5**):
+  /// `A, B :: #run f();` runs `f` once and takes both of its returns. A run
+  /// that produces one value answers with that one, so a caller does not have
+  /// to know which shape it asked about.
+  pub(crate) fn run_values(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    results: &[TypeId],
+  ) -> Option<Vec<Const>> {
+    if results.len() < 2 {
+      return self
+        .run_type(scope, source, node)
+        .constant
+        .map(|one| vec![one]);
+    }
+    let written = self
+      .program()
+      .directive_scope(source, node)
+      .unwrap_or(scope);
+    let key = (self.instance_of_scope(written), source, node);
+    if let Some(cached) = self.run_tuples.get(&key) {
+      return Some(cached.clone());
+    }
+    if self.undecided_static_ifs > 0 {
+      return None;
+    }
+    if self.program().is_uninstantiated(written) && key.0.is_none() {
+      return None;
+    }
+    if results
+      .iter()
+      .any(|type_id| self.types().is_unknown(*type_id))
+    {
+      return None;
+    }
+    if !self.runs_in_flight.insert(key) {
+      let span = self
+        .ast(source)
+        .map_or(Span::at(0), |ast| ast.node(node).span);
+      self.error(source, span, "The program contains circular dependencies.");
+      return None;
+    }
+    let values = self.run_values_uncached(scope, source, node, results);
+    self.runs_in_flight.remove(&key);
+    if let Some(values) = &values {
+      self.run_tuples.insert(key, values.clone());
+    }
+    values
+  }
+
+  fn run_values_uncached(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    results: &[TypeId],
+  ) -> Option<Vec<Const>> {
+    let ast = self.ast(source)?;
+    let NodeData::DirectiveRun(run) = ast.data(node) else {
+      return None;
+    };
+    let run = run.clone();
+    let span = ast.node(node).span;
+    let header = run.procedure;
+    let scope = self.scope_at(source, header, scope);
+    let block = self.run_block(source, header)?;
+    let shape = Shape {
+      source,
+      scope,
+      header,
+      block,
+      value: self.run_value_expression(source, block, run.flags),
+      span,
+    };
+    let mut request = self.run_request(&shape, *results.first()?);
+    request.results = results.to_vec();
+    match self.execute(&request) {
+      RunOutcome::Values(values) => Some(values),
+      RunOutcome::Value(one) => Some(vec![one]),
+      RunOutcome::Void | RunOutcome::Failed => None,
+    }
   }
 
   fn run_type_uncached(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
@@ -175,6 +276,12 @@ impl Checker<'_> {
     let request = self.run_request(&shape, result);
     match self.execute(&request) {
       RunOutcome::Value(constant) => Expr::constant(constant),
+      // One name receiving a run of several values takes the first, the way
+      // one receiving a call of several returns does (**L§4.5**).
+      RunOutcome::Values(values) => match values.into_iter().next() {
+        Some(first) => Expr::constant(first),
+        None => Expr::UNKNOWN,
+      },
       RunOutcome::Void => Expr::value(result),
       RunOutcome::Failed => Expr::UNKNOWN,
     }
@@ -190,6 +297,7 @@ impl Checker<'_> {
         let request = self.run_request(shape, TypeId::BOOL);
         match self.execute(&request) {
           RunOutcome::Value(constant) => constant.value.truth(),
+          RunOutcome::Values(values) => values.first().and_then(|first| first.value.truth()),
           RunOutcome::Void | RunOutcome::Failed => None,
         }
       }
@@ -232,6 +340,7 @@ impl Checker<'_> {
       header: shape.header,
       block: shape.block,
       result,
+      results: vec![result],
       value: shape.value,
       symbol,
       span: shape.span,
@@ -242,7 +351,10 @@ impl Checker<'_> {
     let Some(engine) = self.compile_time.clone() else {
       return RunOutcome::Failed;
     };
-    engine.evaluate(self, request)
+    self.enter_compile_time();
+    let outcome = engine.evaluate(self, request);
+    self.leave_compile_time();
+    outcome
   }
 
   /// The block a `#run`'s wrapper header carries.
@@ -278,6 +390,36 @@ impl Checker<'_> {
       return None;
     };
     is_value_expression(ast.data(only)).then_some(only)
+  }
+
+  /// Every type a `#run` produces (**L§4.5**): the returns of the call it
+  /// evaluates, or the one type it otherwise has. A compound declaration is
+  /// the only place more than one of them can be received.
+  pub(crate) fn run_result_types(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Vec<TypeId> {
+    let Some(ast) = self.ast(source) else {
+      return Vec::new();
+    };
+    let NodeData::DirectiveRun(run) = ast.data(node) else {
+      return Vec::new();
+    };
+    let (flags, header) = (run.flags, run.procedure);
+    let header_scope = self.scope_at(source, header, scope);
+    if let Some(block) = self.run_block(source, header)
+      && let Some(expression) = self.run_value_expression(source, block, flags)
+      && let Some(NodeData::ProcedureCall(_)) = self.ast(source).map(|ast| ast.data(expression))
+    {
+      let call_scope = self.scope_at(source, expression, header_scope);
+      let returns = self.call_return_types(call_scope, source, expression);
+      if returns.len() > 1 {
+        return returns;
+      }
+    }
+    vec![self.run_type(scope, source, node).type_id]
   }
 
   /// The type a `#run -> T { … }` says it produces.

@@ -211,6 +211,31 @@ impl Checker<'_> {
     result
   }
 
+  /// What a `Code` parameter is bound to (**L§13.1**). An argument that already
+  /// *is* a `Code` hands over the program it holds rather than the name it was
+  /// written as: `e :: #code …; macro(e)` passes what `e` quotes. Anything else
+  /// is the syntax the call site wrote, unevaluated, which is what a
+  /// `for_expansion`'s loop body, `macro(x = 7)` and `f(2 + 3 + 4)` are.
+  fn code_argument(
+    &mut self,
+    value: &Expr,
+    written: Option<(SourceId, NodeId, ScopeId)>,
+  ) -> Option<Const> {
+    match &value.constant {
+      Some(constant) if value.type_id == TypeId::CODE => Some(constant.clone()),
+      _ => written.map(|(source, node, scope)| {
+        Const::new(
+          TypeId::CODE,
+          Value::Code {
+            source,
+            node,
+            scope,
+          },
+        )
+      }),
+    }
+  }
+
   /// Runs `body` with `instance` as the active instantiation.
   pub(crate) fn with_instance<T>(
     &mut self,
@@ -221,6 +246,27 @@ impl Checker<'_> {
     let result = body(self);
     self.current_instance = previous;
     result
+  }
+
+  /// Whether an instantiation's constants are still variables. A call written
+  /// inside a polymorphic body is solved against *that* body's variables while
+  /// it is being checked on its own, which produces a shape rather than a
+  /// specialization: nothing in it can run until a real call site binds them
+  /// (**L§7.8**, **L§12.1**).
+  pub(crate) fn instance_is_unsolved(&self, id: InstanceId) -> bool {
+    let mut current = Some(id);
+    while let Some(instance) = current {
+      let info = self.instance(instance);
+      if info.bindings.iter().any(|(_, value)| {
+        value
+          .as_type()
+          .is_some_and(|type_id| self.is_polymorphic_type(type_id))
+      }) {
+        return true;
+      }
+      current = info.parent;
+    }
+    false
   }
 
   pub(crate) fn instance_type(&self, id: InstanceId) -> TypeId {
@@ -421,6 +467,7 @@ impl Checker<'_> {
       Some(existing) => *existing,
       None => {
         let id = InstanceId(self.instances.len() as u32);
+        self.program().mark_instantiated(arguments_scope);
         self.instances.push(Instance {
           decl: None,
           source: body_source,
@@ -476,6 +523,13 @@ impl Checker<'_> {
     // `$T/Blentity` on a polymorphic struct means any instantiation of it.
     if self.instantiation_passed(restriction, actual).is_some() {
       return true;
+    }
+    // A pointer is not the thing it points at as far as a restriction is
+    // concerned. Following one is a conversion the *call site* does, and
+    // letting it satisfy the binding is what would make both of
+    // `Math.normalize`'s overloads viable for a `*Vector2` (**L§7.8**).
+    if self.types().pointee(actual).is_some() && self.types().pointee(restriction).is_none() {
+      return false;
     }
     self.as_conversion(actual, restriction, 0).is_some()
   }
@@ -737,6 +791,7 @@ impl Checker<'_> {
     }
 
     let id = InstanceId(self.instances.len() as u32);
+    self.program().mark_instantiated(scopes.constants);
     self.instances.push(Instance {
       decl: signature.decl,
       source,
@@ -801,20 +856,36 @@ impl Checker<'_> {
     // A literal argument is whatever the header wants, so it only decides a
     // `$T` that nothing typed did: `compare_and_swap(*lock, 0, 1)` takes `T`
     // from the pointer and converts the two literals to it (**L§7.8**).
-    let typed_first = slots
+    // A parameter written as a procedure *pattern* is solved last: the shape it
+    // asks the argument for is only known once the variables it mentions have
+    // been bound by the other arguments, which is what `reduce :: (operation:
+    // (x: T, total: T) -> T, values: ..$T)` needs (**L§7.9**).
+    let tier = |checker: &Self, index: usize, argument: &CallArgument| -> u8 {
+      let pattern = signature
+        .parameters
+        .get(index)
+        .is_some_and(|parameter| checker.is_procedure_pattern(parameter.type_id));
+      // An `xx` argument has no type of its own either, so it decides nothing
+      // until the others have (**L§5.6**).
+      let untyped = checker.types().is_untyped(argument.value.type_id)
+        || (argument.value.autocast && argument.value.is_unknown());
+      match (pattern, untyped) {
+        (true, _) => 2,
+        (false, true) => 1,
+        (false, false) => 0,
+      }
+    };
+    let mut ordered: Vec<(u8, usize, CallArgument)> = slots
       .iter()
       .copied()
       .zip(arguments)
-      .filter(|(_, argument)| !self.types().is_untyped(argument.value.type_id))
-      .chain(
-        slots
-          .iter()
-          .copied()
-          .zip(arguments)
-          .filter(|(_, argument)| self.types().is_untyped(argument.value.type_id)),
-      )
-      .map(|(index, argument)| (index, argument.clone()))
-      .collect::<Vec<_>>();
+      .map(|(index, argument)| (tier(self, index, argument), index, argument.clone()))
+      .collect();
+    ordered.sort_by_key(|(tier, _, _)| *tier);
+    let typed_first: Vec<(usize, CallArgument)> = ordered
+      .into_iter()
+      .map(|(_, index, argument)| (index, argument))
+      .collect();
     for (index, argument) in typed_first {
       let argument = &argument;
       let parameter = signature.parameters.get(index)?;
@@ -890,6 +961,15 @@ impl Checker<'_> {
       // has to be one; a `$$x` takes one when the call site has one and stays
       // an ordinary parameter otherwise (**L§7.8**).
       if let Some((decl, required)) = self.baked_parameter_decl(source, signature, index) {
+        // A `$c: Code` bakes the syntax the call site wrote, not what it would
+        // evaluate to: `f(2 + 3 + 4)` hands `f` the sum, which is what lets its
+        // body ask `c.type` (**L§13.1**).
+        if parameter.type_id == TypeId::CODE
+          && let Some(bound) = self.code_argument(&argument.value, argument.written)
+        {
+          solution.bindings.push((decl, bound));
+          continue;
+        }
         // A procedure name is a constant like any other declared with `::`
         // (**L§5.11**), which is what lets `$$x` bake one and the body ask
         // `is_constant(x)` about it. It has no value of its own before that,
@@ -926,19 +1006,9 @@ impl Checker<'_> {
         && let Some(decl) = self.header_parameter_decl(source, signature, index)
       {
         if parameter.type_id == TypeId::CODE
-          && let Some((written_source, node, written_scope)) = argument.written
+          && let Some(bound) = self.code_argument(&argument.value, argument.written)
         {
-          solution.bindings.push((
-            decl,
-            Const::new(
-              TypeId::CODE,
-              Value::Code {
-                source: written_source,
-                node,
-                scope: written_scope,
-              },
-            ),
-          ));
+          solution.bindings.push((decl, bound));
           continue;
         }
         if let Some(value) = argument.value.constant.clone() {
@@ -1306,7 +1376,17 @@ impl Checker<'_> {
   /// names, in which case the parameter is of *that* type (**L§7.8**). A
   /// pointer to one counts, at the same level of indirection.
   fn instantiation_passed(&self, pattern: TypeId, actual: TypeId) -> Option<TypeId> {
-    (self.mentions_family(pattern) && self.family_matches(pattern, actual)).then_some(actual)
+    if !self.mentions_family(pattern) {
+      return None;
+    }
+    if self.family_matches(pattern, actual) {
+      return Some(actual);
+    }
+    // A struct pointer is dereferenced once to reach a parameter written as
+    // the struct: `max_load_factor(map)` hands a `*Pdb_Map(K, V)` to a
+    // `Pdb_Map` (**L§7.6**, **L§8.5**).
+    let pointee = self.types().pointee(actual)?;
+    self.family_matches(pattern, pointee).then_some(pointee)
   }
 
   /// Whether a type slot names a polymorphic struct family anywhere inside it:
@@ -1463,6 +1543,17 @@ impl Checker<'_> {
     ) {
       return true;
     }
+    // A `.{…}` or `.[…]` has no type of its own: the parameter is what says
+    // what it is (**L§5.8**). Once the other arguments have decided the
+    // variables the parameter mentions, the literal has nothing left to say
+    // and nothing to contradict, which is what lets `array_add(*things,
+    // .{"x", 3})` reach `array_add :: (array: *[..] $T, item: T)`.
+    if value.type_id == TypeId::UNTYPED_LITERAL || (value.autocast && value.is_unknown()) {
+      let resolved = self.substitute(pattern, substitution);
+      if !self.is_polymorphic_type(resolved) {
+        return true;
+      }
+    }
     // A name that stands for a whole overload set decides a variable through
     // the one member whose shape the pattern already admits (**L§7.5**).
     if !value.overloads.is_empty() && self.types().procedure_of(pattern).is_some() {
@@ -1569,6 +1660,19 @@ impl Checker<'_> {
         // through `using`/`#as` (**L§7.8**).
         let info = self.types().polymorph_info(definition);
         let (restriction, interface) = (info.restriction, info.interface);
+        let alternatives = info.alternatives.clone();
+        // A restriction written as an array of types allows any one of them
+        // (**L§7.8**), which is what tells `Math.normalize`'s two overloads
+        // apart: `*Vector2` is none of them.
+        if !alternatives.is_empty() {
+          return alternatives
+            .into_iter()
+            .any(|allowed| self.satisfies_restriction(actual, allowed, interface))
+            && {
+              substitution.entry(definition).or_insert(actual);
+              true
+            };
+        }
         if let Some(restriction) = restriction
           && !self.satisfies_restriction(actual, restriction, interface)
         {

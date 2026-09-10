@@ -313,10 +313,10 @@ fn a_condition_needs_a_truth_value() {
     }
     ",
   );
-  assert_eq!(
-    errors("f :: (a: [4] s64) { if a {} }"),
-    vec!["Type [4] s64 cannot implicitly coerce to bool.".to_string()]
-  );
+  // A fixed array's count is a constant, so it has a truth value like any
+  // other array (**L§5.9**) — measured against the reference, where a `[4]` is
+  // true and a `[0]` is false, and what `Treemap`'s `if node.border` reads.
+  accepts("f :: (a: [4] s64) { if a {} }");
 }
 
 #[test]

@@ -144,7 +144,9 @@ impl Checker<'_> {
       let Some(engine) = self.compile_time.clone() else {
         return Some(bindings);
       };
+      self.enter_compile_time();
       let outcome = engine.modify(self, &request);
+      self.leave_compile_time();
       self.modify_in_flight.remove(&instance);
       match outcome {
         ModifyOutcome::Accepted(values) => {

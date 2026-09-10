@@ -10,6 +10,10 @@ use crate::constants::Value;
 pub(crate) const EXACT: u32 = 0;
 pub(crate) const AS_STEP: u32 = 1;
 pub(crate) const LITERAL: u32 = 8;
+/// A literal converting to the type it *defaults* to is nearer than one
+/// converting to another type it also fits, which is what tells `sqrt(float)`
+/// and `sqrt(float64)` apart at `sqrt(25.0)` (**L§5.10**, **L§7.5**).
+pub(crate) const LITERAL_DEFAULT: u32 = 7;
 pub(crate) const WIDENING: u32 = 16;
 pub(crate) const POINTER: u32 = 24;
 pub(crate) const ANY: u32 = 64;
@@ -173,43 +177,49 @@ impl Checker<'_> {
   /// (**L§5.10** rules 1, 10 and 11).
   fn untyped_conversion(&mut self, value: &Expr, target: TypeId) -> Option<u32> {
     let underlying = self.types().underlying(target);
+    // A literal fits several types, so what settles a tie between two
+    // overloads is the one it would have taken on its own (**L§5.10** rule 1).
+    let literal = match self.harden(value.type_id) == underlying {
+      true => LITERAL_DEFAULT,
+      false => LITERAL,
+    };
     match *self.types().kind(value.type_id) {
       TypeKind::UntypedInt => {
         if self.types().is_float(underlying) {
-          return Some(LITERAL);
+          return Some(literal);
         }
         if let Some(kind) = self.types().integer_kind(underlying) {
           // The literal has to fit exactly: `foo: s32 = 0x0001_0203_0405_0600;`
           // is a loss of information (**L§5.10**). A hexadecimal or binary
           // literal is a bit pattern, so it only has to fit the width.
           let Some(constant) = value.constant.as_ref() else {
-            return Some(LITERAL);
+            return Some(literal);
           };
           let Value::Int(number) = constant.value else {
-            return Some(LITERAL);
+            return Some(literal);
           };
           if kind.holds(number) {
-            return Some(LITERAL);
+            return Some(literal);
           }
           let width = i128::from(u8::try_from(kind.size() * 8).unwrap_or(64));
           return (constant.bit_pattern && number >= 0 && number < (1i128 << width))
-            .then_some(LITERAL);
+            .then_some(literal);
         }
         None
       }
-      TypeKind::UntypedFloat(_) => self.types().is_float(underlying).then_some(LITERAL),
+      TypeKind::UntypedFloat(_) => self.types().is_float(underlying).then_some(literal),
       // A bare `.NAME` needs the enum the context supplies (**L§5.12**).
       TypeKind::UntypedEnum => {
         let definition = self.types().enum_of(underlying)?;
         let name = match value.constant.as_ref().map(|constant| &constant.value) {
           Some(Value::EnumName(name)) => *name,
-          _ => return Some(LITERAL),
+          _ => return Some(literal),
         };
         self
           .types()
           .enum_info(definition)
           .value_of(name)
-          .map(|_| LITERAL)
+          .map(|_| literal)
       }
       // `.{…}` and `.[…]` take the struct or array type the context wants
       // (**L§5.7**, **L§5.8**).
@@ -217,7 +227,7 @@ impl Checker<'_> {
         self.types().kind(underlying),
         TypeKind::Struct(_) | TypeKind::Array { .. } | TypeKind::String
       )
-      .then_some(LITERAL),
+      .then_some(literal),
       _ => None,
     }
   }

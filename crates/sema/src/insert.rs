@@ -144,16 +144,26 @@ impl Checker<'_> {
           }) => *inner,
           _ => code,
         };
+        // `#insert,scope() code` resolves the quoted names *here* rather than
+        // where the `#code` was written, which is what lets a caller hand a
+        // body an expression over the body's own locals (**L§13.2**).
+        let here = matches!(ast.data(expression), NodeData::DirectiveRun(_))
+          || (insert.has_scope_redirection && insert.scope_redirection.is_none());
+        let scope = match here {
+          true => target,
+          false => self
+            .program()
+            .directive_scope(code_source, code)
+            .unwrap_or(code_scope),
+        };
+        // A `#code`'s contents were never walked — quoted code is typechecked
+        // where it is inserted — so this is where its blocks open their scopes
+        // and its declarations enter one (**L§13.1**).
+        self.program().admit_code(scope, code_source, root);
         Some(Expansion {
           source: code_source,
           root,
-          scope: match matches!(ast.data(expression), NodeData::DirectiveRun(_)) {
-            true => target,
-            false => self
-              .program()
-              .directive_scope(code_source, code)
-              .unwrap_or(code_scope),
-          },
+          scope,
         })
       }
       _ => {

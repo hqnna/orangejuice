@@ -80,12 +80,13 @@ impl Checker<'_> {
           Expr::place(context)
         }
       }
-      NodeData::DirectiveFileInfo { which } => match which {
-        FileInfoKind::File | FileInfoKind::Filepath => {
-          Expr::constant(Const::string(Box::from(&b""[..])))
-        }
-        FileInfoKind::Line => Expr::constant(Const::untyped_int(0)),
-      },
+      // `#file`, `#filepath` and `#line` are where the directive itself was
+      // written (**L§5.14**): the fully-pathed name of the file, the directory
+      // holding it with a trailing separator, and the line.
+      NodeData::DirectiveFileInfo { which } => {
+        let which = *which;
+        self.file_info(source, node, which)
+      }
       // `#location` is a constant struct literal, whatever it names
       // (**L§5.11**); `#caller_location` names the call site, which is what
       // keeps two of them apart when a `$x := #caller_location` bakes them.
@@ -464,6 +465,9 @@ impl Checker<'_> {
       }
       return Expr::type_expression(self.polymorph_type(source, node, name));
     }
+    // Where the name was written, so that a declaration whose own initializer
+    // it stands in does not answer for it (**L§6.13**).
+    let here = self.ast(source).map(|ast| (source, ast.node(node).span));
     // `` `x `` names the caller's scope, never the macro's own (**L§7.13**).
     let start = match flags.contains(IdentFlags::HAS_SCOPE_MODIFIER) {
       true => match self.caller_scope() {
@@ -478,7 +482,7 @@ impl Checker<'_> {
     // the loop for it while the macro is being typed goes in a circle
     // (**L§7.13**, **L§7.14**).
     if flags.contains(IdentFlags::HAS_SCOPE_MODIFIER) {
-      let caller = self.lookup_from(start, name);
+      let caller = self.lookup_from(start, name, here);
       if let Some(found) = caller.clone().filter(|found| !found.is_unknown()) {
         return found;
       }
@@ -492,7 +496,14 @@ impl Checker<'_> {
         return found;
       }
     }
-    if let Some(found) = self.lookup_from(start, name) {
+    if let Some(found) = self.lookup_from(start, name, here) {
+      // A `using` of a value written inside a body shadows a name declared
+      // further out: in `{ using draw_procs; … set_scissor = …; }`,
+      // `set_scissor` is the member, not the module's procedure of that name
+      // (**L§6.8**).
+      if let Some(shadowing) = self.locally_used_name_type(start, name) {
+        return shadowing;
+      }
       return found;
     }
     // A name no declaration holds may still be a member of something a
@@ -504,7 +515,7 @@ impl Checker<'_> {
     // scopes do not hold (**L§7.13**).
     let caller = self.caller_scope().and_then(|caller| {
       self
-        .lookup_from(caller, name)
+        .lookup_from(caller, name, here)
         .or_else(|| self.used_name_type(caller, name))
     });
     if let Some(found) = caller.clone().filter(|found| !found.is_unknown()) {
@@ -622,7 +633,12 @@ impl Checker<'_> {
 
   /// Resolves `name` on the chain out of `scope`. `None` means it is not there
   /// at all, which is what lets a macro's body fall back to its caller.
-  fn lookup_from(&mut self, scope: ScopeId, name: Symbol) -> Option<Expr> {
+  fn lookup_from(
+    &mut self,
+    scope: ScopeId,
+    name: Symbol,
+    at: Option<(SourceId, Span)>,
+  ) -> Option<Expr> {
     let mut scope = scope;
     loop {
       let Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
@@ -630,7 +646,7 @@ impl Checker<'_> {
       };
       // A local is not in scope in its own initializer, so `type, ok :=
       // get_type(t, type)` reads the outer `type` (**L§6.13**).
-      let Some(shadowed) = self.shadowed_declaration(&candidates) else {
+      let Some(shadowed) = self.shadowed_declaration(&candidates, at) else {
         return Some(self.declarations_type(&candidates));
       };
       let owner = self.program().tree().decl(shadowed).scope;
@@ -657,7 +673,24 @@ impl Checker<'_> {
         live.push(*id);
         continue;
       };
-      match self.taken_branch(branch, decl.scope) {
+      // A `` `x `` a macro declared inside one branch of a `#if` lands in the
+      // caller's block, where nothing binds the constants the condition reads:
+      // `` `it := entry.value `` under `#if flags & .POINTER` is decided by the
+      // expansion that wrote it, not by whoever is reading the name
+      // (**L§6.10**, **L§7.13**).
+      let expansion = decl
+        .flags
+        .contains(oj_syntax::ast::DeclarationFlags::HAS_SCOPE_MODIFIER)
+        .then(|| self.expanded_backticked(decl.scope, decl.name))
+        .flatten()
+        .map(|(instance, _)| instance);
+      let taken = match expansion {
+        Some(instance) => self.with_instance(Some(instance), |checker| {
+          checker.taken_branch(branch, decl.scope)
+        }),
+        None => self.taken_branch(branch, decl.scope),
+      };
+      match taken {
         Some(taken) if taken != branch.block => {}
         _ => live.push(*id),
       }
@@ -731,12 +764,58 @@ impl Checker<'_> {
 
   /// The declaration to look past, when every candidate is a local whose own
   /// type is still being worked out.
-  fn shadowed_declaration(&self, candidates: &[DeclId]) -> Option<DeclId> {
+  fn shadowed_declaration(
+    &self,
+    candidates: &[DeclId],
+    at: Option<(SourceId, Span)>,
+  ) -> Option<DeclId> {
     let tree = self.program().tree();
-    let all_pending = candidates.iter().all(|id| {
-      self.is_resolving(*id) && tree.scope_kind(tree.decl(*id).scope) == ScopeKind::Imperative
-    });
+    let hidden = |checker: &Self, id: DeclId| {
+      tree.scope_kind(tree.decl(id).scope) == ScopeKind::Imperative
+        && (checker.is_resolving(id) || at.is_some_and(|at| checker.initializer_encloses(id, at)))
+    };
+    let all_pending = candidates.iter().all(|id| hidden(self, *id));
     (all_pending && !candidates.is_empty()).then(|| candidates[0])
+  }
+
+  /// Whether a name is being read from inside the very declaration that
+  /// declares it: `type, ok := get_type(t, type)` reads the outer `type`,
+  /// since a local is not in scope in its own initializer (**L§6.13**).
+  fn initializer_encloses(&self, id: DeclId, at: (SourceId, Span)) -> bool {
+    let info = self.program().tree().decl(id);
+    let (Some(source), Some(node)) = (info.source, info.node) else {
+      return false;
+    };
+    // A constant *is* in scope in its own value: a nested procedure calls
+    // itself by name (**L§4.4**).
+    if info
+      .flags
+      .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)
+      || source != at.0
+    {
+      return false;
+    }
+    let Some(ast) = self.ast(source) else {
+      return false;
+    };
+    let properties = match ast.data(node) {
+      NodeData::Declaration(_) => node,
+      // A compound declaration's names each point at their own ident; the
+      // value is on the properties node beside them (**L§4.5**).
+      _ => match self.compound_properties(source, node) {
+        Some((properties, _)) => properties,
+        None => return false,
+      },
+    };
+    let Some(NodeData::Declaration(declaration)) = self.ast(source).map(|ast| ast.data(properties))
+    else {
+      return false;
+    };
+    let Some(expression) = declaration.expression else {
+      return false;
+    };
+    let span = ast.node(expression).span;
+    span.start <= at.1.start && at.1.end <= span.end
   }
 
   /// The type a resolved name stands for. Several declarations mean an
@@ -1008,12 +1087,18 @@ impl Checker<'_> {
         }
       }
       // `p[i]` indexes a pointer as if it were an array (**L§5.4**), for a
-      // pointee that has no subscript operator of its own to prefer.
-      if let Some(pointee) = self.types().pointee(operands[0].type_id)
-        && !self.has_operator(scope, source, node, ADDRESS_SUBSCRIPT)
-        && !self.has_operator(scope, source, node, SUBSCRIPT)
-      {
-        return Expr::place(pointee);
+      // pointee that has no subscript operator of its own to prefer. Only a
+      // struct can have one, so `str.data[i]` on a `*u8` is an index whatever
+      // `operator []`s the program declares elsewhere (**L§7.7**).
+      if let Some(pointee) = self.types().pointee(operands[0].type_id) {
+        let underlying = self.types().underlying(pointee);
+        let may_overload = self.types().struct_of(underlying).is_some();
+        if !may_overload
+          || (!self.has_operator(scope, source, node, ADDRESS_SUBSCRIPT)
+            && !self.has_operator(scope, source, node, SUBSCRIPT))
+        {
+          return Expr::place(pointee);
+        }
       }
       return Expr::UNKNOWN;
     }
@@ -1115,7 +1200,24 @@ impl Checker<'_> {
     };
     match self.fold_binary(operator, &left_type, &right_type) {
       Some(value) => Expr::constant(Const::new(unified, value.value)),
-      None => Expr::value(unified),
+      // A shift keeps its left operand's type, so one written as a literal has
+      // nothing to take a width from and defaults the way an untyped integer
+      // does anywhere else: `1 << a` is an `s64` whatever `a` is, where `2 * a`
+      // is `a`'s type (measured against the reference, **L§5.10**).
+      None => {
+        let type_id = match keeps_left {
+          true => self.harden(unified),
+          false => unified,
+        };
+        let mut result = Expr::value(type_id);
+        // An operand written `xx` has no type of its own, so neither does the
+        // operator over it: `xx n - 1` is whatever asked for the value, which
+        // is what `for i: 0..xx n-1` needs (**L§5.6**).
+        if result.is_unknown() && (left_type.autocast || right_type.autocast) {
+          result.autocast = true;
+        }
+        result
+      }
     }
   }
 
@@ -1123,6 +1225,18 @@ impl Checker<'_> {
   /// constant takes the other side's type, and integers of different widths
   /// unify to the one that holds both.
   fn unify_operands(&mut self, left: &Expr, right: &Expr) -> TypeId {
+    // An operand written `xx` has no type of its own, so it takes the other
+    // one's: `op_start_offset + xx len` is `op_start_offset`'s type
+    // (**L§5.6**).
+    for (cast, other) in [(left, right), (right, left)] {
+      if cast.autocast
+        && cast.is_unknown()
+        && !other.is_unknown()
+        && !self.types().is_untyped(other.type_id)
+      {
+        return other.type_id;
+      }
+    }
     // A constant behaves like a literal of its value, so `size_of(u64) * n`
     // has `n`'s type rather than the constant's (**L§5.10** rule 2).
     for (constant, other) in [(left, right), (right, left)] {
@@ -1137,7 +1251,28 @@ impl Checker<'_> {
         return other.type_id;
       }
     }
-    self.unify(left.type_id, right.type_id)
+    let unified = self.unify(left.type_id, right.type_id);
+    if !self.types().is_unknown(unified) {
+      return unified;
+    }
+    // Two integer *constants* whose types do not unify still agree, on the one
+    // whose type holds both values: `Math.U64_MAX / (size_of(Key) +
+    // size_of(Value))` mixes a `u64` with an `s64` and is a `u64`, where the
+    // same operator on two variables is rejected (measured against the
+    // reference, **L§5.10**).
+    for (constant, other) in [(left, right), (right, left)] {
+      if let Some(crate::constants::Value::Int(number)) =
+        constant.constant.as_ref().map(|value| &value.value)
+        && other.constant.is_some()
+        && self.types().integer_kind(constant.type_id).is_some()
+        && let Some(kind) = self.types().integer_kind(other.type_id)
+        && self.types().enum_of(other.type_id).is_none()
+        && kind.holds(*number)
+      {
+        return other.type_id;
+      }
+    }
+    unified
   }
 
   pub(crate) fn unify(&mut self, left: TypeId, right: TypeId) -> TypeId {
@@ -1238,6 +1373,14 @@ impl Checker<'_> {
     match kind {
       TypeQueryKind::SizeOf => match self.layout_of(type_id).map(|layout| layout.size) {
         Some(size) => Expr::constant(Const::new(TypeId::S64, Value::Int(i128::from(size)))),
+        None if std::env::var_os("OJDBG").is_some() => {
+          eprintln!(
+            "OJDBG size_of({}) unknown scope={scope:?} instance={:?}",
+            self.type_name(type_id),
+            self.current_instance
+          );
+          Expr::UNKNOWN
+        }
         // The size of a type the front end cannot lay out yet is not `s64`
         // with an unknown value: it is not known at all.
         None => Expr::UNKNOWN,
@@ -1268,6 +1411,31 @@ impl Checker<'_> {
         Expr::constant(Const::new(procedure, Value::Address(address)))
       }
     }
+  }
+
+  /// `#file`, `#filepath` and `#line` (**L§5.14**). The path is absolute
+  /// however the file was named on the command line, the way the reference
+  /// reports one, and `#filepath` keeps the trailing separator so that
+  /// `tprint("%data/x", #filepath)` reads as a path — which is what `GetRect`
+  /// loads its images with.
+  fn file_info(&mut self, source: SourceId, node: NodeId, which: FileInfoKind) -> Expr {
+    let Some(span) = self.ast(source).map(|ast| ast.node(node).span) else {
+      return Expr::UNKNOWN;
+    };
+    let file = self.program().sources().file(source);
+    if which == FileInfoKind::Line {
+      let line = i128::from(file.location(span.start).line);
+      return Expr::constant(Const::untyped_int(line));
+    }
+    let path = std::path::absolute(file.path()).unwrap_or_else(|_| file.path().to_path_buf());
+    let text = match which {
+      FileInfoKind::Filepath => match path.parent() {
+        Some(directory) => format!("{}{}", directory.display(), std::path::MAIN_SEPARATOR),
+        None => String::new(),
+      },
+      _ => path.display().to_string(),
+    };
+    Expr::constant(Const::string(text.into_bytes().into()))
   }
 
   fn expression_query(
@@ -1349,6 +1517,18 @@ impl Checker<'_> {
 
   /// The expression a name was declared with, when it names a constant: what
   /// `code_of(x)` is the code *of* (**L§13.1**).
+  /// Where the value a name was declared with was written, for a caller that
+  /// only needs the syntax — a `$T/Name` restriction reading the array of
+  /// types `Name` holds (**L§7.8**).
+  pub(crate) fn constant_array_written_at(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    expression: NodeId,
+  ) -> Option<(SourceId, NodeId, ScopeId)> {
+    self.constant_written_at(scope, source, expression)
+  }
+
   fn constant_written_at(
     &mut self,
     scope: ScopeId,

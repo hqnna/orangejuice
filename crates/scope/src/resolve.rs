@@ -22,6 +22,24 @@ pub struct Undeclared {
 /// **C§6.1**); a reference in a scope that could still gain names is a wait,
 /// not a failure.
 pub fn undeclared_identifiers(program: &Program<'_>) -> Vec<Undeclared> {
+  batch(program, |program, scope| !program.is_uninstantiated(scope))
+}
+
+/// The same batch over the polymorphic bodies the first one left alone: a body
+/// nothing instantiates is never typechecked, so a name that misses in one is
+/// not an error, but a name that misses in a body a call site *did* specialize
+/// is (**L§7.8**). Only the checker knows which is which, so this runs after
+/// typechecking rather than before it.
+pub fn undeclared_in_instantiations(program: &Program<'_>) -> Vec<Undeclared> {
+  batch(program, |program, scope| {
+    program.is_uninstantiated(scope) && program.is_instantiated(scope)
+  })
+}
+
+fn batch(
+  program: &Program<'_>,
+  wanted: impl Fn(&Program<'_>, crate::ScopeId) -> bool,
+) -> Vec<Undeclared> {
   let tree = program.tree();
   let interner = program.interner();
   let mut batched: BTreeMap<(SourceId, Span, Symbol), Undeclared> = BTreeMap::new();
@@ -30,6 +48,7 @@ pub fn undeclared_identifiers(program: &Program<'_>) -> Vec<Undeclared> {
     if reference.speculative
       || program.is_macro_injected(reference.name)
       || program.is_in_macro(reference.scope)
+      || !wanted(program, reference.scope)
       || tree.lookup(reference.scope, reference.name) != Resolution::Undeclared
     {
       continue;

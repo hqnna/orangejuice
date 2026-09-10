@@ -452,6 +452,37 @@ impl Checker<'_> {
     }
   }
 
+  /// A local whose initializer only means something once a macro has expanded
+  /// could not be typed in the pass that runs before any body is checked — a
+  /// `` `x `` the macro declares does not exist until then (**L§7.13**) — so
+  /// what it turned out to be is recorded now. `state := context.simp` after a
+  /// `CheckInit()` is the shape, which is how `Simp` reaches its own state.
+  fn record_late_local(
+    &mut self,
+    node: NodeId,
+    source: SourceId,
+    declaration: &oj_syntax::ast::Declaration,
+    value: &crate::checker::Expr,
+  ) {
+    if value.is_unknown() {
+      return;
+    }
+    let Some(decl) = self.decl_at(source, node) else {
+      return;
+    };
+    let existing = self.decl_type(decl).value;
+    if !self.types().is_unknown(existing) {
+      return;
+    }
+    let constant = declaration.flags.contains(DeclarationFlags::IS_CONSTANT);
+    let resolved = match (constant, value.denoted) {
+      (true, Some(denoted)) => crate::checker::DeclType::type_name(denoted),
+      (true, None) => crate::checker::DeclType::value(value.type_id),
+      (false, _) => crate::checker::DeclType::value(self.harden(value.type_id)),
+    };
+    self.publish(decl, resolved);
+  }
+
   fn check_declaration(
     &mut self,
     context: &Context,
@@ -471,7 +502,8 @@ impl Checker<'_> {
       return;
     }
     let Some(type_inst) = declaration.type_inst else {
-      self.expression_type(scope, source, expression);
+      let value = self.expression_type(scope, source, expression);
+      self.record_late_local(node, source, declaration, &value);
       return;
     };
 
@@ -585,7 +617,7 @@ impl Checker<'_> {
   }
 
   fn has_truth_value(&mut self, type_id: TypeId) -> bool {
-    use oj_types::{ArrayKind, TypeKind};
+    use oj_types::TypeKind;
     let underlying = self.types().underlying(type_id);
     match self.types().kind(underlying) {
       TypeKind::Bool
@@ -596,7 +628,11 @@ impl Checker<'_> {
       | TypeKind::Procedure(_)
       | TypeKind::String
       | TypeKind::Code => true,
-      TypeKind::Array { kind, .. } => !matches!(kind, ArrayKind::Fixed(_)),
+      // A view and a resizable array are true when their count is; a fixed
+      // array's count is a constant, so its truth is decided here (**L§5.9**)
+      // — measured against the reference, which is what `Treemap`'s `if
+      // node.border` over a `[4] float` reads.
+      TypeKind::Array { .. } => true,
       // A struct has no truth value of its own (**L§5.9**), but `operator !`
       // may give it one, and operator overloading is M7.
       TypeKind::Struct(_) | TypeKind::Any => true,

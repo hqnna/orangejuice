@@ -134,11 +134,18 @@ impl Value {
       Self::Float(value) => Some(*value != 0.0),
       Self::Null => Some(false),
       Self::String(text) => Some(!text.is_empty()),
-      Self::Type(_) | Self::EnumName(_) | Self::Bytes(_) | Self::Code { .. } => None,
-      // A procedure name is never null, but its truth is an address the back
-      // end supplies rather than anything foldable here — and so is any other
-      // address the linker settles.
-      Self::Procedure(_) | Self::Address(_) => None,
+      Self::Type(_) | Self::EnumName(_) | Self::Bytes(_) => None,
+      // A `Code` that names a piece of program tests true; the one that names
+      // none is `#code,null`, which is the `Null` above (**L§13.1**). That is
+      // what lets `#if code` choose between a body that inserts it and one
+      // that does not.
+      Self::Code { .. } => Some(true),
+      // A procedure *name* is never null, whatever address the back end gives
+      // it, which is what makes `#if given_hash_function` in `Hash_Table` take
+      // the branch that uses it (**L§5.9**). Any other address the linker
+      // settles is not foldable here.
+      Self::Procedure(_) => Some(true),
+      Self::Address(_) => None,
       // A location and a written aggregate are values the back end builds,
       // which have no truth of their own.
       Self::Location { .. } | Self::Written { .. } => None,
@@ -242,6 +249,12 @@ impl Const {
     }
     if types.is_float(target) {
       return Some(Self::new(target, Value::Float(self.value.as_float()?)));
+    }
+    // `null` names no type of its own, so a slot that wants a pointer is what
+    // says which one it is: `offset: *T : null;` is a `*T` (**L§3.2**), which
+    // is what makes `*offset.member` the member's offset.
+    if matches!(self.value, Value::Null) && types.is_pointer(types.underlying(target)) {
+      return Some(Self::new(target, Value::Null));
     }
     // An address the linker settles stays one when it is read as another
     // pointer type; reading it as a *number* is not constant, since nothing

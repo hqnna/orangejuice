@@ -253,6 +253,7 @@ fn untyped_and_polymorphic_types_have_no_layout() {
     name: interner.intern(b"T"),
     restriction: None,
     interface: false,
+    alternatives: Vec::new(),
   });
   for id in [
     TypeId::UNTYPED_INT,

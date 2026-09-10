@@ -116,14 +116,62 @@ impl Checker<'_> {
     if let Some(restriction) = must_implement
       && matches!(self.types().kind(type_id), TypeKind::Polymorph(_))
     {
+      // A restriction written as a constant array of types allows any one of
+      // them: `$T/MyVectors` over `MyVectors :: Type.[Vector2, Vector3]`
+      // (**L§7.8**), which is what `Math.normalize` tells its two overloads
+      // apart with.
+      let alternatives = self.restriction_alternatives(scope, source, restriction);
       let restriction = self.type_from_node(scope, source, restriction);
       if let TypeKind::Polymorph(definition) = *self.types().kind(type_id) {
         let info = self.types_mut().polymorph_info_mut(definition);
         info.restriction = Some(restriction);
         info.interface = interface;
+        info.alternatives = alternatives;
       }
     }
     type_id
+  }
+
+  /// The types a `$T/Name` restriction allows when `Name` is a constant array
+  /// of them rather than one type (**L§7.8**). Empty when it names a type.
+  fn restriction_alternatives(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    restriction: NodeId,
+  ) -> Vec<TypeId> {
+    let mut written = self.constant_array_written_at(scope, source, restriction);
+    if written.is_none() && self.is_array_literal(source, restriction) {
+      written = Some((source, restriction, scope));
+    }
+    let Some((written_source, written_node, written_scope)) = written else {
+      return Vec::new();
+    };
+    let Some(NodeData::Literal(literal)) =
+      self.ast(written_source).map(|ast| ast.data(written_node))
+    else {
+      return Vec::new();
+    };
+    let oj_syntax::ast::LiteralValue::Array(array) = &literal.value else {
+      return Vec::new();
+    };
+    let members = array.members.clone();
+    let mut allowed = Vec::with_capacity(members.len());
+    for member in members {
+      let type_id = self.type_from_node(written_scope, written_source, member);
+      if !self.types().is_unknown(type_id) {
+        allowed.push(type_id);
+      }
+    }
+    allowed
+  }
+
+  fn is_array_literal(&self, source: SourceId, node: NodeId) -> bool {
+    matches!(
+      self.ast(source).map(|ast| ast.data(node)),
+      Some(NodeData::Literal(literal))
+        if matches!(literal.value, oj_syntax::ast::LiteralValue::Array(_))
+    )
   }
 
   /// Declares the polymorph variable `name` written at `node`, once per site.
@@ -140,6 +188,7 @@ impl Checker<'_> {
       name,
       restriction: None,
       interface: false,
+      alternatives: Vec::new(),
     });
     self.record_aggregate_type(source, node, type_id);
     type_id

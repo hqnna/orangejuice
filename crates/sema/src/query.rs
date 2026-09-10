@@ -28,6 +28,11 @@ pub struct PlannedArgument {
   pub node: NodeId,
   /// The parameter type the argument is converted to.
   pub target: TypeId,
+  /// The instantiation the expression means something under, for a default the
+  /// *header* wrote: `fallback := T.{}` is the specialization's `T`, not
+  /// whatever the call site happens to be inside (**L§7.4**, **L§7.8**). An
+  /// argument the caller wrote belongs to the call site, and carries `None`.
+  pub instance: Option<InstanceId>,
 }
 
 /// A call site with its callee decided and its arguments put in parameter
@@ -42,6 +47,10 @@ pub struct CallPlan {
   /// polymorphic (**L§7.8**). It, not the declaration, is what the back end
   /// generates code for.
   pub instance: Option<InstanceId>,
+  /// The instantiation the *callee name* was reached under, when it was found
+  /// through a baked polymorphic struct: `table.hash_function` is whichever
+  /// procedure that specialization was given (**L§8.5**).
+  pub owner_instance: Option<InstanceId>,
   /// The procedure type being called.
   pub type_id: TypeId,
   pub returns: Vec<TypeId>,
@@ -354,10 +363,15 @@ impl Checker<'_> {
   pub fn decl_instance(&self, decl: DeclId) -> Option<InstanceId> {
     // A `` `x `` a macro declared belongs to the expansion wherever it is read
     // from, since that is where its storage was made (**L§7.13**).
+    // A constant declared in a baked polymorphic struct's body belongs to that
+    // specialization wherever it is read from, which is not something the
+    // chain of active instantiations says: `Table`'s own `compare_function` is
+    // reached from a procedure with an instantiation of its own (**L§8.5**).
     self
       .decl_key(decl)
       .0
       .or_else(|| self.backticked_owner.get(&decl).copied())
+      .or_else(|| self.struct_instance_enclosing(self.program().tree().decl(decl).scope))
   }
 
   /// Whether the active instantiation gave a declaration a constant value, so
@@ -533,7 +547,7 @@ impl Checker<'_> {
     }
 
     let signature = if callee.overloads.is_empty() {
-      let signature = self.signature_of_type(callee.type_id)?;
+      let signature = self.signature_of_annotated(scope, source, call.procedure_expression)?;
       match self.accepts(&signature, &arguments) {
         true => signature,
         false => return None,
@@ -557,7 +571,8 @@ impl Checker<'_> {
       self.use_instance(instance);
     }
 
-    self.plan_arguments(scope, source, &call.arguments, signature)
+    let owner = callee.overload_instance;
+    self.plan_arguments(scope, source, &call.arguments, signature, owner)
   }
 
   fn plan_arguments(
@@ -566,6 +581,7 @@ impl Checker<'_> {
     source: SourceId,
     written: &[Argument],
     signature: crate::overload::Signature,
+    owner: Option<InstanceId>,
   ) -> Option<CallPlan> {
     let count = signature.parameters.len();
     let vararg_slot = signature.vararg_slot;
@@ -594,6 +610,7 @@ impl Checker<'_> {
         scope: written,
         node: argument.expression,
         target,
+        instance: None,
       };
       match Some(index) == vararg_slot {
         true => extra.push(planned),
@@ -622,6 +639,7 @@ impl Checker<'_> {
             scope: self.scope_at(default_source, default, scope),
             node: default,
             target: parameter.type_id,
+            instance: signature.instance,
           });
         }
       }
@@ -639,6 +657,7 @@ impl Checker<'_> {
     Some(CallPlan {
       callee: signature.decl,
       instance: signature.instance,
+      owner_instance: owner,
       type_id: signature.type_id,
       returns: signature.returns,
       arguments: planned,
@@ -721,7 +740,7 @@ impl Checker<'_> {
     if swapped {
       written.reverse();
     }
-    self.plan_arguments(scope, source, &written, signature)
+    self.plan_arguments(scope, source, &written, signature, None)
   }
 
   /// The `operator op=` an `a op= b` resolves to (**L§7.7**). Its first
@@ -762,7 +781,7 @@ impl Checker<'_> {
           expression: right,
         },
       ];
-      checker.plan_arguments(scope, source, &written, signature)
+      checker.plan_arguments(scope, source, &written, signature, None)
     })
   }
 

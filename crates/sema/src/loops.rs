@@ -234,20 +234,28 @@ impl Checker<'_> {
   /// records a scope for a backticked identifier — it is meant to resolve in
   /// the caller — so the instantiation's own body is searched by name
   /// (**L§7.13**).
-  pub(crate) fn backticked_declaration(&self, name: Symbol) -> Option<DeclId> {
+  pub(crate) fn backticked_declaration(&mut self, name: Symbol) -> Option<DeclId> {
     let mut current = self.current_instance;
     while let Some(id) = current {
       let root = self.instance(id).body_root();
       let mut pending = vec![root];
+      let mut found: Vec<DeclId> = Vec::new();
       while let Some(scope) = pending.pop() {
         let tree = self.program().tree();
         for declared in &tree.declarations(scope) {
           let decl = tree.decl(*declared);
           if decl.name == name && decl.flags.contains(DeclarationFlags::HAS_SCOPE_MODIFIER) {
-            return Some(*declared);
+            found.push(*declared);
           }
         }
         pending.extend(tree.children(scope).iter().copied());
+      }
+      // A macro may declare the same backticked name in each branch of a `#if`
+      // — `` `it := *entry.value `` under `.POINTER` and `` `it := entry.value ``
+      // otherwise — so only the branch the condition kept is the one it means
+      // (**L§6.10**, **L§7.13**).
+      if let Some(first) = self.live_candidates(&found).first().copied() {
+        return Some(first);
       }
       current = self.instance(id).parent;
     }
@@ -287,38 +295,35 @@ impl Checker<'_> {
     None
   }
 
-  /// A backticked declaration one instantiation's body holds, by name.
-  fn declared_backticked(&self, instance: InstanceId, name: Symbol) -> Option<DeclId> {
+  /// A backticked declaration one instantiation's body holds, by name. A macro
+  /// may write the same name in each branch of a `#if` — `` `it := *entry.value ``
+  /// under `.POINTER` and `` `it := entry.value `` otherwise — so the one it
+  /// means is the one the condition kept, decided under that expansion
+  /// (**L§6.10**, **L§7.13**).
+  fn declared_backticked(&mut self, instance: InstanceId, name: Symbol) -> Option<DeclId> {
     let root = self.instance(instance).body_root();
     let mut pending = vec![root];
+    let mut found: Vec<DeclId> = Vec::new();
     while let Some(scope) = pending.pop() {
       let tree = self.program().tree();
       for declared in &tree.declarations(scope) {
         let decl = tree.decl(*declared);
         if decl.name == name && decl.flags.contains(DeclarationFlags::HAS_SCOPE_MODIFIER) {
-          return Some(*declared);
+          found.push(*declared);
         }
       }
       pending.extend(tree.children(scope).iter().copied());
     }
-    None
+    if found.len() < 2 {
+      return found.first().copied();
+    }
+    let live = self.with_instance(Some(instance), |checker| checker.live_candidates(&found));
+    live.first().copied()
   }
 
-  fn exported_declaration(&self, instance: InstanceId, name: &[u8]) -> Option<DeclId> {
+  fn exported_declaration(&mut self, instance: InstanceId, name: &[u8]) -> Option<DeclId> {
     let name = self.interned().intern(name);
-    let root = self.instance(instance).body_root();
-    let mut pending = vec![root];
-    while let Some(scope) = pending.pop() {
-      let tree = self.program().tree();
-      for id in &tree.declarations(scope) {
-        let decl = tree.decl(*id);
-        if decl.name == name && decl.flags.contains(DeclarationFlags::HAS_SCOPE_MODIFIER) {
-          return Some(*id);
-        }
-      }
-      pending.extend(tree.children(scope).iter().copied());
-    }
-    None
+    self.declared_backticked(instance, name)
   }
 
   /// The type the loop's `it` or `it_index` takes from the expansion

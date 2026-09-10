@@ -212,6 +212,25 @@ impl Checker<'_> {
           None => DeclType::UNKNOWN,
         }
       }
+      // `A, B :: #run f();` runs `f` once and gives each name one of its
+      // returns (**L§4.5**, **L§12.1**).
+      NodeData::DirectiveRun(_) => {
+        let returns = self.run_result_types(decl_scope, source, expression);
+        let Some(type_id) = returns.get(index).copied() else {
+          return DeclType::UNKNOWN;
+        };
+        if returns.len() > 1
+          && let Some(values) = self.run_values(decl_scope, source, expression, &returns)
+          && let Some(value) = values.get(index)
+        {
+          let value = value
+            .clone()
+            .convert(self.types(), type_id)
+            .unwrap_or(value.clone());
+          self.record_constant(id, value);
+        }
+        DeclType::value(type_id)
+      }
       // One value on the right is every name's (**L§4.5**).
       _ => self.declaration_type(id, decl_scope, source, declaration),
     }

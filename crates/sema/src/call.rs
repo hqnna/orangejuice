@@ -94,7 +94,7 @@ impl Checker<'_> {
     // accept is one whose answer we do not have, not one whose return type is
     // that candidate's (**L§7.5**).
     let resolved = if callee.overloads.is_empty() {
-      let signature = self.signature_of_type(callee.type_id)?;
+      let signature = self.signature_of_annotated(scope, source, call.procedure_expression)?;
       match self.accepts(&signature, &arguments) {
         true => Resolved::One(signature),
         false => Resolved::None,

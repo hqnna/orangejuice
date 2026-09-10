@@ -455,4 +455,9 @@ pub struct PolymorphInfo {
   /// Whether the restriction was written `$T/interface R`, which asks for the
   /// *members* of `R` rather than for `R` itself (**L§7.8**).
   pub interface: bool,
+  /// The types a restriction written as a constant array of them allows —
+  /// `$T/MyVectors` over `MyVectors :: Type.[Vector2, Vector3]` — of which the
+  /// candidate has to satisfy one. Empty when the restriction names a single
+  /// type.
+  pub alternatives: Vec<TypeId>,
 }

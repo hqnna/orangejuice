@@ -278,6 +278,9 @@ pub struct Checker<'a> {
   /// How many units this checker has read. The rest arrived after it started.
   units_seen: usize,
   struct_scopes: HashMap<StructId, ScopeId>,
+  /// The struct a members scope belongs to, which is what says a constant
+  /// declared there is a specialization's (**L§8.5**).
+  struct_of_scope: HashMap<ScopeId, StructId>,
   /// The instantiation a baked polymorphic struct came from (**L§8.5**), so
   /// that a nested declaration of its body — `Table.Entry` — is resolved with
   /// the arguments in place rather than under whatever instance is current.
@@ -342,6 +345,15 @@ pub struct Checker<'a> {
   /// caller reads afterwards is the expansion's local (**L§7.13**).
   pub(crate) backticked_owner: HashMap<DeclId, InstanceId>,
   pub(crate) runs: HashMap<(Option<InstanceId>, SourceId, NodeId), Expr>,
+  /// What a `#run` behind a compound declaration produced, all of its values
+  /// at once: the run executes once however many names take from it
+  /// (**L§4.5**).
+  pub(crate) run_tuples: HashMap<(Option<InstanceId>, SourceId, NodeId), Vec<Const>>,
+  /// How deep the compiler is inside code it is running itself. Lowering a
+  /// `#run` or a `#modify` asks for layouts the way any back end does, so a
+  /// struct whose body is being resolved can be reached from in there without
+  /// that being the struct containing itself (**L§8.3**).
+  compile_time_depth: u32,
   /// The runs being worked out right now, which is what makes a `#run` that
   /// depends on itself an error rather than a hang.
   pub(crate) runs_in_flight: HashSet<(Option<InstanceId>, SourceId, NodeId)>,
@@ -419,6 +431,7 @@ impl<'a> Checker<'a> {
       scope_of_node: std::cell::RefCell::new(scope_of_node),
       references_seen: std::cell::Cell::new(references_seen),
       struct_scopes: HashMap::new(),
+      struct_of_scope: HashMap::new(),
       struct_instances: HashMap::new(),
       enum_scopes: HashMap::new(),
       aggregate_owners,
@@ -439,6 +452,8 @@ impl<'a> Checker<'a> {
       compile_time: None,
       backticked_owner: HashMap::new(),
       runs: HashMap::new(),
+      run_tuples: HashMap::new(),
+      compile_time_depth: 0,
       runs_in_flight: HashSet::new(),
       run_index: 0,
       undecided_static_ifs: 0,
@@ -564,6 +579,35 @@ impl<'a> Checker<'a> {
     self.code_addresses.get(&address).copied()
   }
 
+  /// The source of a `Code` tree the metaprogram wrote to, when it did.
+  /// `compiler_get_nodes` hands out a tree that may be edited in place — how_to
+  /// 630 uppercases the string literals in one — so what an `#insert` splices
+  /// has to be what the metaprogram left there rather than the program the
+  /// address was exported from (**C§3.3**). A tree nothing touched has no
+  /// source of its own: it is spliced as the nodes it already is.
+  pub fn rewritten_code_at(&self, address: usize) -> Option<String> {
+    let nodes = self.nodes.clone()?;
+    let nodes = nodes.borrow();
+    let root = address as *const oj_meta::CodeNode;
+    let tree = nodes.tree(root)?;
+    let expressions = match tree.expressions.data.is_null() || tree.expressions.count <= 0 {
+      true => &[][..],
+      false => unsafe {
+        std::slice::from_raw_parts(
+          tree.expressions.data.cast::<*const oj_meta::CodeNode>(),
+          tree.expressions.count as usize,
+        )
+      },
+    };
+    let touched = std::iter::once(tree.root)
+      .chain(expressions.iter().copied())
+      .any(|node| !nodes.unchanged(node));
+    if !touched {
+      return None;
+    }
+    oj_meta::Rewriter::new(&nodes).expression(root).ok()
+  }
+
   pub(crate) fn next_run_index(&mut self) -> usize {
     self.run_index += 1;
     self.run_index - 1
@@ -610,6 +654,16 @@ impl<'a> Checker<'a> {
     );
   }
 
+  /// The compiler is about to run code of its own, which asks the front end
+  /// the questions any back end asks (**L§12.1**).
+  pub(crate) fn enter_compile_time(&mut self) {
+    self.compile_time_depth += 1;
+  }
+
+  pub(crate) fn leave_compile_time(&mut self) {
+    self.compile_time_depth = self.compile_time_depth.saturating_sub(1);
+  }
+
   /// Claims a struct body for resolution. A second claim while the first is
   /// still running is a struct that contains itself.
   pub(crate) fn take_pending_body(&mut self, definition: StructId) -> Option<PendingBody> {
@@ -619,7 +673,15 @@ impl<'a> Checker<'a> {
       .copied()
       .find(|(entry, _, _)| *entry == definition)
     {
-      self.report_self_containment(source, node);
+      // A layout the compiler asked for while running a `#run` or a `#modify`
+      // of its own is not the struct containing itself: the type table image
+      // one of those is built against measures every type of the program,
+      // including whichever body is being resolved right now (**L§8.3**). The
+      // struct is left as it stands, and the resolution already under way
+      // finishes it.
+      if self.compile_time_depth == 0 {
+        self.report_self_containment(source, node);
+      }
       return None;
     }
     let body = self.pending_bodies.remove(&definition)?;
@@ -754,7 +816,23 @@ impl<'a> Checker<'a> {
       }
       current = instance.parent;
     }
-    None
+    // A baked polymorphic struct's body is an instantiation wherever it is
+    // read from: `Table`'s own `compare_function` is reached from procedures
+    // with instantiations of their own, and none of those is its (**L§8.5**).
+    self.struct_instance_enclosing(scope)
+  }
+
+  /// Whether `instance` is one the checker is currently reading under — itself
+  /// or one of the instantiations it was made inside.
+  pub(crate) fn instance_is_active(&self, instance: InstanceId) -> bool {
+    let mut current = self.current_instance;
+    while let Some(id) = current {
+      if id == instance {
+        return true;
+      }
+      current = self.instances[id.0 as usize].parent;
+    }
+    false
   }
 
   pub(crate) fn scope_encloses(&self, outer: ScopeId, inner: ScopeId) -> bool {
@@ -822,8 +900,31 @@ impl<'a> Checker<'a> {
     self.references_seen.set(count);
   }
 
-  pub(crate) fn record_struct_scope(&mut self, id: StructId, scope: ScopeId) {
+  pub(crate) fn record_struct_scope(&mut self, id: StructId, scope: ScopeId, own: bool) {
     self.struct_scopes.insert(id, scope);
+    // Only a scope that really is the struct's body answers "which struct is
+    // this scope inside of": a stand-in is the scope the struct was written
+    // *in*, and everything else written there is not the struct's (**L§8.3**).
+    if own {
+      self.struct_of_scope.insert(scope, id);
+    }
+  }
+
+  /// The instantiation a scope belongs to because it is a baked polymorphic
+  /// struct's body (**L§8.5**). A constant declared there — `Table`'s own
+  /// `compare_function` — belongs to that specialization wherever it is read
+  /// from, which is not something the chain of active instantiations says.
+  pub(crate) fn struct_instance_enclosing(&self, scope: ScopeId) -> Option<InstanceId> {
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if let Some(definition) = self.struct_of_scope.get(&id)
+        && let Some(instance) = self.struct_instances.get(definition)
+      {
+        return Some(*instance);
+      }
+      current = self.program.tree().parent(id);
+    }
+    None
   }
 
   pub(crate) fn record_struct_instance(&mut self, id: StructId, instance: InstanceId) {
@@ -972,15 +1073,24 @@ impl<'a> Checker<'a> {
     {
       return None;
     }
-    let (source, node) = (decl.source?, decl.node?);
-    let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
-      return None;
+    // A module parameter takes what the `#import` that instantiated its module
+    // gave it, evaluated where that was written (**L§11.3**); a parameter
+    // nothing was written for keeps its declared default.
+    let binding = self.program.module_binding(id);
+    let (scope, source, expression) = match binding {
+      Some(binding) => (binding.scope, binding.source, binding.expression),
+      None => {
+        let (source, node) = (decl.source?, decl.node?);
+        let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
+          return None;
+        };
+        (decl.scope, source, declaration.expression?)
+      }
     };
-    let expression = declaration.expression?;
     let declared = self.resolved(id).map(|resolved| resolved.value);
     let value = match declared.filter(|target| !self.types.is_unknown(*target)) {
-      Some(target) => self.const_value_at(decl.scope, source, expression, target)?,
-      None => self.const_value(decl.scope, source, expression)?,
+      Some(target) => self.const_value_at(scope, source, expression, target)?,
+      None => self.const_value(scope, source, expression)?,
     };
     // A constant with a type slot carries that type rather than the literal's
     // (**L§5.10** rule 2).
@@ -1099,13 +1209,41 @@ impl<'a> Checker<'a> {
 
     self.states.insert(key, State::Resolving);
     self.stack.push(id);
-    let resolved = self.compute_decl_type(id);
+    // The key says which instantiation the declaration belongs to. Reaching it
+    // from outside that instantiation — the whole-program sweep walks into a
+    // baked struct's body, since its scopes are the family's — would read the
+    // arguments as the unbound variables they are written as and memoize that
+    // under the instantiation's own key, so the bindings are put back first
+    // (**L§7.8**, **L§8.5**).
+    let resolved = match key.0 {
+      Some(instance) if !self.instance_is_active(instance) => {
+        self.with_instance(Some(instance), |checker| checker.compute_decl_type(id))
+      }
+      _ => self.compute_decl_type(id),
+    };
     self.stack.pop();
     // A nominal type publishes itself while its members are still being built,
     // so only overwrite a slot that is still marked as being resolved.
     if matches!(self.states.get(&key), Some(State::Resolving)) {
-      self.states.insert(key, State::Done(resolved));
-      self.finished.push(id);
+      // What a declaration inside a polymorphic body is depends on the
+      // instantiation, and the whole-program sweep reaches one with none in
+      // hand: the unknown that comes back then is not an answer to remember,
+      // since a specialization asking again may be reached the same way
+      // (**L§7.8**).
+      let unresolved = key.0.is_none()
+        && resolved == DeclType::UNKNOWN
+        && self
+          .program
+          .is_uninstantiated(self.program.tree().decl(id).scope);
+      match unresolved {
+        true => {
+          self.states.remove(&key);
+        }
+        false => {
+          self.states.insert(key, State::Done(resolved));
+          self.finished.push(id);
+        }
+      }
     }
     self.resolved(id).unwrap_or(resolved)
   }

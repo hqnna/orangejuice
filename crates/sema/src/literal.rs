@@ -1,11 +1,27 @@
 use oj_diag::{SourceId, Span};
 use oj_scope::ScopeId;
-use oj_syntax::ast::{Argument, NodeId};
-use oj_types::{MemberFlags, StructMember, TypeId};
+use oj_syntax::ast::{Argument, LiteralValue, NodeData, NodeId, OperatorType};
+use oj_types::{ArrayKind, MemberFlags, StructMember, TypeId};
 
 use crate::checker::Checker;
 
 impl Checker<'_> {
+  /// Whether a struct literal's argument fills a positional slot. `values[1] =
+  /// 7` and `e.z = 9` name a member too, but their left side is a path rather
+  /// than a name, so the parser leaves them as assignments (**L§5.7**).
+  fn is_positional_member(&self, source: SourceId, argument: &Argument) -> bool {
+    argument.name.is_none()
+      && !self.ast(source).is_some_and(|ast| {
+        matches!(
+          ast.data(argument.expression),
+          NodeData::BinaryOperator {
+            operator: OperatorType::ASSIGN,
+            ..
+          }
+        )
+      })
+  }
+
   /// `T.{…}` (**L§5.7**): a positional literal fills the settable members in
   /// order, a named one fills any subset, and every value has to convert to
   /// the member it fills.
@@ -41,25 +57,9 @@ impl Checker<'_> {
       .cloned()
       .collect();
 
-    // `values[1] = 7` and `e.z = 9` are named fields too, but their left side
-    // is a path rather than a name, so the parser leaves them as assignments
-    // (**L§5.7**). They fill no positional slot.
-    let named_by_path = |checker: &Self, argument: &Argument| {
-      argument.name.is_none()
-        && checker.ast(source).is_some_and(|ast| {
-          matches!(
-            ast.data(argument.expression),
-            oj_syntax::ast::NodeData::BinaryOperator {
-              operator: oj_syntax::ast::OperatorType::ASSIGN,
-              ..
-            }
-          )
-        })
-    };
-
     let positional = arguments
       .iter()
-      .filter(|argument| argument.name.is_none() && !named_by_path(self, argument))
+      .filter(|argument| self.is_positional_member(source, argument))
       .count();
     let named = arguments.len() - positional;
     if named == 0 && positional > 0 && positional != settable.len() {
@@ -98,7 +98,7 @@ impl Checker<'_> {
             }
           }
         }
-        None if named_by_path(self, argument) => {
+        None if !self.is_positional_member(source, argument) => {
           self.expression_type(scope, source, argument.expression);
           continue;
         }
@@ -115,6 +115,77 @@ impl Checker<'_> {
           .map_or(span, |ast| ast.node(argument.expression).span);
         self.report_mismatch(source, span, member.type_id, value.type_id);
       }
+    }
+  }
+
+  /// Whether a `.{…}` or `.[…]` written at `node` could be a `target`
+  /// (**L§5.7**, **L§5.8**). A literal has no type of its own, so this is what
+  /// tells two overloads apart when one is passed to both: `.{x, y}` is the
+  /// `put_vertex` taking a `Vector2`, not the one taking a `Vector3`. Only a
+  /// mismatch the literal itself shows — the wrong number of positional
+  /// values, or a name the struct does not have — rules a target out; anything
+  /// the checker cannot decide yet admits it.
+  pub(crate) fn untyped_literal_admits(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    target: TypeId,
+  ) -> bool {
+    let Some(ast) = self.ast(source) else {
+      return true;
+    };
+    let NodeData::Literal(literal) = ast.data(node) else {
+      return true;
+    };
+    match literal.value.clone() {
+      LiteralValue::Struct(payload) if payload.type_expression.is_none() => {
+        if !self.types().is_complete(target) {
+          return true;
+        }
+        if self.mentions_unknown(target) {
+          return true;
+        }
+        let Some(definition) = self.types().struct_of(target) else {
+          return false;
+        };
+        let settable = self
+          .types()
+          .struct_info(definition)
+          .settable_members()
+          .count();
+        let names: Vec<oj_lexer::Symbol> = self
+          .types()
+          .struct_info(definition)
+          .members
+          .iter()
+          .filter(|member| !member.flags.contains(MemberFlags::CONSTANT))
+          .map(|member| member.name)
+          .collect();
+        let positional = payload
+          .arguments
+          .iter()
+          .filter(|argument| self.is_positional_member(source, argument))
+          .count();
+        let named = payload.arguments.len() - positional;
+        if named == 0 && positional > 0 && positional != settable {
+          return false;
+        }
+        payload.arguments.iter().all(|argument| {
+          let Some(name) = argument.name.and_then(|node| self.ident_name(source, node)) else {
+            return true;
+          };
+          names.contains(&name)
+        })
+      }
+      LiteralValue::Array(array) if array.element_type.is_none() => {
+        match self.types().array_of(target) {
+          Some((_, kind)) => {
+            !matches!(kind, ArrayKind::Fixed(count) if count != array.members.len() as u64)
+          }
+          None => self.types().underlying(target) == TypeId::STRING,
+        }
+      }
+      _ => true,
     }
   }
 

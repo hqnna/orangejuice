@@ -60,10 +60,12 @@ impl Checker<'_> {
     // Keyed by the members scope, which is what an instantiation of a
     // polymorphic struct is inside of: `Holder(float, 5)` and `Holder(int, 3)`
     // are two types out of one body (**L§8.5**).
-    let scope = self
-      .program()
-      .aggregate_scope(source, node)
-      .unwrap_or(outer);
+    // A `#type` whose body the walker never reached has no members scope of
+    // its own; the scope it was *written* in stands in, but only as a key —
+    // recording it as the struct's would make everything written beside the
+    // struct look as if it were inside it (**L§8.3**).
+    let own = self.program().aggregate_scope(source, node);
+    let scope = own.unwrap_or(outer);
     if let Some(existing) = self.aggregate_type_in(scope, source, node) {
       if let Some(owner) = owner {
         self.publish(owner, DeclType::type_name(existing));
@@ -84,7 +86,7 @@ impl Checker<'_> {
       self.publish(owner, DeclType::type_name(type_id));
     }
 
-    self.record_struct_scope(definition, scope);
+    self.record_struct_scope(definition, scope, own.is_some());
 
     // A polymorphic struct with no instantiation in hand is a family, not a
     // type: its members need the arguments (**L§8.5**).

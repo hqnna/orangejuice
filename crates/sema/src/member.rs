@@ -55,6 +55,23 @@ impl Checker<'_> {
       return Expr::UNKNOWN;
     }
 
+    // A constant `Code`'s `type` is the type of the expression it quotes,
+    // worked out where that was written (**L§13.1**, **C§5.3**): `f :: ($c:
+    // Code) { T :: c.type; }` is how a body asks what it was handed.
+    if base.type_id == TypeId::CODE
+      && name == self.interned().intern(b"type")
+      && let Some(Value::Code {
+        source: code_source,
+        node,
+        scope: code_scope,
+      }) = base.constant.as_ref().map(|value| value.value.clone())
+    {
+      let quoted = self.expression_type(code_scope, code_source, node);
+      if !quoted.is_unknown() {
+        return Expr::type_expression(self.harden(quoted.type_id));
+      }
+    }
+
     // Member access through a pointer dereferences one level (**L§3.2**).
     let value_type = self.types().pointee(base.type_id).unwrap_or(base.type_id);
     let lvalue = base.lvalue || self.types().is_pointer(base.type_id);
@@ -201,6 +218,12 @@ impl Checker<'_> {
             return found;
           }
         }
+        return Expr::value(member.type_id);
+      }
+      // A member a `using` brought in is not in the struct's own scope, only in
+      // the flattened list (**L§8.4**), so `type_of(Header.magic)` over a
+      // `using data: struct { magic: … }` is answered from there.
+      if let Some(member) = self.types().struct_info(definition).member(name).cloned() {
         return Expr::value(member.type_id);
       }
     }
@@ -361,20 +384,50 @@ impl Checker<'_> {
   /// The scope a named `#import` binding stands for, when `left` is one
   /// (**L§11.2**).
   fn module_scope(&mut self, scope: ScopeId, source: SourceId, left: NodeId) -> Option<ScopeId> {
-    let ast = self.ast(source)?;
-    let NodeData::Ident(ident) = ast.data(left) else {
-      return None;
-    };
-    let scope = self.scope_at(source, left, scope);
-    let Resolution::Found(candidates) = self.program().tree().lookup(scope, ident.name) else {
-      return None;
-    };
-    candidates
-      .into_iter()
-      .find_map(|id| match self.program().tree().decl(id).kind {
-        DeclKind::Module(target) => Some(target),
-        _ => None,
-      })
+    let (mut source, mut node, mut scope) = (source, left, scope);
+    // `P :: Posix;` names whatever `Posix` names, so an alias is followed to
+    // the module it stands for (**L§11.2**).
+    for _ in 0..16 {
+      let ast = self.ast(source)?;
+      let NodeData::Ident(ident) = ast.data(node) else {
+        return None;
+      };
+      let name = ident.name;
+      let at = self.scope_at(source, node, scope);
+      let Resolution::Found(candidates) = self.program().tree().lookup(at, name) else {
+        return None;
+      };
+      let found = candidates
+        .iter()
+        .find_map(|id| match self.program().tree().decl(*id).kind {
+          DeclKind::Module(target) => Some(target),
+          _ => None,
+        });
+      if found.is_some() {
+        return found;
+      }
+      let alias = candidates.iter().copied().find_map(|id| {
+        let info = self.program().tree().decl(id);
+        if !info
+          .flags
+          .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)
+        {
+          return None;
+        }
+        let (alias_source, alias_node) = (info.source?, info.node?);
+        let NodeData::Declaration(declaration) = self.ast(alias_source)?.data(alias_node) else {
+          return None;
+        };
+        let expression = declaration.expression?;
+        matches!(self.ast(alias_source)?.data(expression), NodeData::Ident(_)).then_some((
+          alias_source,
+          expression,
+          info.scope,
+        ))
+      })?;
+      (source, node, scope) = alias;
+    }
+    None
   }
 }
 

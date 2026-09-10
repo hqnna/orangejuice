@@ -80,8 +80,7 @@ impl Checker<'_> {
       return None;
     }
     let mut found = None;
-    let mut current = Some(scope);
-    while let Some(id) = current {
+    for id in self.scopes_with_usings(scope) {
       let used: Vec<oj_scope::UsedValue> = self.program().tree().used_values(id).to_vec();
       for value in used {
         if !value.admits(name) {
@@ -95,10 +94,37 @@ impl Checker<'_> {
       if found.is_some() {
         break;
       }
-      current = self.program().tree().parent(id);
     }
     self.leave();
     found
+  }
+
+  /// The scopes whose `using` of a value widens what `scope` can see: the ones
+  /// it is written inside, and the modules it imports — a module that writes
+  /// `using gl;` hands its importers the members of `gl` the way it hands them
+  /// any other name (**L§6.8**, **L§11.2**), which is how `#import "GL"` makes
+  /// `glClearColor` a name.
+  fn scopes_with_usings(&self, scope: ScopeId) -> Vec<ScopeId> {
+    let tree = self.program().tree();
+    let mut order = Vec::new();
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if !order.contains(&id) {
+        order.push(id);
+      }
+      current = tree.parent(id);
+    }
+    let mut index = 0;
+    while index < order.len() {
+      let id = order[index];
+      index += 1;
+      for edge in tree.imports(id) {
+        if !order.contains(&edge.target) {
+          order.push(edge.target);
+        }
+      }
+    }
+    order
   }
 
   fn member_of_used_value(
@@ -188,6 +214,66 @@ impl Checker<'_> {
       }
       Some(Expr::place(member.member.type_id))
     })
+  }
+
+  /// What a bare name stands for when a `using` of a value written inside a
+  /// body brings it in, and nothing on the way out to that body declares the
+  /// name itself (**L§6.8**). A `using` at file or module level is not one of
+  /// these: what it widens is a program scope, and a name declared there
+  /// competes with it the way any two declarations do.
+  pub(crate) fn locally_used_name_type(&mut self, scope: ScopeId, name: Symbol) -> Option<Expr> {
+    let tree = self.program().tree();
+    let mut chain = Vec::new();
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if tree.scope_kind(id).is_program_scope() {
+        break;
+      }
+      chain.push(id);
+      current = tree.parent(id);
+    }
+    // Nothing written inside the body can shadow anything.
+    if chain
+      .iter()
+      .all(|id| self.program().tree().used_values(*id).is_empty())
+    {
+      return None;
+    }
+    for id in chain {
+      // A declaration of the name on the way out is what the name means.
+      if self
+        .program()
+        .tree()
+        .declarations(id)
+        .iter()
+        .any(|decl| self.program().tree().decl(*decl).name == name)
+      {
+        return None;
+      }
+      let used: Vec<oj_scope::UsedValue> = self.program().tree().used_values(id).to_vec();
+      for value in used {
+        if !value.admits(name) {
+          continue;
+        }
+        // Only a `using` whose value already has a type. Working one out here
+        // would be a lookup of its own, and this runs for every name a body
+        // mentions: a `using` still being resolved answers nothing, and the
+        // ordinary walk out is what the name means until it does.
+        if !self
+          .used_base(&value)
+          .is_some_and(|base| self.resolved(base).is_some())
+        {
+          continue;
+        }
+        if let Some(member) = self.member_of_used_value(scope, id, &value, name) {
+          if member.member.is_constant() {
+            return self.nested_constant(member.definition, name);
+          }
+          return Some(Expr::place(member.member.type_id));
+        }
+      }
+    }
+    None
   }
 
   /// A constant declared inside a struct's body, resolved where it was

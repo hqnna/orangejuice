@@ -1,7 +1,7 @@
 use oj_diag::SourceId;
 use oj_lexer::Symbol;
 use oj_scope::{DeclId, ScopeId};
-use oj_syntax::ast::{Argument, DeclarationFlags, NodeData, NodeFlags, NodeId};
+use oj_syntax::ast::{Argument, DeclarationFlags, NodeData, NodeFlags, NodeId, OperatorType};
 use oj_types::TypeId;
 
 use crate::checker::{Checker, Expr};
@@ -208,11 +208,20 @@ impl Checker<'_> {
       } else {
         parameter.type_id
       };
-      // An argument to a macro's `Code` parameter is wrapped rather than
-      // converted: whatever was written is the code (**L§7.13**).
-      if signature.is_macro && target == TypeId::CODE {
+      // An argument to a `Code` parameter is wrapped rather than converted:
+      // whatever was written is the code, whether the header is a macro or an
+      // ordinary procedure (**L§7.13**, **L§13.1**).
+      if target == TypeId::CODE {
         total = total.saturating_add(convert::LITERAL);
         continue;
+      }
+      // A `.{…}` converts to every struct, so what it was written as is what
+      // tells two overloads apart (**L§5.7**, **L§7.5**).
+      if argument.value.type_id == TypeId::UNTYPED_LITERAL
+        && let Some((written_source, written, _)) = argument.written
+        && !self.untyped_literal_admits(written_source, written, target)
+      {
+        return None;
       }
       total = total.saturating_add(self.argument_distance(&argument.value, target)?);
     }
@@ -509,6 +518,116 @@ impl Checker<'_> {
     })
   }
 
+  /// The signature a call through a *value* uses (**L§7.2**). The type alone
+  /// says the parameter types; the annotation the value was declared with says
+  /// their names and defaults, which is what lets `set_shader_for_color:
+  /// (enable_blend := false);` be called with nothing.
+  pub(crate) fn signature_of_annotated(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    callee: NodeId,
+  ) -> Option<Signature> {
+    let callee_type = self
+      .expression_type_of(scope, source, callee)
+      .unwrap_or(TypeId::UNKNOWN);
+    let mut signature = self.signature_of_type(callee_type)?;
+    let Some((header_source, header)) = self.annotated_procedure_header(scope, source, callee)
+    else {
+      return Some(signature);
+    };
+    let types: Vec<TypeId> = signature
+      .parameters
+      .iter()
+      .map(|parameter| parameter.type_id)
+      .collect();
+    let parameters = self.header_parameters(header_source, header, &types);
+    if parameters.len() == signature.parameters.len() {
+      signature.parameters = parameters;
+      signature.header = Some((header_source, header));
+    }
+    Some(signature)
+  }
+
+  fn expression_type_of(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<TypeId> {
+    let value = self.expression_type(scope, source, node);
+    (!value.is_unknown()).then_some(value.type_id)
+  }
+
+  /// The procedure header a callee expression was *annotated* with, when it
+  /// names a declaration whose type slot spells one out (**L§7.2**).
+  fn annotated_procedure_header(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    callee: NodeId,
+  ) -> Option<(SourceId, NodeId)> {
+    let decl = self.callee_declaration(scope, source, callee)?;
+    let info = self.program().tree().decl(decl);
+    let (decl_source, node) = (info.source?, info.node?);
+    let NodeData::Declaration(declaration) = self.ast(decl_source)?.data(node) else {
+      return None;
+    };
+    let written = match self.ast(decl_source)?.data(declaration.type_inst?) {
+      NodeData::TypeInstantiation(inst) => inst.type_valued_expression?,
+      _ => return None,
+    };
+    matches!(
+      self.ast(decl_source)?.data(written),
+      NodeData::ProcedureHeader(_)
+    )
+    .then_some((decl_source, written))
+  }
+
+  /// The declaration a callee expression names: a bare name, or a member
+  /// reached through a struct.
+  fn callee_declaration(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    callee: NodeId,
+  ) -> Option<DeclId> {
+    match self.ast(source)?.data(callee).clone() {
+      NodeData::Ident(_) => {
+        let name = self.ident_name(source, callee)?;
+        let at = self.scope_at(source, callee, scope);
+        match self.program().tree().lookup(at, name) {
+          oj_scope::Resolution::Found(candidates) => match candidates[..] {
+            [only] => Some(only),
+            _ => None,
+          },
+          _ => None,
+        }
+      }
+      NodeData::BinaryOperator {
+        operator: OperatorType::DOT,
+        left,
+        right,
+        ..
+      } => {
+        let name = self.ident_name(source, right)?;
+        let base = self.expression_type(scope, source, left);
+        let underlying = self.types().underlying(base.type_id);
+        let pointee = self.types().pointee(underlying).unwrap_or(underlying);
+        let definition = self.types().struct_of(pointee)?;
+        let members = self.struct_scope(definition)?;
+        match self.program().tree().lookup(members, name) {
+          oj_scope::Resolution::Found(candidates) => match candidates[..] {
+            [only] => Some(only),
+            _ => None,
+          },
+          _ => None,
+        }
+      }
+      _ => None,
+    }
+  }
+
   /// A candidate built straight from a procedure type: a variable holding a
   /// procedure, or a member of one.
   pub(crate) fn signature_of_type(&self, type_id: TypeId) -> Option<Signature> {
@@ -597,6 +716,15 @@ impl Checker<'_> {
 
   /// Whether a type mentions a polymorph variable, which makes the candidate
   /// an instantiation rather than a match (**L§7.8**).
+  /// Whether a parameter was written as a procedure *pattern* — a procedure
+  /// type mentioning polymorph variables, `(x: T, total: T) -> T`. The shape it
+  /// asks an argument for is only known once those variables are bound, so a
+  /// call site solves it after everything else (**L§7.9**).
+  pub(crate) fn is_procedure_pattern(&self, type_id: TypeId) -> bool {
+    matches!(self.types().kind(type_id), oj_types::TypeKind::Procedure(_))
+      && self.is_polymorphic_type(type_id)
+  }
+
   pub(crate) fn is_polymorphic_type(&self, type_id: TypeId) -> bool {
     match self.types().kind(type_id) {
       oj_types::TypeKind::Polymorph(_) | oj_types::TypeKind::Unknown => true,

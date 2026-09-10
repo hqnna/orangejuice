@@ -12,7 +12,7 @@ use oj_syntax::ast::{
   ProcedureFlags, ScopeType,
 };
 
-use crate::constants::{AstSource, ConstValue, Evaluator};
+use crate::constants::{AstSource, ConstValue, Evaluator, ParameterBinding};
 use crate::tree::{
   Branch, Decl, DeclId, DeclKind, ImportEdge, PendingProvider, ScopeId, ScopeKind, ScopeTree,
   UsedValue, Visibility,
@@ -369,6 +369,10 @@ pub struct Program<'a> {
   inserted: boxcar::Vec<Insertion>,
   inserted_of_source: RefCell<HashMap<SourceId, usize>>,
   expansions: RefCell<HashMap<(SourceId, NodeId, InsertVariant), Expansion>>,
+  /// The quoted trees already admitted to a scope by an `#insert`, so that one
+  /// `#code` opens its scopes and declares its names once however many times
+  /// it is inserted (**L§13.1**).
+  admitted_code: RefCell<HashSet<(SourceId, NodeId)>>,
   /// The scope each `#code` and `#run` was written in. Neither is a lookup any
   /// scope would otherwise record, and both need to know where they stand: a
   /// `#code` for the names it quotes (**L§13.1**), a `#run` for the
@@ -406,6 +410,11 @@ pub struct Program<'a> {
   /// inside one of those exists until an instantiation makes it exist, so a
   /// `#run` written there waits for an instantiation rather than running (**L§12.1**).
   uninstantiated_scopes: RefCell<HashSet<ScopeId>>,
+  /// The polymorph scopes something actually instantiated. A body nothing
+  /// instantiated is never typechecked, so a name that misses inside one is
+  /// not an error there (**L§7.8**); the same name in a body a call site did
+  /// instantiate is, and is reported once the checker has been through it.
+  instantiated_scopes: RefCell<HashSet<ScopeId>>,
   /// The constants scope of every macro. A name that misses inside one of
   /// these is a wait for the expansion, not an error: the macro's body sees
   /// the caller's locals (**L§7.13**).
@@ -433,8 +442,28 @@ pub struct Program<'a> {
   /// declarations to drop (**L§6.10**).
   branch: Cell<Option<Branch>>,
   unshared_instances: Cell<u32>,
+  /// The arguments each `#import` gave a module's `#module_parameters`, by the
+  /// module scope they instantiated (**L§11.3**). The directive is only read
+  /// once the module's own files are loaded, which is after the import site
+  /// has been walked past, so the arguments wait here for it.
+  module_arguments: RefCell<HashMap<ScopeId, ImportArguments>>,
+  /// What each module parameter was actually given, once the two have been
+  /// matched up: the expression, and where it was written, since it is made of
+  /// the importer's names rather than the module's.
+  module_bindings: RefCell<HashMap<DeclId, ParameterBinding>>,
   preload: ScopeId,
   main: ScopeId,
+}
+
+/// The argument list one `#import` wrote, kept until the module it names
+/// declares the parameters they belong to.
+#[derive(Clone, Debug)]
+struct ImportArguments {
+  /// The scope the arguments were written in, which is where their names are
+  /// looked up — the importer's, not the module's.
+  scope: ScopeId,
+  source: SourceId,
+  arguments: Vec<Argument>,
 }
 
 impl AstSource for Program<'_> {
@@ -513,7 +542,9 @@ impl<'a> Program<'a> {
       loop_scopes: RefCell::default(),
       procedure_scopes: RefCell::default(),
       procedure_owners: RefCell::default(),
+      admitted_code: RefCell::default(),
       uninstantiated_scopes: RefCell::default(),
+      instantiated_scopes: RefCell::default(),
       macro_scopes: RefCell::default(),
       builtins: RefCell::default(),
       references: RefCell::default(),
@@ -525,6 +556,8 @@ impl<'a> Program<'a> {
       conditional: Cell::new(0),
       branch: Cell::new(None),
       unshared_instances: Cell::new(0),
+      module_arguments: RefCell::default(),
+      module_bindings: RefCell::default(),
       preload,
       main,
     };
@@ -655,6 +688,24 @@ impl<'a> Program<'a> {
     let mut current = Some(scope);
     while let Some(id) = current {
       if self.uninstantiated_scopes.borrow().contains(&id) {
+        return true;
+      }
+      current = self.tree.parent(id);
+    }
+    false
+  }
+
+  /// Records that a call site made a specialization of the body hanging under
+  /// `scope`, so what is written there is the program's after all.
+  pub fn mark_instantiated(&self, scope: ScopeId) {
+    self.instantiated_scopes.borrow_mut().insert(scope);
+  }
+
+  /// Whether anything instantiated the polymorphic body `scope` lies in.
+  pub fn is_instantiated(&self, scope: ScopeId) -> bool {
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if self.instantiated_scopes.borrow().contains(&id) {
         return true;
       }
       current = self.tree.parent(id);
@@ -1666,8 +1717,16 @@ impl<'a> Program<'a> {
     } else {
       0
     };
+    // Two spellings of one file are one module: a short name resolved against
+    // the import path and the absolute path a metaprogram provided for the
+    // same file name the same module, which is what makes `Replace3.procedure
+    // == Flathead.procedure` (**C§3.3**).
+    let entry = resolved
+      .entry
+      .canonicalize()
+      .unwrap_or_else(|_| resolved.entry.clone());
     let key = ModuleKey {
-      entry: resolved.entry.clone(),
+      entry: entry.clone(),
       parameters: self.parameter_text(parsed, &import, source),
       instance,
     };
@@ -1677,6 +1736,20 @@ impl<'a> Program<'a> {
 
     let module = self.tree.push_scope(ScopeKind::Module, Some(self.preload));
     self.modules.borrow_mut().insert(key, module);
+    if let Some(arguments) = import
+      .module_parameters
+      .as_ref()
+      .filter(|arguments| !arguments.is_empty())
+    {
+      self.module_arguments.borrow_mut().insert(
+        module,
+        ImportArguments {
+          scope,
+          source,
+          arguments: arguments.clone(),
+        },
+      );
+    }
     self.record_module(name, resolved.entry.clone(), module, ModuleKind::File);
     self.load_module_files(module, &resolved.entry, Some((source, span)));
     Some(module)
@@ -1856,21 +1929,71 @@ impl<'a> Program<'a> {
       visibility: Visibility::Module,
       conditional: target.conditional,
     };
-    for header in [Some(module_parameters), program_parameters]
+    // Only the *module* parameters take what an `#import` wrote; the program
+    // parameters are the main program's to set (**L§11.3**).
+    let given = self.module_arguments.borrow().get(&destination).cloned();
+    for (takes_arguments, header) in [(true, Some(module_parameters)), (false, program_parameters)]
       .into_iter()
-      .flatten()
+      .filter_map(|(takes_arguments, header)| Some((takes_arguments, header?)))
     {
       let NodeData::ProcedureHeader(header) = parsed.ast.data(header) else {
         continue;
       };
       let arguments = header.arguments.clone();
-      for argument in arguments {
-        self.declare_parameter(parsed, argument, &mut inner, source);
+      for (index, argument) in arguments.into_iter().enumerate() {
+        let declared = self.declare_parameter(parsed, argument, &mut inner, source);
+        if let (true, Some(declared), Some(given)) = (takes_arguments, declared, given.as_ref()) {
+          self.bind_module_argument(declared, index, given);
+        }
       }
     }
     if let Some(common_code) = common_code {
       self.walk(parsed, common_code, destination, source);
     }
+  }
+
+  /// Matches one module parameter with the argument the `#import` gave it: the
+  /// one written under its name, or else the one in its place (**L§11.3**). A
+  /// parameter nothing was written for keeps the default its declaration has.
+  fn bind_module_argument(&self, declared: DeclId, index: usize, given: &ImportArguments) {
+    // The argument nodes belong to the file the `#import` was written in, not
+    // to the module's own, so they are read out of that tree.
+    let Some(written_in) = self.ast_of(given.source) else {
+      return;
+    };
+    let name = self.tree.decl(declared).name;
+    let named = given.arguments.iter().find(|argument| {
+      argument
+        .name
+        .and_then(|node| match written_in.data(node) {
+          NodeData::Ident(ident) => Some(ident.name),
+          _ => None,
+        })
+        .is_some_and(|written| written == name)
+    });
+    let argument = named.or_else(|| {
+      given
+        .arguments
+        .get(index)
+        .filter(|argument| argument.name.is_none())
+    });
+    let Some(argument) = argument else {
+      return;
+    };
+    self.module_bindings.borrow_mut().insert(
+      declared,
+      ParameterBinding {
+        scope: given.scope,
+        source: given.source,
+        expression: argument.expression,
+      },
+    );
+  }
+
+  /// The expression a module parameter was given by the `#import` that made
+  /// this instantiation, if it was given one.
+  pub fn module_binding(&self, declared: DeclId) -> Option<ParameterBinding> {
+    self.module_bindings.borrow().get(&declared).copied()
   }
 
   fn poke_name(
@@ -2235,6 +2358,37 @@ impl<'a> Program<'a> {
       .collect()
   }
 
+  /// Admits the program a `Code` value names into the scope an `#insert` is
+  /// putting it in (**L§13.1**). A `#code`'s contents are not walked where
+  /// they are written — quoted code is typechecked where it is inserted — so
+  /// this is what declares the names it holds and records the lookups it makes,
+  /// which is what lets an inserted `#code { x := 1; f(x); }` see its own `x`.
+  /// A block's statements land in the scope the `#insert` stands in rather than
+  /// in one of their own, since that is what splicing means and it is where a
+  /// macro's backticked names are (**L§13.2**). Program text that was walked
+  /// already — a loop body handed to a `for_expansion` — is left alone, and one
+  /// quoted tree is admitted once however many times it is inserted.
+  pub fn admit_code(&self, scope: ScopeId, source: SourceId, root: NodeId) {
+    if !self.directive_scopes.borrow().contains_key(&(source, root)) {
+      return;
+    }
+    if !self.admitted_code.borrow_mut().insert((source, root)) {
+      return;
+    }
+    let Some(parsed) = self.parsed_of(source) else {
+      return;
+    };
+    if let NodeData::Block(block) = parsed.ast.data(root)
+      && block.block_type == oj_syntax::ast::BlockType::Imperative
+    {
+      for statement in block.statements.clone() {
+        self.imperative_statement(&parsed, statement, scope, source);
+      }
+      return;
+    }
+    self.walk(&parsed, root, scope, source);
+  }
+
   fn parsed_of(&self, source: SourceId) -> Option<Arc<Parsed>> {
     if let Some(index) = self.unit_of_source.borrow().get(&source).copied() {
       return Some(Arc::clone(&self.units[index].parsed));
@@ -2248,8 +2402,14 @@ impl<'a> Program<'a> {
   }
 
   fn fold(&self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<ConstValue> {
-    Evaluator::new(&self.tree, self, &self.builtins.borrow(), self.interner)
-      .eval(scope, source, node)
+    Evaluator::new(
+      &self.tree,
+      self,
+      &self.builtins.borrow(),
+      &self.module_bindings.borrow(),
+      self.interner,
+    )
+    .eval(scope, source, node)
   }
 
   // --------------------------------------------------------------- insert ---
@@ -3124,12 +3284,12 @@ impl Program<'_> {
     parameter: NodeId,
     target: &mut DataTarget,
     source: SourceId,
-  ) {
+  ) -> Option<DeclId> {
     match parsed.ast.data(parameter) {
       NodeData::Declaration(_) => {
-        if let Some(id) = self.declare(parsed, parameter, target, source) {
-          self.set_parameter_kind(id);
-        }
+        let id = self.declare(parsed, parameter, target, source)?;
+        self.set_parameter_kind(id);
+        return Some(id);
       }
       NodeData::Using(using) => {
         let (expression, filter_type, filter) =
@@ -3146,6 +3306,7 @@ impl Program<'_> {
       }
       _ => self.walk(parsed, parameter, target.scope, source),
     }
+    None
   }
 
   /// A parameter is a constant of the call, not a global or a local: the kind

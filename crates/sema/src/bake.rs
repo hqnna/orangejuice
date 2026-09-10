@@ -8,8 +8,8 @@
 //! original.
 
 use oj_diag::SourceId;
-use oj_scope::{DeclId, ScopeId};
-use oj_syntax::ast::{BakeType, NodeData, NodeId};
+use oj_scope::{DeclId, Resolution, ScopeId};
+use oj_syntax::ast::{BakeType, DeclarationFlags, NodeData, NodeId};
 use oj_types::{ProcedureType, TypeId};
 
 use crate::checker::Checker;
@@ -172,16 +172,37 @@ impl Checker<'_> {
   /// The `#bake_arguments` a declaration's value is, and the scope it was
   /// written in.
   fn bake_of(&mut self, candidate: DeclId) -> Option<(SourceId, NodeId, ScopeId)> {
+    self.bake_of_at(candidate, 0)
+  }
+
+  /// A name declared as another name is that name (**L§5.11**), so `h ::
+  /// formatHex;` over a `#bake_arguments` is the bake — read where the bake
+  /// itself was written, since that is where its baked defaults resolve.
+  fn bake_of_at(&mut self, candidate: DeclId, depth: u32) -> Option<(SourceId, NodeId, ScopeId)> {
+    const MAX_ALIAS_DEPTH: u32 = 16;
+    if depth >= MAX_ALIAS_DEPTH {
+      return None;
+    }
     let decl = self.program().tree().decl(candidate);
     let (node, source) = (decl.node?, decl.source?);
     let NodeData::Declaration(declaration) = self.ast(source)?.data(node) else {
       return None;
     };
     let expression = declaration.expression?;
-    matches!(
-      self.ast(source)?.data(expression),
-      NodeData::DirectiveBake { .. }
-    )
-    .then_some((source, expression, decl.scope))
+    match self.ast(source)?.data(expression) {
+      NodeData::DirectiveBake { .. } => Some((source, expression, decl.scope)),
+      NodeData::Ident(ident) if declaration.flags.contains(DeclarationFlags::IS_CONSTANT) => {
+        let name = ident.name;
+        let scope = self.scope_at(source, expression, decl.scope);
+        let Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
+          return None;
+        };
+        let [aliased] = candidates[..] else {
+          return None;
+        };
+        self.bake_of_at(aliased, depth + 1)
+      }
+      _ => None,
+    }
   }
 }

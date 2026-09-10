@@ -486,13 +486,31 @@ impl ScopeTree {
       });
       let here = found.or_else(|| self.lookup_through_imports(id, name));
       if let Some(here) = here {
-        if !here
+        // A `#placeholder` is a promise that something will declare the name,
+        // so a real declaration in the same scope replaces it and one further
+        // out is still reached: it neither shadows nor stops the walk
+        // (**C§3.3**). Everything that is not a procedure does both.
+        let real: Vec<DeclId> = here
           .iter()
-          .all(|decl| self.decl(*decl).kind == DeclKind::Procedure)
-        {
-          return Resolution::Found(match collected.is_empty() {
-            true => here,
-            false => collected,
+          .copied()
+          .filter(|decl| self.decl(*decl).kind != DeclKind::Placeholder)
+          .collect();
+        let stops = !real.is_empty()
+          && !real
+            .iter()
+            .all(|decl| self.decl(*decl).kind == DeclKind::Procedure);
+        if stops {
+          // What a nearer scope gathered wins — unless all it gathered is
+          // `#placeholder`s, which are promises rather than declarations: the
+          // one that stopped the walk is what fills them (**C§3.3**).
+          let gathered: Vec<DeclId> = collected
+            .iter()
+            .copied()
+            .filter(|decl| self.decl(*decl).kind != DeclKind::Placeholder)
+            .collect();
+          return Resolution::Found(match gathered.is_empty() {
+            true => real,
+            false => gathered,
           });
         }
         for decl in here {
@@ -501,7 +519,11 @@ impl ScopeTree {
           }
         }
       }
-      pending |= has_pending;
+      // A module that wrote `using gl;` hands its importers whatever `gl`
+      // holds, which is not a name any scope wrote down (**L§6.8**,
+      // **L§11.2**): a miss here is a wait for the typechecker to look through
+      // that value, the way it is inside the module itself.
+      pending |= has_pending || self.imports_a_using(id);
       current = parent;
     }
 
@@ -542,6 +564,19 @@ impl ScopeTree {
       }
     }
     found
+  }
+
+  /// Whether a scope imports a module that widened itself with a `using` of a
+  /// value: what that brings in is a member of something rather than a name any
+  /// scope holds, so only the typechecker can answer for it (**L§6.8**).
+  fn imports_a_using(&self, scope: ScopeId) -> bool {
+    self.imports(scope).iter().any(|edge| {
+      self.with_scope(edge.target, |target| !target.used_values.is_empty())
+        || self
+          .imports(edge.target)
+          .iter()
+          .any(|inner| self.with_scope(inner.target, |target| !target.used_values.is_empty()))
+    })
   }
 
   /// The exported declarations of `name` in the scopes `scope` imports, plus

@@ -41,6 +41,16 @@ pub trait AstSource {
   fn ast_of(&self, source: SourceId) -> Option<&Ast>;
 }
 
+/// The expression a module parameter took from the `#import` that instantiated
+/// its module, and where that was written — the importer's scope and file,
+/// since the expression is made of the importer's names (**L§11.3**).
+#[derive(Clone, Copy, Debug)]
+pub struct ParameterBinding {
+  pub scope: ScopeId,
+  pub source: SourceId,
+  pub expression: NodeId,
+}
+
 /// Folds constant expressions far enough to choose `#if` branches. Anything
 /// that would need types, `#run` or the interpreter evaluates to `None`, which
 /// callers treat as "not yet known" rather than as an error.
@@ -48,6 +58,7 @@ pub struct Evaluator<'a> {
   tree: &'a ScopeTree,
   asts: &'a dyn AstSource,
   builtins: &'a HashMap<DeclId, ConstValue>,
+  bindings: &'a HashMap<DeclId, ParameterBinding>,
   interner: &'a Interner,
 }
 
@@ -58,12 +69,14 @@ impl<'a> Evaluator<'a> {
     tree: &'a ScopeTree,
     asts: &'a dyn AstSource,
     builtins: &'a HashMap<DeclId, ConstValue>,
+    bindings: &'a HashMap<DeclId, ParameterBinding>,
     interner: &'a Interner,
   ) -> Self {
     Self {
       tree,
       asts,
       builtins,
+      bindings,
       interner,
     }
   }
@@ -149,8 +162,16 @@ impl<'a> Evaluator<'a> {
       return Some(value.clone());
     }
 
+    // A `#module_parameters` parameter is a constant of the module scope, and
+    // it is what an `#if` in a parameterized module reads (**L§11.3**): the
+    // argument the `#import` gave it, or else the default it declared.
+    if let Some(binding) = self.bindings.get(decl) {
+      return self.eval_at(binding.scope, binding.source, binding.expression, depth + 1);
+    }
     let declaration = self.tree.decl(*decl);
-    if declaration.kind != DeclKind::Constant {
+    let is_module_parameter = declaration.kind == DeclKind::Parameter
+      && self.tree.scope_kind(declaration.scope).is_program_scope();
+    if declaration.kind != DeclKind::Constant && !is_module_parameter {
       return None;
     }
     let source = declaration.source?;
@@ -353,7 +374,8 @@ mod tests {
       }
 
       let asts = OneFile(parsed.ast);
-      let evaluator = Evaluator::new(&self.tree, &asts, &self.builtins, &self.interner);
+      let bindings = HashMap::new();
+      let evaluator = Evaluator::new(&self.tree, &asts, &self.builtins, &bindings, &self.interner);
       evaluator.eval(
         self.scope,
         SourceId(0),

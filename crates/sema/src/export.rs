@@ -92,6 +92,10 @@ impl<'c, 'p> Exporter<'c, 'p> {
     self.touched.clear();
     self.reached.clear();
     let root = self.node(source, node);
+    // The tree is now as the compiler made it, so a metaprogram writing to one
+    // of its nodes — `compiler_get_nodes` hands them out to be edited — shows
+    // up as a change to it (**C§3.3**).
+    self.nodes.freeze();
     self.nodes.tree(root).unwrap_or(Tree {
       root,
       expressions: Slice::EMPTY,
