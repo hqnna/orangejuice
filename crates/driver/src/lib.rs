@@ -323,12 +323,19 @@ fn run_workspace_once(
   if let Some(outer) = outer {
     oj_meta::install(outer);
   }
+  // A polymorphic body nobody instantiated was never typechecked, so the batch
+  // before typechecking left its names alone; the ones a call site did
+  // specialize are reported now (**L§7.8**).
+  let instantiated = oj_scope::undeclared_in_instantiations(&program);
+  let instantiated = oj_scope::undeclared_diagnostics(&instantiated);
+  let instantiated_failed = instantiated.iter().any(oj_diag::Diagnostic::is_error);
+  render(&instantiated, &mut report);
   render(checker.diagnostics(), &mut report);
   for (_, diagnostics) in std::mem::take(&mut *watched.diagnostics.borrow_mut()) {
     report.diagnostics.extend(diagnostics);
   }
   report_metaprogram_diagnostics(&meta, &mut report);
-  if checker.has_errors() || meta.has_errors() {
+  if instantiated_failed || checker.has_errors() || meta.has_errors() {
     report.failed = true;
     return report;
   }
@@ -378,13 +385,17 @@ fn run_workspace_once(
   let lower_options = oj_ir::LowerOptions {
     stack_trace: options.stack_trace,
   };
+  // Only an executable has to have a `main`: a library and an object file hold
+  // whatever their exports reach (**L§11.6**, **C§4**).
   let mut lowered = match options.output_type {
-    oj_link::OutputType::DynamicLibrary => oj_ir::lower_library(
+    oj_link::OutputType::Executable => {
+      oj_ir::lower_with_roots(&mut checker, &options.live_procedures, lower_options)
+    }
+    _ => oj_ir::lower_library(
       &mut checker,
       options.runtime_support.defines_init(),
       lower_options,
     ),
-    _ => oj_ir::lower_with_roots(&mut checker, &options.live_procedures, lower_options),
   };
   keep_compile_time_data(&mut lowered.program, &engine);
   let lowered = lowered;
@@ -565,12 +576,14 @@ fn seed_default_paths(meta: &mut oj_meta::Meta, options: &BuildOptions, root: &P
     .map(Path::to_path_buf)
     .unwrap_or_else(|| PathBuf::from("."));
   let layout = meta.build_options_layout;
+  // A *fresh* `Build_Options` names the directory the file being compiled is
+  // in, not whatever `-output_path` said: `output_path` is not one of the
+  // `Commonly_Propagated` fields, so a workspace a metaprogram creates writes
+  // beside its own first file unless it is told otherwise (**C§4**). The
+  // command line reaches the target workspace because `Default_Metaprogram`
+  // parses it and sets it there.
   if let Some(at) = layout.output_path {
-    let output = options
-      .output_path
-      .clone()
-      .unwrap_or_else(|| directory.clone());
-    meta.seed_string(at, &output.display().to_string());
+    meta.seed_string(at, &directory.display().to_string());
   }
   if let Some(at) = layout.intermediate_path {
     let intermediate = directory.join(".build");
@@ -606,6 +619,8 @@ fn build_options_layout(
       "use_custom_link_command" => layout.use_custom_link_command = Some(offset),
       "intermediate_path" => layout.intermediate_path = Some(offset),
       "import_path" => layout.import_path = Some(offset),
+      "os_target" => layout.os_target = Some(offset),
+      "cpu_target" => layout.cpu_target = Some(offset),
       "append_executable_filename_extension" => {
         layout.append_executable_filename_extension = Some(offset);
       }
@@ -697,15 +712,33 @@ fn workspace_compiler(
   let outer = outer.to_path_buf();
   let options = options.clone();
   std::rc::Rc::new(move |workspace: &oj_meta::Workspace| {
-    let (input, nested) = workspace_input(workspace, &layout, &dc_layout, &outer, &options);
-    let report = run_workspace(&input, &nested, stage, None, Some(watching.nodes.clone()));
+    let report = match unsupported_target(workspace, &layout) {
+      Some(message) => Report::failure(message),
+      None => {
+        let (input, nested) = workspace_input(workspace, &layout, &dc_layout, &outer, &options);
+        run_workspace(&input, &nested, stage, None, Some(watching.nodes.clone()))
+      }
+    };
     let mut compiled = report.compiled;
     compiled.errors = report.diagnostics.len();
     compiled.failed |= report.failed;
+    // The compiler says which workspace a diagnostic belongs to before it
+    // reports one, since the compilation it came from is not the one the
+    // command line named (**C§12**).
+    let mut diagnostics = report.diagnostics;
+    if !diagnostics.is_empty() {
+      diagnostics.insert(
+        0,
+        format!(
+          "\nIn Workspace {} (\"{}\"):\n",
+          workspace.id, workspace.name
+        ),
+      );
+    }
     watching
       .diagnostics
       .borrow_mut()
-      .insert(workspace.id, report.diagnostics);
+      .insert(workspace.id, diagnostics);
     if let Some(executable) = report.executable
       && watching.produced.borrow().is_none()
     {
@@ -713,6 +746,32 @@ fn workspace_compiler(
     }
     compiled
   })
+}
+
+/// `Operating_System_Tag.LINUX` and `CPU_Tag.X64`, the only pair orangejuice
+/// produces output for (`docs/spec.md` §2, **L§17**).
+const LINUX: u32 = 3;
+const X64: u32 = 3;
+
+/// What a workspace asked to be compiled for, when that is a target
+/// orangejuice does not produce output for (`docs/spec.md` §2). A metaprogram
+/// that cross-compiles is told so rather than handed a native executable it
+/// did not ask for.
+fn unsupported_target(
+  workspace: &oj_meta::Workspace,
+  layout: &oj_meta::BuildOptionsLayout,
+) -> Option<String> {
+  let os = workspace.option_u32(layout, |layout| layout.os_target);
+  let cpu = workspace.option_u32(layout, |layout| layout.cpu_target);
+  match (os, cpu) {
+    (Some(os), _) if os != LINUX => Some(format!(
+      "Compiling for an operating system other than Linux is not supported (os_target is {os})."
+    )),
+    (_, Some(cpu)) if cpu != X64 => Some(format!(
+      "Compiling for a processor other than x64 is not supported (cpu_target is {cpu})."
+    )),
+    _ => None,
+  }
 }
 
 /// The input and the options one workspace compiles with, as its metaprogram
@@ -729,8 +788,19 @@ fn workspace_input(
     .map(Path::to_path_buf)
     .unwrap_or_else(|| PathBuf::from("."));
   let mut nested = options.clone();
-  nested.compile_time_command_line = Vec::new();
+  // What the workspace's own `#run`s read as their command line: the
+  // metaprogram driving it decides that, which is how `Default_Metaprogram`
+  // hands a program the arguments written after the lone `-` (**C§2.1**).
+  nested.compile_time_command_line = workspace
+    .option_strings(layout, |layout| layout.compile_time_command_line)
+    .unwrap_or_default();
   nested.workspace_id = workspace.id;
+  // Where a workspace writes is *not* one of the `Commonly_Propagated` fields
+  // (**C§4**): a fresh one puts its output beside the first file it was given
+  // unless its own `Build_Options` say otherwise, which is what lets
+  // `examples/dll` build its library beside `helper.jai` and then link it.
+  nested.output_path = None;
+  nested.output_executable_name = None;
   if let Some(name) = workspace.option_string(layout, |layout| layout.output_executable_name)
     && !name.is_empty()
   {
@@ -754,6 +824,13 @@ fn workspace_input(
   }
   if let Some(custom) = workspace.option_u8(layout, |layout| layout.use_custom_link_command) {
     nested.custom_link_command = custom != 0;
+  }
+  // A metaprogram that added a directory to `import_path` means a `#import` in
+  // the workspace it drives to search there (**C§4**).
+  if let Some(path) = workspace.option_strings(layout, |layout| layout.import_path)
+    && !path.is_empty()
+  {
+    nested.import_dirs = path.into_iter().map(PathBuf::from).collect();
   }
   apply_during_compile(workspace, dc_layout, &mut nested);
   nested.import_remaps = workspace
@@ -925,14 +1002,19 @@ fn build_workspaces(
   report: &mut Report,
 ) {
   for workspace in meta.buildable() {
-    let (input, nested) = workspace_input(
-      workspace,
-      &meta.build_options_layout,
-      &meta.during_compile_layout,
-      outer,
-      options,
-    );
-    let inner = run_input(&input, &nested, stage, None);
+    let inner = match unsupported_target(workspace, &meta.build_options_layout) {
+      Some(message) => Report::failure(message),
+      None => {
+        let (input, nested) = workspace_input(
+          workspace,
+          &meta.build_options_layout,
+          &meta.during_compile_layout,
+          outer,
+          options,
+        );
+        run_input(&input, &nested, stage, None)
+      }
+    };
     report.diagnostics.extend(inner.diagnostics);
     if inner.failed {
       report.failed = true;
