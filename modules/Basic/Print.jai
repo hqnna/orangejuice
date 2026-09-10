@@ -42,6 +42,12 @@ tprint :: (format: string, args: ..Any) -> string {
     return sprint(format, ..args, allocator = temp);
 }
 
+// Appends formatted text to a builder the caller already has, which is what
+// code generating source into one wants.
+print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) -> s64 {
+    return format_to_builder(builder, format, args);
+}
+
 // One value, formatted the way `print` would format it.
 to_string :: (value: Any, allocator := context.allocator) -> string {
     builder: String_Builder;

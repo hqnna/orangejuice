@@ -315,6 +315,15 @@ what it actually does.
   arguments into a compile-time array of `Type` that the struct body can index
   and iterate. `modules/Tagged_Union.jai` takes four defaulted parameters
   instead, which keeps the call syntax for up to four types.
+- **An `#insert`-generated member cannot be reached through a polymorphic
+  parameter.** A struct whose body comes from `#insert -> string` instantiates
+  correctly and its members can be used directly, but a procedure taking
+  `*Soa($T, $N)`, or a macro taking `*$S`, reports a milestone error naming M7
+  when it touches one. Narrowed: a plain polymorphic struct, one with
+  `#modify`, one with `#insert`, and even reading an inserted member through
+  `*A($T, $N)` all work in isolation — it is the combination in
+  `modules/Soa.jai` that does not, and the same failure happens whether the
+  procedure is in the module or beside the caller.
 - **`#assert` on a polymorph variable captured through a struct parameter does
   not fold across a module boundary.** `#assert(V == A || V == B)` inside
   `set :: (u: *Tagged_Union(, ), value: )` holds when the procedure and
