@@ -826,13 +826,16 @@ impl Checker<'_> {
     // The lookup gathered outwards, nearest scope first, and a tie between two
     // scored candidates is broken by that order (**L§7.5**) — so the
     // duplicates go without the list being sorted.
-    let mut seen = std::collections::HashSet::new();
-    let real: Vec<DeclId> = self
-      .live_candidates(candidates)
-      .into_iter()
-      .filter(|id| self.program().tree().decl(*id).kind != DeclKind::Placeholder)
-      .filter(|id| seen.insert(*id))
-      .collect();
+    // An overload set is a handful of declarations at most, so what has
+    // already been taken is cheaper to scan than to hash — and this is asked
+    // of every name a program mentions.
+    let mut real: Vec<DeclId> = Vec::new();
+    for id in self.live_candidates(candidates) {
+      if self.program().tree().decl(id).kind == DeclKind::Placeholder || real.contains(&id) {
+        continue;
+      }
+      real.push(id);
+    }
     let [only] = real[..] else {
       if real.is_empty() {
         return Expr::UNKNOWN;

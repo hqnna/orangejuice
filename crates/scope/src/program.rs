@@ -364,6 +364,12 @@ pub struct Program<'a> {
   tree: ScopeTree,
   units: boxcar::Vec<Unit>,
   unit_of_source: RefCell<HashMap<SourceId, usize>>,
+  /// The last file [`Program::ast_of`] was asked for, and where it lives.
+  ///
+  /// Everything that walks a tree asks for the same file over and over — the
+  /// whole way down one — so the table is looked in once per file rather than
+  /// once per node. `true` means the answer is an `#insert`ed program.
+  last_ast: Cell<Option<(SourceId, usize, bool)>>,
   /// The programs `#insert`s expanded to, which grow after the tree is first
   /// built: this is the mutable program of **L§13.2**.
   inserted: boxcar::Vec<Insertion>,
@@ -468,10 +474,20 @@ struct ImportArguments {
 
 impl AstSource for Program<'_> {
   fn ast_of(&self, source: SourceId) -> Option<&oj_syntax::ast::Ast> {
+    if let Some((last, index, inserted)) = self.last_ast.get()
+      && last == source
+    {
+      return Some(match inserted {
+        true => &self.inserted[index].parsed.ast,
+        false => &self.units[index].parsed.ast,
+      });
+    }
     if let Some(index) = self.unit_of_source.borrow().get(&source).copied() {
+      self.last_ast.set(Some((source, index, false)));
       return Some(&self.units[index].parsed.ast);
     }
     let index = *self.inserted_of_source.borrow().get(&source)?;
+    self.last_ast.set(Some((source, index, true)));
     Some(&self.inserted[index].parsed.ast)
   }
 }
@@ -528,6 +544,7 @@ impl<'a> Program<'a> {
       tree,
       units: boxcar::Vec::new(),
       unit_of_source: RefCell::default(),
+      last_ast: Cell::default(),
       inserted: boxcar::Vec::new(),
       inserted_of_source: RefCell::default(),
       expansions: RefCell::default(),
@@ -998,6 +1015,7 @@ impl<'a> Program<'a> {
       .unit_of_source
       .borrow_mut()
       .insert(source, self.units.count());
+    self.last_ast.set(None);
     self.units.push(Unit {
       source,
       path: path.to_path_buf(),
@@ -2551,6 +2569,7 @@ impl<'a> Program<'a> {
       .inserted_of_source
       .borrow_mut()
       .insert(source, self.inserted.count());
+    self.last_ast.set(None);
     self.inserted.push(Insertion {
       path,
       scope,
