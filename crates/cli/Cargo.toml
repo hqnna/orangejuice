@@ -11,6 +11,7 @@ name = "oj"
 path = "src/main.rs"
 
 [dependencies]
+mimalloc.workspace = true
 clap.workspace = true
 oj-diag.workspace = true
 oj-driver.workspace = true

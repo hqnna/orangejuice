@@ -275,6 +275,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -304,10 +313,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
+]
+
+[[package]]
 name = "oj-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "mimalloc",
  "oj-diag",
  "oj-driver",
  "oj-lexer",
@@ -368,6 +387,7 @@ dependencies = [
  "oj-syntax",
  "oj-testsupport",
  "oj-types",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -419,6 +439,7 @@ dependencies = [
  "oj-scope",
  "oj-sema",
  "oj-testsupport",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -495,6 +516,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "oj-lexer",
+ "rustc-hash",
 ]
 
 [[package]]

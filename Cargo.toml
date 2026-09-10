@@ -26,6 +26,7 @@ oj-testsupport = { path = "crates/testsupport" }
 oj-types = { path = "crates/types" }
 
 bitflags = "2"
+mimalloc = { version = "0.1", default-features = false }
 rustc-hash = "2"
 boxcar = "0.2"
 cc = "1"
