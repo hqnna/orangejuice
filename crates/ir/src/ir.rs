@@ -307,18 +307,37 @@ pub enum Terminator {
   Unreachable,
 }
 
+/// Where a piece of the program was written, for the line table the debugger
+/// reads (**C§4**). `file` indexes [`Program::debug_files`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Loc {
+  pub file: u32,
+  pub line: u32,
+  pub column: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Block {
   pub instructions: Vec<Inst>,
+  /// Where each instruction was written, one per entry of `instructions`.
+  pub locations: Vec<Option<Loc>>,
   pub terminator: Terminator,
+  pub terminator_location: Option<Loc>,
 }
 
 impl Block {
   pub fn new() -> Self {
     Self {
       instructions: Vec::new(),
+      locations: Vec::new(),
       terminator: Terminator::Unreachable,
+      terminator_location: None,
     }
+  }
+
+  /// Where an instruction was written, when the lowering knew.
+  pub fn location(&self, index: usize) -> Option<Loc> {
+    self.locations.get(index).copied().flatten()
   }
 }
 
@@ -334,6 +353,12 @@ pub struct Local {
   pub type_id: TypeId,
   pub size: u64,
   pub alignment: u64,
+  /// Where the declaration was written, for the debugger (**C§4**). A
+  /// temporary the lowering made up has none.
+  pub location: Option<Loc>,
+  /// Which parameter this local holds, 1-based. A debugger lists those
+  /// separately from the body's own variables.
+  pub parameter: Option<u32>,
 }
 
 bitflags::bitflags! {
@@ -426,6 +451,9 @@ pub struct Procedure {
   pub blocks: Vec<Block>,
   pub value_types: Vec<TypeId>,
   pub entry: BlockId,
+  /// Where the procedure was written, which is where a debugger stops
+  /// (**C§4**).
+  pub location: Option<Loc>,
 }
 
 impl Procedure {
@@ -601,6 +629,10 @@ pub struct Program {
   /// The generated procedure that runs the global initializers the front end
   /// could not fold into data, called before `main`.
   pub global_init: Option<ProcId>,
+  /// The generated procedure that fills in the `Stack_Trace_Procedure_Info` of
+  /// every procedure that keeps a stack trace node (**C§13**). It runs before
+  /// the global initializers, since one of those may already trace.
+  pub stack_trace_init: Option<ProcId>,
   /// The type of `#Context`, which every Jai-convention procedure takes a
   /// pointer to (**L§10.1**).
   pub context_type: TypeId,
@@ -610,6 +642,39 @@ pub struct Program {
   /// image took (**L§17**). A `Type` a compile-time program produced is an
   /// address into it, so this is what turns that address back into a type.
   pub type_table: TypeTableImage,
+  /// The files every [`Loc`] names, as absolute paths (**C§4**).
+  pub debug_files: Vec<String>,
+  /// The names the debug information needs, which the back end cannot work
+  /// out for itself: it has the type table but not the interner (**C§4**).
+  pub names: DebugNames,
+}
+
+/// Every name a DWARF description of the program mentions.
+#[derive(Clone, Debug, Default)]
+pub struct DebugNames {
+  /// One name per type, indexed by [`TypeId`].
+  pub types: Vec<String>,
+  /// One member name list per struct definition, indexed by `StructId`.
+  pub members: Vec<Vec<String>>,
+}
+
+impl DebugNames {
+  pub fn type_name(&self, type_id: TypeId) -> &str {
+    self
+      .types
+      .get(type_id.0 as usize)
+      .map(String::as_str)
+      .unwrap_or("")
+  }
+
+  pub fn member_name(&self, definition: oj_types::StructId, index: usize) -> &str {
+    self
+      .members
+      .get(definition.0 as usize)
+      .and_then(|names| names.get(index))
+      .map(String::as_str)
+      .unwrap_or("")
+  }
 }
 
 /// Where the types the program asked about ended up (**L§17**).

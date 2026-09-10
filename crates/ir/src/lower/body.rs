@@ -41,6 +41,7 @@ impl Lowering<'_, '_> {
     self.return_decls.clear();
     self.return_pointers.clear();
     self.context_value = None;
+    self.trace_frame = None;
   }
 
   pub(super) fn lower_procedure(&mut self, id: ProcId, key: ProcKey) {
@@ -139,6 +140,7 @@ impl Lowering<'_, '_> {
             })
             .unwrap_or_else(|| format!("arg{declared}"));
           let local = self.new_local(name, parameter.type_id);
+          self.locals[local.0 as usize].parameter = Some(declared as u32 + 1);
           let address = self.local_address(local);
           let value = Val {
             id: incoming[index],
@@ -174,6 +176,19 @@ impl Lowering<'_, '_> {
         self.local_of_decl.insert(key, local);
       }
     }
+
+    // The node goes in after the parameters, so that the procedure's own
+    // storage is what the trace points into (**C§13**).
+    let declared_at = match key {
+      ProcKey::Decl(_, decl) => {
+        let info = self.checker.program().tree().decl(decl);
+        (info.source.unwrap_or(body.source), info.span)
+      }
+      _ => (body.source, self.span_of(body.source, body.header)),
+    };
+    self.push_trace_node(id, flags, declared_at);
+    let (declared_source, declared_span) = declared_at;
+    self.procedures[id.0 as usize].location = self.span_loc(declared_source, declared_span);
 
     self.defers.push(Vec::new());
     self.statement(block);
@@ -240,6 +255,7 @@ impl Lowering<'_, '_> {
   fn implicit_return(&mut self, body: &ProcedureBody) {
     let returns = self.returns.clone();
     if returns.is_empty() {
+      self.pop_trace_node();
       self.terminate(Terminator::Return(Vec::new()));
       return;
     }
@@ -290,6 +306,9 @@ impl Lowering<'_, '_> {
       };
       self.store(pointer, value);
     }
+    // The trace node is on this frame's stack, so it goes out of the list
+    // before the frame does (**C§13**).
+    self.pop_trace_node();
     self.terminate(Terminator::Return(direct));
   }
 
@@ -314,6 +333,17 @@ impl Lowering<'_, '_> {
       return;
     }
     let source = self.body_source;
+    // Everything a statement emits is attributed to where it was written,
+    // which is the granularity a line table needs (**C§4**).
+    let previous = self.current_loc;
+    if let Some(loc) = self.loc_of(source, node) {
+      self.current_loc = Some(loc);
+    }
+    self.statement_inner(source, node);
+    self.current_loc = previous;
+  }
+
+  fn statement_inner(&mut self, source: SourceId, node: NodeId) {
     let Some(ast) = self.checker.tree_of(source) else {
       return;
     };
@@ -434,11 +464,23 @@ impl Lowering<'_, '_> {
       NodeData::PushContext { to_push, block, .. } => {
         let (to_push, block) = (*to_push, *block);
         let saved = self.context_value;
-        if let Some(to_push) = to_push {
-          let scope = self.checker.scope_for(source, to_push, self.body_scope);
-          let context = self.context_type;
-          if let Some(value) = self.expression(scope, source, to_push, Some(context)) {
-            self.context_value = Some(self.address_of(value));
+        match to_push {
+          Some(to_push) => {
+            let scope = self.checker.scope_for(source, to_push, self.body_scope);
+            let context = self.context_type;
+            if let Some(value) = self.expression(scope, source, to_push, Some(context)) {
+              self.context_value = Some(self.address_of(value));
+            }
+          }
+          // `push_context { … }` with nothing to push runs the block under a
+          // default-initialized `#Context` (**L§6.9**), which is how a
+          // `#c_call` reaches one at all.
+          None => {
+            let context = self.context_type;
+            let local = self.new_local(String::from("context"), context);
+            let address = self.local_address(local);
+            self.default_initialize(address, context);
+            self.context_value = Some(address);
           }
         }
         if let Some(block) = block {
@@ -1976,6 +2018,36 @@ impl Lowering<'_, '_> {
   pub(super) fn default_initialize(&mut self, address: ValueId, type_id: TypeId) {
     self.clear(address, type_id);
     self.apply_member_defaults(address, type_id);
+    self.fill_context_info(address, type_id);
+  }
+
+  /// `Context_Base.context_info` is written by the compiler rather than by a
+  /// default: it always names the `#Context` the compilation settled on, so a
+  /// library handed one can see the shape it is being passed (**C§13**).
+  pub(super) fn fill_context_info(&mut self, address: ValueId, type_id: TypeId) {
+    if self.checker.types().underlying(type_id)
+      != self.checker.types().underlying(self.context_type)
+    {
+      return;
+    }
+    let underlying = self.checker.types().underlying(type_id);
+    let Some(definition) = self.checker.types().struct_of(underlying) else {
+      return;
+    };
+    let symbol = self.checker.interner().intern(b"context_info");
+    let member = self
+      .checker
+      .types()
+      .struct_info(definition)
+      .member(symbol)
+      .cloned();
+    let Some(member) = member else { return };
+    let context = self.context_type;
+    let Some(value) = self.type_info_value(context, member.type_id) else {
+      return;
+    };
+    let slot = self.offset(address, member.offset, member.type_id);
+    self.store(slot, value);
   }
 
   fn apply_member_defaults(&mut self, address: ValueId, type_id: TypeId) {
@@ -2070,6 +2142,7 @@ impl Lowering<'_, '_> {
     self.returns.clear();
     self.return_decls.clear();
     self.return_pointers.clear();
+    self.trace_frame = None;
 
     let context = self.pointer_to(self.context_type);
     let context_value = self.value(context);
@@ -2111,6 +2184,7 @@ impl Lowering<'_, '_> {
       blocks: std::mem::take(&mut self.blocks),
       value_types: std::mem::take(&mut self.value_types),
       entry: BlockId(0),
+      location: None,
     });
   }
 

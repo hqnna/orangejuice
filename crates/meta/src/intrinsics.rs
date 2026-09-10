@@ -567,6 +567,12 @@ unsafe extern "C" fn compiler_end_intercept(_w: i64, _context: *mut c_void) {
 /// (`docs/spec.md` §10). The compiling re-enters the compiler, so it happens
 /// with nothing of this state borrowed.
 unsafe extern "C" fn compiler_wait_for_message(_context: *mut c_void) -> *const Message {
+  // A metaprogram that has already added source to its *own* compilation is
+  // going to have that compilation run again from the start (`docs/spec.md`
+  // §6.5), so compiling the workspace now would run every `#run` of the watched
+  // program twice. The reference stalls the `#run` instead and compiles once;
+  // this round hands over an empty stream and the replay does the work.
+  let replaying = with(|meta| meta.self_modified).unwrap_or(false);
   let pending = with(|meta| {
     meta
       .workspace_awaiting_compilation()
@@ -574,7 +580,10 @@ unsafe extern "C" fn compiler_wait_for_message(_context: *mut c_void) -> *const 
   })
   .flatten();
   if let Some((workspace, Some(compile))) = pending {
-    let compiled = compile(&workspace);
+    let compiled = match replaying {
+      true => crate::Compiled::default(),
+      false => compile(&workspace),
+    };
     with(|meta| meta.queue_messages(&compiled));
   }
   with(|meta| meta.next_message())

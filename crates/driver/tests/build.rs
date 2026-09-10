@@ -3635,3 +3635,113 @@ fn a_compound_assignment_through_a_subscript_operator_reads_first() {
     "20\n300\n5\n10\n",
   );
 }
+
+#[test]
+fn a_push_context_with_nothing_to_push_makes_a_default_one() {
+  // `push_context { … }` with no expression runs the block under a
+  // default-initialized `#Context` (**L§6.9**), which is the only way a
+  // `#c_call` reaches one at all.
+  assert_output(
+    "callback :: (x: int) -> int #c_call {\n  \
+       push_context {\n    \
+         put_number(x);\n  \
+       }\n  \
+       return x;\n\
+     }\n\
+     main :: () { put_number(callback(7)); }\n",
+    "7\n7\n",
+  );
+}
+
+#[test]
+fn a_context_knows_the_shape_it_was_built_with() {
+  // `Context_Base.context_info` always names the `#Context` the compilation
+  // settled on (**C§13**), so a library handed one can read its layout.
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       info := context.context_info;\n  \
+       if info != null  put(\"named\\n\");\n  \
+       if info == type_info(#Context)  put(\"itself\\n\");\n\
+     }\n",
+    "named\nitself\n",
+  );
+}
+
+#[test]
+fn a_lone_allocator_context_argument_that_is_null_pushes_nothing() {
+  // `f(…,, allocator)` whose `proc` is null pushes nothing, so the caller's
+  // allocator stays (**L§5.10**) — which is what lets a container hand its own
+  // unset allocator on.
+  assert_output(
+    "#import \"Basic\";\n\
+     Holder :: struct { allocator: Allocator; }\n\
+     main :: () {\n  \
+       holder: Holder;\n  \
+       data := NewArray(4, int,, holder.allocator);\n  \
+       put_number(data.count);\n\
+     }\n",
+    "4\n",
+  );
+}
+
+#[test]
+fn a_declaration_in_this_file_beats_one_an_import_brought_in() {
+  // An overload set gathers outwards, and a tie is broken by the nearer scope
+  // (**L§7.5**): a `#scope_file` procedure of a name `Basic` also declares is
+  // the one a call in this file reaches.
+  assert_output(
+    "#import \"Basic\";\n\
+     #scope_file\n\
+     print_stack_trace :: (node: *Stack_Trace_Node) { put(\"ours\\n\"); }\n\
+     #scope_export\n\
+     main :: () { print_stack_trace(context.stack_trace); }\n",
+    "ours\n",
+  );
+}
+
+#[test]
+fn every_procedure_keeps_a_stack_trace_node() {
+  // `Build_Options.stack_trace` links a `Stack_Trace_Node` per call, with the
+  // procedure's own name and the line the call above it was written at
+  // (**C§13**).
+  assert_output(
+    "#import \"Basic\";\n\
+     inner :: () {\n  \
+       node := context.stack_trace;\n  \
+       while node {\n    \
+         if node.info  put(node.info.name);\n    \
+         put(\"\\n\");\n    \
+         node = node.next;\n  \
+       }\n\
+     }\n\
+     outer :: () { inner(); }\n\
+     main :: () { outer(); }\n",
+    "inner\nouter\nmain\n",
+  );
+}
+
+#[test]
+fn a_stack_trace_node_counts_its_depth_and_names_the_calling_line() {
+  // The node's `call_depth` counts from the outermost frame and its
+  // `line_number` is the line of the call that frame is making (**C§13**).
+  // The lines themselves depend on how much prelude the test prepends, so what
+  // is asserted is the gap between the two call sites, which is three.
+  assert_output(
+    "#import \"Basic\";\n\
+     inner :: () {\n  \
+       from_outer := context.stack_trace.next;\n  \
+       from_main := from_outer.next;\n  \
+       put_number(from_outer.call_depth);\n  \
+       put_number(from_main.call_depth);\n  \
+       put_number(from_main.line_number - from_outer.line_number);\n\
+     }\n\
+     outer :: () {\n  \
+       inner();\n\
+     }\n\
+     main :: () {\n  \
+       outer();\n\
+     }\n",
+    "2\n1\n3\n",
+  );
+}

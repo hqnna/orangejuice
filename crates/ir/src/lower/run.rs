@@ -72,6 +72,7 @@ impl Lowering<'_, '_> {
       blocks: Vec::new(),
       value_types: Vec::new(),
       entry: BlockId(0),
+      location: None,
     });
     self.entry = Some(id);
 
@@ -96,6 +97,20 @@ impl Lowering<'_, '_> {
       }
     };
     self.context_value = Some(context_address);
+
+    // Nothing calls a run's wrapper but the JIT, so the wrapper is what fills
+    // the stack trace info records the code under it points at (**C§13**).
+    if self.stack_trace {
+      let symbol = format!("{TRACE_INIT_SYMBOL}${}", run.symbol);
+      let init = self.reserve_trace_init(symbol);
+      let signature = self.procedures[init.0 as usize].type_id;
+      self.emit(Inst::Call {
+        dest: None,
+        callee: Callee::Direct(init),
+        signature,
+        arguments: Vec::new(),
+      });
+    }
 
     match run.value {
       Some(expression) => self.run_expression(run, out, expression),
@@ -235,6 +250,7 @@ impl Lowering<'_, '_> {
       blocks: Vec::new(),
       value_types: Vec::new(),
       entry: BlockId(0),
+      location: None,
     });
     self.queue.push_back((id, key));
     id

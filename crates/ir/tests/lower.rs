@@ -319,7 +319,7 @@ fn a_procedure_nothing_calls_is_lowered_only_when_asked_for() {
     let program = oj_scope::Program::build(&sources, &interner, &path, options);
     let mut checker = oj_sema::Checker::new(&program);
     checker.check();
-    let lowered = oj_ir::lower_with_roots(&mut checker, live);
+    let lowered = oj_ir::lower_with_roots(&mut checker, live, oj_ir::LowerOptions::default());
     assert!(
       !lowered.has_errors(),
       "the program should lower cleanly: {:#?}",

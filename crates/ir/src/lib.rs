@@ -14,13 +14,13 @@ mod typetable;
 
 pub use ir::{
   Abi, AbiParameter, AsmBinding, BinaryOp, Block, BlockId, Callee, ConstLink, Constant,
-  ConvertKind, Global, GlobalId, GlobalInit, Inst, Library, Local, LocalId, ParameterKind, ProcId,
-  Procedure, ProcedureFlags, Program, Terminator, TypeTableImage, UnaryOp, ValueId, abi_of,
-  is_scalar,
+  ConvertKind, DebugNames, Global, GlobalId, GlobalInit, Inst, Library, Loc, Local, LocalId,
+  ParameterKind, ProcId, Procedure, ProcedureFlags, Program, Terminator, TypeTableImage, UnaryOp,
+  ValueId, abi_of, is_scalar,
 };
 pub use lower::{
-  Lowered, MODIFY_ACCEPT, MODIFY_REASON, MODIFY_VARIABLE_SIZE, MODIFY_VARIABLES, Modify, Run,
-  lower, lower_library, lower_modify, lower_run, lower_with_roots, modify_result_size,
+  LowerOptions, Lowered, MODIFY_ACCEPT, MODIFY_REASON, MODIFY_VARIABLE_SIZE, MODIFY_VARIABLES,
+  Modify, Run, lower, lower_library, lower_modify, lower_run, lower_with_roots, modify_result_size,
 };
 pub use print::{print_ir, summary};
 pub use typetable::TypeImage;

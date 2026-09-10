@@ -6,6 +6,7 @@
 //! already a byte offset (**L§3.14**) — LLVM never has to agree with
 //! `oj-types` about a layout.
 
+mod debug;
 mod emit;
 mod machine;
 
@@ -15,7 +16,7 @@ use inkwell::context::{Context, ContextRef};
 use inkwell::module::Module;
 use inkwell::targets::FileType;
 
-pub use machine::{DEFAULT_TRIPLE, Options, target_machine};
+pub use machine::{Bitcode, DEFAULT_TRIPLE, Options, PassOptions, target_machine};
 
 /// What a module is being built for.
 ///
@@ -55,6 +56,7 @@ pub fn compile(
     program,
     options,
   )?;
+  optimize(&module, &machine, options)?;
   let module = &module;
 
   match output {
@@ -70,6 +72,27 @@ pub fn compile(
   }
 }
 
+/// Runs the module through the pass pipeline
+/// `Llvm_Options.bitcode_optimization_setting` asks for (**C§4**). At `O0`
+/// there is nothing to run, which is what a debug build gets.
+pub fn optimize(
+  module: &Module<'_>,
+  machine: &inkwell::targets::TargetMachine,
+  options: &Options,
+) -> Result<(), String> {
+  let Some(pipeline) = options.bitcode.pipeline() else {
+    return Ok(());
+  };
+  let passes = inkwell::passes::PassBuilderOptions::create();
+  passes.set_loop_unrolling(options.passes.loop_unrolling);
+  passes.set_loop_vectorization(options.passes.loop_vectorization);
+  passes.set_loop_slp_vectorization(options.passes.slp_vectorization);
+  passes.set_merge_functions(options.passes.merge_functions);
+  module
+    .run_passes(pipeline, machine, passes)
+    .map_err(|error| error.to_string())
+}
+
 /// Builds a program into a module the caller supplied, which is how the JIT
 /// gets one inside its own thread-safe context (`docs/spec.md` §6.5).
 pub fn build_module<'ctx>(
@@ -82,7 +105,7 @@ pub fn build_module<'ctx>(
   // LLVM infers the alignment of every load and store from.
   module.set_triple(&machine.get_triple());
   module.set_data_layout(&machine.get_target_data().get_data_layout());
-  let mut emitter = emit::Emitter::new(module, program, options.purpose);
+  let mut emitter = emit::Emitter::new(module, program, options.purpose, options);
   emitter.emit()?;
   Ok(emitter.into_module())
 }

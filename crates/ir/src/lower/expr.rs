@@ -13,6 +13,25 @@ impl Lowering<'_, '_> {
     node: NodeId,
     want: Option<TypeId>,
   ) -> Option<Val> {
+    // An expression is finer than the statement around it, and a debugger
+    // steps by line, so what it emits is attributed to where it was written
+    // (**C§4**).
+    let previous = self.current_loc;
+    if let Some(loc) = self.loc_of(source, node) {
+      self.current_loc = Some(loc);
+    }
+    let value = self.expression_located(scope, source, node, want);
+    self.current_loc = previous;
+    value
+  }
+
+  fn expression_located(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    want: Option<TypeId>,
+  ) -> Option<Val> {
     let info = self.checker.expression(scope, source, node);
     let want = want.filter(|type_id| !self.checker.types().is_unknown(*type_id));
 
@@ -183,7 +202,7 @@ impl Lowering<'_, '_> {
 
   /// A string literal is read-only data: the value is the address of the
   /// `{count, data}` pair the back end laid down (**L§3.4**).
-  fn string_constant(&mut self, text: Box<[u8]>) -> Val {
+  pub(super) fn string_constant(&mut self, text: Box<[u8]>) -> Val {
     let pointer = self.pointer_to(TypeId::STRING);
     let dest = self.value(pointer);
     self.emit(Inst::Const {
@@ -2377,6 +2396,9 @@ impl Lowering<'_, '_> {
 
     self.call_sites.pop();
 
+    // The frame under this one reports the line this call was written at
+    // (**C§13**).
+    self.record_call_line(source, node);
     let dest = abi.direct_return.map(|type_id| self.value(type_id));
     self.emit(Inst::Call {
       dest,
@@ -2418,6 +2440,7 @@ impl Lowering<'_, '_> {
       .checker
       .types()
       .struct_of(self.checker.types().underlying(context_type))?;
+    let only_allocator = entries.len() == 1;
     let local = self.new_local(String::from("pushed_context"), context_type);
     let address = self.local_address(local);
     let current = self.context_pointer(source, node)?;
@@ -2452,10 +2475,97 @@ impl Lowering<'_, '_> {
       let written_scope = self.checker.scope_for(source, value_node, scope);
       if let Some(value) = self.expression(written_scope, source, value_node, Some(member.type_id))
       {
-        self.store(slot, value);
+        // A `,, allocator` on its own whose `proc` is null pushes nothing
+        // (**L§5.10**): the caller's allocator stays. That is what lets a
+        // container hand its own — possibly unset — allocator on.
+        if only_allocator && self.is_allocator_member(&member) {
+          self.store_allocator_if_set(slot, value);
+        } else {
+          self.store(slot, value);
+        }
       }
     }
     Some(address)
+  }
+
+  /// Whether a `#Context` member is the `Allocator` the null rule applies to.
+  fn is_allocator_member(&mut self, member: &oj_types::StructMember) -> bool {
+    let name = self
+      .checker
+      .interner()
+      .resolve_lossy(member.name)
+      .to_string();
+    if name != "allocator" {
+      return false;
+    }
+    let underlying = self.checker.types().underlying(member.type_id);
+    self
+      .checker
+      .types()
+      .struct_of(underlying)
+      .map(|definition| {
+        let symbol = self.checker.interner().intern(b"proc");
+        self
+          .checker
+          .types()
+          .struct_info(definition)
+          .member(symbol)
+          .is_some()
+      })
+      .unwrap_or(false)
+  }
+
+  /// Writes an `Allocator` into a slot only when its `proc` is not null.
+  fn store_allocator_if_set(&mut self, slot: ValueId, value: Val) {
+    let underlying = self.checker.types().underlying(value.type_id);
+    let Some(definition) = self.checker.types().struct_of(underlying) else {
+      self.store(slot, value);
+      return;
+    };
+    let symbol = self.checker.interner().intern(b"proc");
+    let member = self
+      .checker
+      .types()
+      .struct_info(definition)
+      .member(symbol)
+      .cloned();
+    let Some(member) = member else {
+      self.store(slot, value);
+      return;
+    };
+    let address = self.address_of(value);
+    let field = self.offset(address, member.offset, member.type_id);
+    let loaded = self.value(member.type_id);
+    self.emit(Inst::Load {
+      dest: loaded,
+      address: field,
+    });
+    let null = self.constant(Constant::Null, member.type_id);
+    let null = self.scalar(null);
+    let condition = self.value(TypeId::BOOL);
+    self.emit(Inst::Binary {
+      dest: condition,
+      operator: BinaryOp::NotEqual,
+      left: loaded,
+      right: null,
+    });
+
+    let set = self.new_block();
+    let join = self.new_block();
+    self.terminate(Terminator::Branch {
+      condition,
+      then_block: set,
+      else_block: join,
+    });
+    self.current = set;
+    let copy = Val {
+      id: address,
+      type_id: value.type_id,
+      indirect: true,
+    };
+    self.store(slot, copy);
+    self.terminate(Terminator::Jump(join));
+    self.current = join;
   }
 
   /// Whether a declaration is the `#intrinsic` of that name: an operation the

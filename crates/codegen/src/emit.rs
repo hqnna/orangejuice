@@ -47,11 +47,23 @@ pub struct Emitter<'ctx, 'p> {
   strings: HashMap<Box<[u8]>, GlobalValue<'ctx>>,
   /// How many aggregate constants have been laid down, so each gets a name.
   constants: usize,
+  /// The DWARF description of the program, when one was asked for (**C§4**).
+  debug: Option<crate::debug::Debug<'ctx>>,
 }
 
 impl<'ctx, 'p> Emitter<'ctx, 'p> {
-  pub fn new(module: Module<'ctx>, program: &'p Program, purpose: crate::Purpose) -> Self {
+  pub fn new(
+    module: Module<'ctx>,
+    program: &'p Program,
+    purpose: crate::Purpose,
+    options: &crate::Options,
+  ) -> Self {
     let context = module.get_context();
+    // Compile-time code is thrown away when the compilation ends, so only the
+    // executable is described (`docs/spec.md` §6.5).
+    let debug = (options.debug_info && purpose == crate::Purpose::Executable)
+      .then(|| crate::debug::Debug::new(&module, program, options.bitcode != crate::Bitcode::O0))
+      .flatten();
     Self {
       builder: context.create_builder(),
       context,
@@ -62,6 +74,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       globals: Vec::new(),
       strings: HashMap::new(),
       constants: 0,
+      debug,
     }
   }
 
@@ -76,6 +89,21 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   pub fn emit(&mut self) -> Result<(), String> {
     self.declare_globals();
     self.declare_functions();
+    if self.debug.is_some() {
+      for (index, procedure) in self.program.procedures.iter().enumerate() {
+        if !procedure.has_body() {
+          continue;
+        }
+        let function = self.functions[index];
+        let described = crate::debug::Described {
+          types: &self.program.types,
+          names: &self.program.names,
+        };
+        if let Some(debug) = self.debug.as_mut() {
+          debug.declare_function(described, ProcId(index as u32), procedure, function);
+        }
+      }
+    }
     for (index, procedure) in self.program.procedures.iter().enumerate() {
       if !procedure.has_body() {
         continue;
@@ -84,6 +112,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     }
     if self.purpose == crate::Purpose::Executable {
       self.emit_entry_point()?;
+    }
+    if let Some(debug) = self.debug.as_ref() {
+      debug.finalize();
     }
     self
       .module
@@ -527,6 +558,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   // -------------------------------------------------------------- bodies ----
 
   fn emit_body(&mut self, id: ProcId, procedure: &Procedure) -> Result<(), String> {
+    // Whatever the last body left in the builder belongs to that function, and
+    // a location from another function is not valid metadata here.
+    self.builder.unset_current_debug_location();
     let function = self.functions[id.0 as usize];
     let entry = self.context.append_basic_block(function, "entry");
     let blocks: Vec<_> = (0..procedure.blocks.len())
@@ -549,6 +583,18 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         .as_instruction_value()
         .and_then(|instruction| instruction.set_alignment(local.alignment as u32).ok());
       locals.push(slot);
+    }
+    if self.debug.is_some() {
+      let described = crate::debug::Described {
+        types: &self.program.types,
+        names: &self.program.names,
+      };
+      for (index, local) in procedure.locals.iter().enumerate() {
+        let storage = locals[index];
+        if let Some(debug) = self.debug.as_mut() {
+          debug.declare_local(described, id, local, storage, entry);
+        }
+      }
     }
 
     let mut values: Vec<Option<BasicValueEnum<'ctx>>> = vec![None; procedure.value_types.len()];
@@ -599,8 +645,14 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
 
     for (index, block) in procedure.blocks.iter().enumerate() {
       self.builder.position_at_end(blocks[index]);
-      for instruction in &block.instructions {
+      for (position, instruction) in block.instructions.iter().enumerate() {
+        if let Some(debug) = self.debug.as_ref() {
+          debug.locate(&self.builder, id, block.location(position));
+        }
         self.emit_instruction(procedure, instruction, &mut values, &locals)?;
+      }
+      if let Some(debug) = self.debug.as_ref() {
+        debug.locate(&self.builder, id, block.terminator_location);
       }
       self.emit_terminator(procedure, &block.terminator, &values, &blocks)?;
     }
@@ -1433,6 +1485,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   /// The `main` the C runtime calls: it hands the program a zeroed `#Context`
   /// and runs the global initializers first (**L§10.1**, **L§11.1**).
   fn emit_entry_point(&mut self) -> Result<(), String> {
+    self.builder.unset_current_debug_location();
     let Some(entry) = self.program.entry else {
       return Ok(());
     };
@@ -1488,6 +1541,14 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       }
       None => context.as_pointer_value(),
     };
+    // The trace info records name procedures, whose addresses only this module
+    // knows, so they are filled before anything can trace (**C§13**).
+    if let Some(initializer) = self.program.stack_trace_init {
+      self
+        .builder
+        .build_direct_call(self.functions[initializer.0 as usize], &[], "")
+        .map_err(|error| error.to_string())?;
+    }
     if let Some(initializer) = self.program.global_init {
       self
         .builder

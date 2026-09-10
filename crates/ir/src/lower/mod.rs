@@ -3,12 +3,15 @@ mod body;
 mod expr;
 mod modify;
 mod run;
+mod trace;
 
 pub use modify::{
   MODIFY_ACCEPT, MODIFY_REASON, MODIFY_VARIABLE_SIZE, MODIFY_VARIABLES, Modify, lower_modify,
   modify_result_size,
 };
 pub use run::{Run, lower_run};
+
+pub use Options as LowerOptions;
 
 use std::collections::{HashMap, VecDeque};
 
@@ -23,8 +26,9 @@ use oj_syntax::ast::{
 use oj_types::{ArrayKind, IntKind, TypeId, TypeKind};
 
 use crate::ir::{
-  Block, BlockId, Callee, Constant, ConvertKind, Global, GlobalId, GlobalInit, Inst, Library,
-  Local, LocalId, ProcId, Procedure, ProcedureFlags, Program, Terminator, UnaryOp, ValueId,
+  Abi, BinaryOp, Block, BlockId, Callee, Constant, ConvertKind, Global, GlobalId, GlobalInit, Inst,
+  Library, Local, LocalId, ProcId, Procedure, ProcedureFlags, Program, Terminator, UnaryOp,
+  ValueId,
 };
 
 /// A lowered expression. `indirect` means the value is the *address* of
@@ -149,14 +153,33 @@ enum ProcKey {
 /// lowered, which is what keeps a module's unused polymorphic procedures out
 /// of the back end.
 pub fn lower(checker: &mut Checker) -> Lowered {
-  lower_with_roots(checker, &[])
+  lower_with_roots(checker, &[], Options::default())
+}
+
+/// What the driver asks the back end for, beyond the program itself.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+  /// `Build_Options.stack_trace` (**C§4**): every Jai-convention procedure
+  /// keeps a `Stack_Trace_Node`, which `-release` turns off.
+  pub stack_trace: bool,
+}
+
+impl Default for Options {
+  fn default() -> Self {
+    Self { stack_trace: true }
+  }
 }
 
 /// The same, with procedures a metaprogram asked to be lowered whether or not
 /// anything calls them (**C§3.3**): each is named by the file it was written
 /// in and the name it was written with.
-pub fn lower_with_roots(checker: &mut Checker, live: &[(String, String)]) -> Lowered {
+pub fn lower_with_roots(
+  checker: &mut Checker,
+  live: &[(String, String)],
+  options: Options,
+) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::Executable);
+  lowering.stack_trace = options.stack_trace;
   lowering.run();
   lowering.make_live(live);
   lowering.finish()
@@ -164,8 +187,9 @@ pub fn lower_with_roots(checker: &mut Checker, live: &[(String, String)]) -> Low
 
 /// Lowers a library: there is no entry point, so what is reachable is what
 /// every `#program_export` reaches (**L§11.6**, **C§4**).
-pub fn lower_library(checker: &mut Checker, runtime_support: bool) -> Lowered {
+pub fn lower_library(checker: &mut Checker, runtime_support: bool, options: Options) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::Executable);
+  lowering.stack_trace = options.stack_trace;
   lowering.run_exports();
   if runtime_support {
     lowering.export_runtime_support();
@@ -245,6 +269,23 @@ struct Lowering<'c, 'p> {
   /// `Runtime_Support.__jai_runtime_init`, which the generated entry point
   /// calls before the program (**C§13**).
   runtime_init: Option<ProcId>,
+  /// `Build_Options.stack_trace`: every Jai-convention procedure keeps a
+  /// `Stack_Trace_Node` of its own (**C§13**).
+  stack_trace: bool,
+  /// `Stack_Trace_Node` and `Stack_Trace_Procedure_Info`, looked up once.
+  trace_types: Option<(TypeId, TypeId)>,
+  /// The static info record of every procedure that keeps a node, and what the
+  /// generated initializer writes into it.
+  trace_infos: Vec<trace::TraceInfo>,
+  trace_init: Option<ProcId>,
+  /// The node the procedure in hand keeps, while it is being lowered.
+  trace_frame: Option<trace::TraceFrame>,
+  /// Where whatever is being lowered right now was written, which every
+  /// instruction it emits is attributed to (**C§4**).
+  current_loc: Option<crate::ir::Loc>,
+  /// The files locations name, and where each one landed in the list.
+  debug_files: Vec<String>,
+  debug_file_ids: HashMap<SourceId, u32>,
 }
 
 impl<'c, 'p> Lowering<'c, 'p> {
@@ -289,7 +330,55 @@ impl<'c, 'p> Lowering<'c, 'p> {
       asm_registers: HashMap::new(),
       asm_register_aliases: HashMap::new(),
       runtime_init: None,
+      stack_trace: true,
+      trace_types: None,
+      trace_infos: Vec::new(),
+      trace_init: None,
+      trace_frame: None,
+      current_loc: None,
+      debug_files: Vec::new(),
+      debug_file_ids: HashMap::new(),
     }
+  }
+
+  /// Where a node was written, as the back end records it (**C§4**).
+  fn loc_of(&mut self, source: SourceId, node: NodeId) -> Option<crate::ir::Loc> {
+    let span = self.checker.tree_of(source)?.node(node).span;
+    self.span_loc(source, span)
+  }
+
+  /// The same, for a span the caller already has.
+  fn span_loc(&mut self, source: SourceId, span: Span) -> Option<crate::ir::Loc> {
+    if source == SourceId::NONE {
+      return None;
+    }
+    let file = match self.debug_file_ids.get(&source) {
+      Some(id) => *id,
+      None => {
+        let path = {
+          let file = self.checker.program().sources().file(source);
+          std::path::absolute(file.path())
+            .unwrap_or_else(|_| file.path().to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+        };
+        let id = self.debug_files.len() as u32;
+        self.debug_files.push(path);
+        self.debug_file_ids.insert(source, id);
+        id
+      }
+    };
+    let position = self
+      .checker
+      .program()
+      .sources()
+      .file(source)
+      .location(span.start);
+    Some(crate::ir::Loc {
+      file,
+      line: position.line,
+      column: position.column,
+    })
   }
 
   fn run(&mut self) {
@@ -454,6 +543,9 @@ impl<'c, 'p> Lowering<'c, 'p> {
   }
 
   fn finish(mut self) -> Lowered {
+    // Every procedure that keeps a node is known by now, which is what the
+    // generated initializer needs before it can be written (**C§13**).
+    self.emit_trace_info_init();
     self.place_type_table();
     self.resolve_symbol_collisions();
     let type_table = crate::ir::TypeTableImage {
@@ -471,8 +563,31 @@ impl<'c, 'p> Lowering<'c, 'p> {
       entry,
       runtime_init,
       context_type,
+      trace_init,
+      debug_files,
       ..
     } = self;
+    // The back end has the type table but not the interner, so the names go
+    // with the program (**C§4**).
+    let names = {
+      let types = checker.types().clone();
+      let interner = checker.interner();
+      crate::ir::DebugNames {
+        types: (0..types.len() as u32)
+          .map(|id| types.name(TypeId(id), interner))
+          .collect(),
+        members: (0..types.struct_count() as u32)
+          .map(|id| {
+            types
+              .struct_info(oj_types::StructId(id))
+              .members
+              .iter()
+              .map(|member| interner.resolve_lossy(member.name).into_owned())
+              .collect()
+          })
+          .collect(),
+      }
+    };
     let global_init = procedures
       .iter()
       .position(|procedure| procedure.symbol == GLOBAL_INIT_SYMBOL)
@@ -485,9 +600,12 @@ impl<'c, 'p> Lowering<'c, 'p> {
         entry,
         runtime_init,
         global_init,
+        stack_trace_init: trace_init,
         context_type,
         libraries,
         type_table,
+        debug_files,
+        names,
       },
       diagnostics,
     }
@@ -676,6 +794,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       blocks: Vec::new(),
       value_types: Vec::new(),
       entry: BlockId(0),
+      location: None,
     });
     self.queue.push_back((id, key));
     id
@@ -796,6 +915,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       blocks: Vec::new(),
       value_types: Vec::new(),
       entry: BlockId(0),
+      location: None,
     });
     if !flags.contains(ProcedureFlags::FOREIGN) {
       self.queue.push_back((id, key));
@@ -1010,9 +1130,10 @@ impl<'c, 'p> Lowering<'c, 'p> {
   }
 
   fn emit(&mut self, instruction: Inst) {
-    self.blocks[self.current.0 as usize]
-      .instructions
-      .push(instruction);
+    let loc = self.current_loc;
+    let block = &mut self.blocks[self.current.0 as usize];
+    block.instructions.push(instruction);
+    block.locations.push(loc);
   }
 
   fn new_block(&mut self) -> BlockId {
@@ -1022,9 +1143,11 @@ impl<'c, 'p> Lowering<'c, 'p> {
   }
 
   fn terminate(&mut self, terminator: Terminator) {
+    let loc = self.current_loc;
     let block = &mut self.blocks[self.current.0 as usize];
     if matches!(block.terminator, Terminator::Unreachable) {
       block.terminator = terminator;
+      block.terminator_location = loc;
     }
   }
 
@@ -1045,11 +1168,14 @@ impl<'c, 'p> Lowering<'c, 'p> {
   fn new_local(&mut self, name: String, type_id: TypeId) -> LocalId {
     let (size, alignment) = self.size_align(type_id);
     let id = LocalId(self.locals.len() as u32);
+    let location = self.current_loc;
     self.locals.push(Local {
       name,
       type_id,
       size,
       alignment,
+      location,
+      parameter: None,
     });
     id
   }
@@ -1202,6 +1328,10 @@ impl<'c, 'p> Lowering<'c, 'p> {
 }
 
 const GLOBAL_INIT_SYMBOL: &str = "__oj_global_init";
+
+/// The generated procedure that fills in the stack trace info records
+/// (**C§13**).
+const TRACE_INIT_SYMBOL: &str = "__oj_stack_trace_init";
 
 /// The symbol the `Type_Info` image takes (**L§17**).
 const TYPE_TABLE_SYMBOL: &str = "__oj_type_table";

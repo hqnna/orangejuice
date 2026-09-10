@@ -1585,3 +1585,55 @@ fn a_metaprogram_fills_a_placeholder_of_the_compilation_it_is_part_of() {
     .expect("the program runs");
   assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
 }
+
+#[test]
+fn a_run_happens_once_under_the_default_metaprogram() {
+  // The distribution's own `Metaprogram_Plugins` fills a `#placeholder` from
+  // inside its `#run`, which orangejuice answers by running the compilation
+  // again (`docs/spec.md` §6.5). The workspace under it must not be compiled
+  // in the round that is going to be replayed, or every `#run` of the program
+  // would happen twice.
+  let Some(jai_dir) = oj_testsupport::jai_dir() else {
+    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
+    return;
+  };
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let Some(metaprogram) = ({
+    // SAFETY: cargo runs each integration test binary in its own process, and
+    // nothing else in this one reads it.
+    unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
+    oj_driver::default_metaprogram()
+  }) else {
+    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
+    return;
+  };
+
+  let fixture = Fixture::new();
+  fixture.write(
+    "counted.jai",
+    "#import \"Basic\";\n\
+     #no_reset times := 0;\n\
+     #run times += 1;\n\
+     main :: () { print(\"%\\n\", times); }\n",
+  );
+  let report = oj_driver::run_through_metaprogram(
+    &metaprogram,
+    &fixture.path("counted.jai"),
+    &[],
+    &oj_driver::BuildOptions::new(),
+    oj_driver::Stage::Executable,
+  );
+  assert!(
+    !report.failed,
+    "the metaprogram should build the program, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the produced program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
+}

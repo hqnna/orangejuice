@@ -387,6 +387,10 @@ pub struct Meta {
   /// of, which the driver answers by running that compilation again with the
   /// source in place (`docs/spec.md` §6.5).
   pub self_modified: bool,
+  /// The self-additions of an earlier round, which the driver has already put
+  /// in place: this run *is* the replay they asked for, so asking for them
+  /// again is not a fresh modification.
+  pub applied_self_strings: Vec<(StringScope, String)>,
 }
 
 impl Meta {
@@ -663,6 +667,12 @@ impl Meta {
   pub fn add_string_in_scope(&mut self, workspace: i64, path: PathBuf, text: String) {
     let target = StringScope::File(path);
     let running = self.workspace(workspace).is_some_and(|w| w.implicit);
+    // A string the driver already put in place is this run being the *replay*
+    // of the one that asked for it, so nothing more has to happen for it.
+    let replayed = self
+      .applied_self_strings
+      .iter()
+      .any(|had| had.0 == target && had.1 == text);
     if let Some(target_workspace) = self.workspace(workspace) {
       if target_workspace
         .scoped_strings
@@ -680,7 +690,7 @@ impl Meta {
       // The compilation the string joins is this one, so it is not a watched
       // workspace that has to happen again — the driver runs the whole thing
       // over.
-      true => self.self_modified = true,
+      true => self.self_modified |= !replayed,
       false => {
         if let Some(intercept) = self.intercept.as_mut() {
           intercept.recompile = true;

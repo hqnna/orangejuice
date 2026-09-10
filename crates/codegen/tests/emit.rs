@@ -8,6 +8,10 @@ use oj_diag::SourceMap;
 use oj_lexer::Interner;
 
 fn llvm_ir(source: &str) -> Option<String> {
+  llvm_ir_with(source, &oj_codegen::Options::default())
+}
+
+fn llvm_ir_with(source: &str, options: &oj_codegen::Options) -> Option<String> {
   let jai_dir = match oj_testsupport::jai_dir() {
     Some(dir) => dir,
     None => {
@@ -21,11 +25,11 @@ fn llvm_ir(source: &str) -> Option<String> {
 
   let sources = SourceMap::new();
   let interner = Interner::new();
-  let options = oj_scope::Options {
+  let scope_options = oj_scope::Options {
     jai_dir: Some(jai_dir),
     ..oj_scope::Options::default()
   };
-  let program = oj_scope::Program::build(&sources, &interner, &path, options);
+  let program = oj_scope::Program::build(&sources, &interner, &path, scope_options);
   assert!(!program.has_errors(), "the program should resolve");
   let mut checker = oj_sema::Checker::new(&program);
   checker.check();
@@ -42,12 +46,8 @@ fn llvm_ir(source: &str) -> Option<String> {
   );
 
   Some(
-    oj_codegen::compile(
-      &lowered.program,
-      &oj_codegen::Options::default(),
-      oj_codegen::Output::LlvmIr,
-    )
-    .expect("the module should be valid"),
+    oj_codegen::compile(&lowered.program, options, oj_codegen::Output::LlvmIr)
+      .expect("the module should be valid"),
   )
 }
 
@@ -206,4 +206,99 @@ fn an_object_file_is_written_where_it_was_asked_for() {
   .expect("the object should be written");
   let bytes = std::fs::read(&object).expect("the object should exist");
   assert_eq!(&bytes[..4], b"\x7fELF");
+}
+
+#[test]
+fn the_module_describes_the_program_to_a_debugger() {
+  // `Build_Options.emit_debug_info` is `.DEFAULT`, which is DWARF on Linux
+  // (**C§4**): a compile unit, a subprogram per procedure, a line per
+  // instruction and a variable per local.
+  let Some(module) = llvm_ir("main :: () { n := 1 + 2; }\n") else {
+    return;
+  };
+  assert!(
+    module.contains("!llvm.dbg.cu"),
+    "the module should carry a compile unit:\n{module}"
+  );
+  assert!(
+    module.contains("!DISubprogram(name: \"main\""),
+    "`main` should have a subprogram:\n{module}"
+  );
+  assert!(
+    module.contains("!DILocalVariable(name: \"n\""),
+    "the local should be described:\n{module}"
+  );
+  assert!(
+    module.contains("!DILocation("),
+    "instructions should carry lines:\n{module}"
+  );
+  assert!(
+    module.contains("!DIFile(filename: \"input.jai\""),
+    "the file should be named:\n{module}"
+  );
+}
+
+#[test]
+fn a_program_built_without_debug_info_carries_none() {
+  let options = oj_codegen::Options {
+    debug_info: false,
+    ..oj_codegen::Options::default()
+  };
+  let Some(module) = llvm_ir_with("main :: () { n := 1 + 2; }\n", &options) else {
+    return;
+  };
+  assert!(
+    !module.contains("!llvm.dbg.cu"),
+    "nothing should describe the program:\n{module}"
+  );
+}
+
+#[test]
+fn a_struct_is_described_member_by_member() {
+  // The debug types come out of `oj-types`, not out of the byte arrays the
+  // module stores an aggregate in (`docs/spec.md` §10).
+  let Some(module) =
+    llvm_ir("Point :: struct { x: float64; y: s32; }\nmain :: () { p: Point; p.y = 1; }\n")
+  else {
+    return;
+  };
+  assert!(
+    module.contains("!DICompositeType(tag: DW_TAG_structure_type, name: \"Point\""),
+    "the struct should be described:\n{module}"
+  );
+  assert!(
+    module.contains("!DIDerivedType(tag: DW_TAG_member, name: \"y\""),
+    "its members should be described:\n{module}"
+  );
+}
+
+#[test]
+fn an_optimized_build_runs_the_pass_pipeline() {
+  // `Llvm_Options.bitcode_optimization_setting` is what `-release` raises to
+  // `O2` (**C§4**), which is a pipeline over the module rather than a target
+  // machine setting.
+  let source = "add :: (a: int, b: int) -> int { return a + b; }\nmain :: () { n := add(1, 2); }\n";
+  let Some(debug) = llvm_ir(source) else {
+    return;
+  };
+  let optimized = llvm_ir_with(
+    source,
+    &oj_codegen::Options {
+      bitcode: oj_codegen::Bitcode::O2,
+      optimization: 2,
+      ..oj_codegen::Options::default()
+    },
+  )
+  .expect("the distribution was there for the first build");
+  let allocas = |module: &str| module.matches(" = alloca ").count();
+  assert!(
+    allocas(&optimized) < allocas(&debug),
+    "optimizing should promote storage to registers: {} allocas against {}",
+    allocas(&optimized),
+    allocas(&debug)
+  );
+  assert!(
+    optimized.contains("define") && optimized.contains("main"),
+    "the entry point should survive:\n{optimized}"
+  );
 }

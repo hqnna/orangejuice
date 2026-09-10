@@ -367,11 +367,16 @@ fn run_workspace_once(
   }
   // A library has no `main`; what it holds is whatever its exports reach
   // (**L§11.6**).
+  let lower_options = oj_ir::LowerOptions {
+    stack_trace: options.stack_trace,
+  };
   let mut lowered = match options.output_type {
-    oj_link::OutputType::DynamicLibrary => {
-      oj_ir::lower_library(&mut checker, options.runtime_support.defines_init())
-    }
-    _ => oj_ir::lower_with_roots(&mut checker, &options.live_procedures),
+    oj_link::OutputType::DynamicLibrary => oj_ir::lower_library(
+      &mut checker,
+      options.runtime_support.defines_init(),
+      lower_options,
+    ),
+    _ => oj_ir::lower_with_roots(&mut checker, &options.live_procedures, lower_options),
   };
   keep_compile_time_data(&mut lowered.program, &engine);
   let lowered = lowered;
@@ -392,6 +397,9 @@ fn run_workspace_once(
 
   let codegen = oj_codegen::Options {
     optimization: options.optimization.level(),
+    bitcode: options.optimization.bitcode(),
+    debug_info: options.debug_info,
+    passes: options.optimization.passes(),
     module_name: oj_link::default_output_name(root),
     ..oj_codegen::Options::default()
   };
@@ -517,6 +525,18 @@ fn metaprogram_state(checker: &mut oj_sema::Checker<'_>, options: &BuildOptions)
   if let Some(during_compile) = checker.type_named("Build_Options_During_Compile") {
     meta.during_compile_layout = during_compile_layout(checker, during_compile);
   }
+  // What an earlier round of this compilation already added to itself: this
+  // run is the replay it asked for, so asking again changes nothing.
+  meta.applied_self_strings = options
+    .added_strings
+    .iter()
+    .filter_map(|added| match &added.target {
+      oj_scope::StringTarget::File(path) => {
+        Some((oj_meta::StringScope::File(path.clone()), added.text.clone()))
+      }
+      _ => None,
+    })
+    .collect();
   meta
 }
 

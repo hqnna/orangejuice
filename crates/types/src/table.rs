@@ -195,6 +195,12 @@ impl Types {
     &self.structs[id.0 as usize]
   }
 
+  /// How many struct definitions the table holds, which is what a back end
+  /// walking every one of them counts against.
+  pub fn struct_count(&self) -> usize {
+    self.structs.len()
+  }
+
   pub fn struct_info_mut(&mut self, id: StructId) -> &mut StructInfo {
     &mut self.structs[id.0 as usize]
   }

@@ -76,6 +76,7 @@ impl Lowering<'_, '_> {
       blocks: Vec::new(),
       value_types: Vec::new(),
       entry: BlockId(0),
+      location: None,
     });
     self.entry = Some(id);
 

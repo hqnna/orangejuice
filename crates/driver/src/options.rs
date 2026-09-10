@@ -18,10 +18,34 @@ pub enum Optimization {
 }
 
 impl Optimization {
+  /// `Llvm_Options.machine_code_optimization_setting` (**C§4**): `NONE` for a
+  /// debug build, `DEFAULT` for an optimized one.
   pub fn level(self) -> u8 {
     match self {
       Self::VeryDebug | Self::Debug => 0,
       Self::Optimized => 2,
+    }
+  }
+
+  /// `Llvm_Options.bitcode_optimization_setting`, which `set_optimization`
+  /// pairs with the machine level (**C§4**).
+  pub fn bitcode(self) -> oj_codegen::Bitcode {
+    match self {
+      Self::VeryDebug | Self::Debug => oj_codegen::Bitcode::O0,
+      Self::Optimized => oj_codegen::Bitcode::O2,
+    }
+  }
+
+  /// What `set_optimization` turns on beside the pipeline (**C§4**): a debug
+  /// build unrolls and vectorizes nothing, and only `VERY_OPTIMIZED`
+  /// vectorizes at all.
+  pub fn passes(self) -> oj_codegen::PassOptions {
+    let debug = matches!(self, Self::Debug | Self::VeryDebug);
+    oj_codegen::PassOptions {
+      loop_unrolling: !debug,
+      loop_vectorization: false,
+      slp_vectorization: false,
+      merge_functions: false,
     }
   }
 }
@@ -66,6 +90,10 @@ impl RuntimeSupport {
 pub struct BuildOptions {
   pub optimization: Optimization,
   pub stack_trace: bool,
+  /// `Build_Options.emit_debug_info` (**C§4**): DWARF is what `.DEFAULT` means
+  /// on Linux, and `set_optimization` turns it off only when the metaprogram
+  /// asks it not to preserve debug info.
+  pub debug_info: bool,
   pub quiet: bool,
   pub verbose: bool,
   pub use_color: bool,
@@ -117,6 +145,7 @@ impl BuildOptions {
     Self {
       optimization: Optimization::Debug,
       stack_trace: true,
+      debug_info: true,
       use_color: true,
       enable_split_modules: true,
       dead_code_elimination: true,
