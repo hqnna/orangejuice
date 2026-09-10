@@ -308,6 +308,19 @@ what it actually does.
   accepts it has not been measured.
 - **An untyped integer literal wider than `s64` has no type inside a shift.**
   `0xffff_ffff_ffff_ffff << n` fails to check; a typed constant works.
+- **Variadic type parameters on a struct are not supported.** `Tagged_Union ::
+  struct (value_types: .. Type)` is how the reference declares it, and the
+  vendored module fails under orangejuice the same way ours did, with a
+  milestone error naming M7. Supporting it means gathering the remaining
+  arguments into a compile-time array of `Type` that the struct body can index
+  and iterate. `modules/Tagged_Union.jai` takes four defaulted parameters
+  instead, which keeps the call syntax for up to four types.
+- **`#assert` on a polymorph variable captured through a struct parameter does
+  not fold across a module boundary.** `#assert(V == A || V == B)` inside
+  `set :: (u: *Tagged_Union(, ), value: )` holds when the procedure and
+  its caller are in one file and fails when the procedure is in a module. The
+  same comparison evaluated at runtime is correct, so it is the constant
+  folding that does not reach, not the capture.
 
 Two things that looked like gaps and are not, both measured against the
 reference: `1e6` is not a float literal (a mantissa needs its decimal point),
