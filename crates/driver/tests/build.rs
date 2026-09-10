@@ -3745,3 +3745,73 @@ fn a_stack_trace_node_counts_its_depth_and_names_the_calling_line() {
     "2\n1\n3\n",
   );
 }
+
+#[test]
+fn the_things_that_are_constant_are_the_ones_the_reference_says() {
+  // **L§5.11** lists them: `.count` and `.data` of a constant string or array
+  // literal, `[i]` of one, a global fixed array's `.data` and that plus an
+  // offset, the address of a global, `type_info`, `initializer_of`, and a
+  // constant pointer cast to another pointer type. A local's address and the
+  // `.data` of a global view are not.
+  assert_output(
+    "global_buffer: [8] u8;\n\
+     global_view: [] u8;\n\
+     global_int := 123;\n\
+     TEXT :: \"Pay Respects\";\n\
+     NUMBERS :: s16.[5, 4, 3, 2, 2];\n\
+     Point :: struct { x: int; }\n\
+     yes :: (c: bool) { put(ifx c then \"yes\\n\" else \"no\\n\"); }\n\
+     main :: () {\n  \
+       local: [8] u8;\n  \
+       yes(is_constant(TEXT.count));\n  \
+       yes(is_constant(TEXT.data));\n  \
+       yes(is_constant(TEXT[5]));\n  \
+       yes(is_constant(NUMBERS[1]));\n  \
+       yes(is_constant(global_buffer.data));\n  \
+       yes(is_constant(global_buffer.data + 3));\n  \
+       yes(is_constant(*global_int));\n  \
+       yes(is_constant(cast(*u8) *global_int));\n  \
+       yes(is_constant(type_info(Point)));\n  \
+       yes(is_constant(type_info(Point).runtime_size));\n  \
+       yes(is_constant(initializer_of(Point)));\n  \
+       yes(is_constant(global_view.data));\n  \
+       yes(is_constant(*local));\n  \
+       yes(is_constant(cast(s64) *global_int));\n\
+     }\n",
+    "yes\nyes\nyes\nyes\nyes\nyes\nyes\nyes\nyes\nyes\nyes\nno\nno\nno\n",
+  );
+}
+
+#[test]
+fn a_constant_read_out_of_a_constant_is_the_value_it_holds() {
+  // The folded value is the one the program sees, not just a claim that it
+  // folded (**L§5.11**).
+  assert_output(
+    "TEXT :: \"Pay Respects\";\n\
+     NUMBERS :: s16.[5, 4, 3, 2, 9];\n\
+     Point :: struct { x: int; y: int; }\n\
+     main :: () {\n  \
+       put_number(TEXT.count);\n  \
+       put_number(TEXT[5]);\n  \
+       put_number(NUMBERS[4]);\n  \
+       put_number(type_info(Point).runtime_size);\n\
+     }\n",
+    "12\n101\n9\n16\n",
+  );
+}
+
+#[test]
+fn a_location_is_a_constant_wherever_it_is_written() {
+  // `#location` and `#caller_location` are constant struct literals
+  // (**L§5.11**), and a `$$x` baked from one keeps the *call site* apart from
+  // the header the default was written in (**L§7.13**).
+  assert_output(
+    "at :: ($$x: $T) -> int { #if is_constant(x)  return x.line_number;  return -1; }\n\
+     here :: (loc := #caller_location) -> int { return at(loc); }\n\
+     main :: () {\n  \
+       put_number(at(#location()) - at(#location()));\n  \
+       put_number(here() - here());\n\
+     }\n",
+    "0\n0\n",
+  );
+}

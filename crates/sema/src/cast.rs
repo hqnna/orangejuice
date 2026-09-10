@@ -58,6 +58,9 @@ impl Checker<'_> {
             | crate::constants::Value::Float(_)
             | crate::constants::Value::Bool(_)
             | crate::constants::Value::String(_)
+            // An address the linker settles stays constant through a cast to
+            // another pointer type; `convert` refuses the numeric ones.
+            | crate::constants::Value::Address(_)
         )
       })
       .and_then(|value| value.convert(self.types(), target));

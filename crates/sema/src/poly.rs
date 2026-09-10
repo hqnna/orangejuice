@@ -52,6 +52,9 @@ pub(crate) enum ConstKey {
   Name(Symbol),
   Code(SourceId, NodeId),
   Procedure(DeclId),
+  Address(crate::constants::Address),
+  Location(SourceId, NodeId),
+  Written(SourceId, NodeId),
 }
 
 pub(crate) fn const_key(value: &Const) -> ConstKey {
@@ -66,6 +69,9 @@ pub(crate) fn const_key(value: &Const) -> ConstKey {
     Value::EnumName(name) => ConstKey::Name(*name),
     Value::Code { source, node, .. } => ConstKey::Code(*source, *node),
     Value::Procedure(decl) => ConstKey::Procedure(*decl),
+    Value::Address(address) => ConstKey::Address(address.clone()),
+    Value::Location { source, node } => ConstKey::Location(*source, *node),
+    Value::Written { source, node, .. } => ConstKey::Written(*source, *node),
   }
 }
 

@@ -43,9 +43,17 @@ impl Lowering<'_, '_> {
       Some(NodeData::Block(_))
     );
 
+    // A constant that says "lower what this was written as" and names *this*
+    // expression is walked rather than materialized, which is what stops it
+    // from asking for itself (**L§5.11**).
+    let names_itself = matches!(
+      info.constant.as_ref().map(|constant| &constant.value),
+      Some(Value::Written { node: at, .. }) if *at == node
+    );
+
     // Anything else the front end folded is emitted as data rather than walked
     // again (**L§5.11**).
-    if let Some(constant) = info.constant.clone().filter(|_| !is_block) {
+    if let Some(constant) = info.constant.clone().filter(|_| !is_block && !names_itself) {
       let target = want.unwrap_or_else(|| self.checker.hardened(info.type_id));
       // A constant that is being boxed into an `Any` becomes a value of its
       // own type first, since that is the type the `Any` records (**L§3.8**);
@@ -116,6 +124,62 @@ impl Lowering<'_, '_> {
     }
   }
 
+  /// An address the linker settles, built from the thing it names
+  /// (**L§5.11**): read-only data the back end lays down, a global's storage,
+  /// a record in the type table, or a generated initializer.
+  fn address_constant(&mut self, address: &oj_sema::Address, target: TypeId) -> Option<Val> {
+    let base = match &address.at {
+      oj_sema::AddressOf::Data(bytes) => {
+        let dest = self.value(target);
+        self.emit(Inst::Const {
+          dest,
+          value: Constant::Bytes {
+            bytes: bytes.clone(),
+            links: Box::default(),
+          },
+        });
+        dest
+      }
+      oj_sema::AddressOf::Global(decl) => {
+        let global = self.global_id(*decl);
+        let dest = self.value(target);
+        self.emit(Inst::GlobalAddress { dest, global });
+        dest
+      }
+      oj_sema::AddressOf::TypeInfo(queried) => {
+        let value = self.type_info_value(*queried, target)?;
+        self.scalar(value)
+      }
+      oj_sema::AddressOf::Initializer(type_id) => {
+        let id = self.initializer_id(*type_id);
+        let dest = self.value(target);
+        self.emit(Inst::ProcedureAddress {
+          dest,
+          procedure: id,
+        });
+        dest
+      }
+    };
+    if address.offset == 0 {
+      return Some(Val {
+        id: base,
+        type_id: target,
+        indirect: false,
+      });
+    }
+    let dest = self.value(target);
+    self.emit(Inst::Offset {
+      dest,
+      base,
+      offset: address.offset,
+    });
+    Some(Val {
+      id: dest,
+      type_id: target,
+      indirect: false,
+    })
+  }
+
   /// A folded constant as a value of `target`, or `None` when it is of a kind
   /// the back end has no data form for.
   pub(super) fn constant_value(&mut self, constant: &Const, target: TypeId) -> Option<Val> {
@@ -156,6 +220,29 @@ impl Lowering<'_, '_> {
     // (**L§3.10**, **L§3.13**).
     if let Value::Type(queried) = constant.value {
       return self.type_info_value(queried, target);
+    }
+    // A `#location` is the place it names, built into a `Source_Code_Location`
+    // here rather than laid out as bytes, since the path is a string whose
+    // storage only the back end has (**L§5.14**).
+    if let Value::Location { source, node } = constant.value {
+      return self.source_location(source, node, target);
+    }
+    // An aggregate whose members are constants but whose bytes the front end
+    // could not lay out is built by walking what it was written as
+    // (**L§5.11**).
+    if let Value::Written {
+      source,
+      node,
+      scope,
+    } = constant.value
+    {
+      return self.expression(scope, source, node, Some(target));
+    }
+    // `type_info(T)`, `initializer_of(T)` and the `.data` of a global are
+    // addresses the linker settles; each is built from the thing it names.
+    if let Value::Address(address) = &constant.value {
+      let address = address.clone();
+      return self.address_constant(&address, target);
     }
     // A `Code` is the address of the `Code_Node` the program was written at,
     // which is what a metaprogram is handed and what `compiler_get_nodes`

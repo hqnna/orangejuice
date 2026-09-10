@@ -5,7 +5,27 @@ use oj_syntax::ast::{NodeData, NodeId};
 use oj_types::{ArrayKind, MemberFlags, TypeId};
 
 use crate::checker::{Checker, Expr};
-use crate::constants::{Const, Value};
+use crate::constants::{Address, AddressOf, Const, Value};
+
+/// The text a constant string is (**L§5.11**). A `Value::Bytes` is not one:
+/// for a view those bytes are the `{count, data}` pair rather than what it
+/// points at, so nothing here can read the elements out of them.
+fn constant_text(value: &Expr) -> Option<Box<[u8]>> {
+  match &value.constant.as_ref()?.value {
+    Value::String(text) => Some(text.clone()),
+    _ => None,
+  }
+}
+
+/// The bytes a constant's storage *is*, for an array whose elements are laid
+/// out in it: a string's text, or a fixed array literal's own storage.
+fn constant_elements(value: &Expr, kind: ArrayKind) -> Option<Box<[u8]>> {
+  match &value.constant.as_ref()?.value {
+    Value::String(text) => Some(text.clone()),
+    Value::Bytes(bytes) if matches!(kind, ArrayKind::Fixed(_)) => Some(bytes.data.clone()),
+    _ => None,
+  }
+}
 
 impl Checker<'_> {
   /// `a.b` (**L§5.3**): a name in a module, a constant or nested type reached
@@ -41,9 +61,18 @@ impl Checker<'_> {
     self.complete_type(value_type);
 
     if let Some((element, kind)) = self.types().array_of(value_type)
-      && let Some(built_in) = self.array_field(name, element, kind, lvalue)
+      && let Some(built_in) = self.array_field(name, element, kind, lvalue, &base)
     {
       return built_in;
+    }
+
+    // `type_info(T).type` and `.runtime_size` are constants: the compiler put
+    // them there (**L§5.11**, **L§17**).
+    if let Some(Value::Address(address)) = base.constant.as_ref().map(|value| &value.value)
+      && let AddressOf::TypeInfo(queried) = address.at
+      && let Some(known) = self.type_info_field(queried, value_type, name)
+    {
+      return Expr::constant(known);
     }
 
     // An `Any` is a pair, and Preload writes down what its two members are
@@ -198,6 +227,7 @@ impl Checker<'_> {
     element: TypeId,
     kind: ArrayKind,
     lvalue: bool,
+    base: &Expr,
   ) -> Option<Expr> {
     if name == self.count_name() {
       return Some(match kind {
@@ -205,26 +235,47 @@ impl Checker<'_> {
         ArrayKind::Fixed(count) => {
           Expr::constant(Const::new(TypeId::S64, Value::Int(i128::from(count))))
         }
-        _ => Expr {
-          type_id: TypeId::S64,
-          denoted: None,
-          constant: None,
-          lvalue,
-          overloads: Vec::new(),
-          overload_instance: None,
-          explicitly_cast: false,
-          autocast: false,
+        // A constant string's count is a constant too, though its type is a
+        // view (**L§5.11**).
+        _ => match constant_text(base) {
+          Some(text) => Expr::constant(Const::new(TypeId::S64, Value::Int(text.len() as i128))),
+          None => Expr {
+            type_id: TypeId::S64,
+            denoted: None,
+            constant: None,
+            lvalue,
+            overloads: Vec::new(),
+            overload_instance: None,
+            explicitly_cast: false,
+            autocast: false,
+          },
         },
       });
     }
     if name == self.data_name() {
       let pointer = self.types_mut().pointer_to(element);
+      // `.data` of a constant string or array literal, and of a *global* fixed
+      // array, is an address the linker settles — constant, though nothing
+      // here knows the number (**L§5.11**). A local's storage is not.
+      let constant = match constant_elements(base, kind) {
+        Some(bytes) => Some(Address {
+          at: AddressOf::Data(bytes),
+          offset: 0,
+        }),
+        None => match matches!(kind, ArrayKind::Fixed(_)) {
+          true => self.global_named_by(base).map(|decl| Address {
+            at: AddressOf::Global(decl),
+            offset: 0,
+          }),
+          false => None,
+        },
+      };
       // A fixed array's `.data` is its storage and is not assignable
       // (**L§3.3**).
       return Some(Expr {
         type_id: pointer,
         denoted: None,
-        constant: None,
+        constant: constant.map(|address| Const::new(pointer, Value::Address(address))),
         lvalue: lvalue && !matches!(kind, ArrayKind::Fixed(_)),
         overloads: Vec::new(),
         overload_instance: None,
@@ -245,6 +296,59 @@ impl Checker<'_> {
     None
   }
 
+  /// The two members of a `Type_Info` the compiler settles rather than the
+  /// program: the tag it carries and the size of the type it describes
+  /// (**L§17**).
+  fn type_info_field(&mut self, queried: TypeId, record: TypeId, name: Symbol) -> Option<Const> {
+    let text = self.interned().resolve_lossy(name).into_owned();
+    let definition = self.types().struct_of(self.types().underlying(record))?;
+    let member = self
+      .types()
+      .struct_info(definition)
+      .member(name)
+      .map(|member| member.type_id)?;
+    match text.as_str() {
+      "type" => {
+        let tag = self.type_info_tag(queried)?;
+        Some(Const::new(member, Value::Int(i128::from(tag))))
+      }
+      "runtime_size" => {
+        let size = self.layout(queried).map(|layout| layout.size)?;
+        Some(Const::new(member, Value::Int(i128::from(size))))
+      }
+      _ => None,
+    }
+  }
+
+  /// The `Type_Info_Tag` a type carries (**L§17**), read out of the enum
+  /// Preload declares rather than written down here.
+  fn type_info_tag(&mut self, queried: TypeId) -> Option<i64> {
+    let name = tag_name(self.types().kind(self.types().underlying(queried)));
+    let tag_type = self.preload_named_type("Type_Info_Tag");
+    let definition = self.types().enum_of(self.types().underlying(tag_type))?;
+    let symbol = self.interned().intern(name.as_bytes());
+    self.types().enum_info(definition).value_of(symbol)
+  }
+
+  /// The global declaration an expression names, when it names one. A local's
+  /// storage moves with the frame, so only a global's address is a constant
+  /// (**L§5.11**).
+  pub(crate) fn global_named_by(&mut self, value: &Expr) -> Option<oj_scope::DeclId> {
+    let [only] = value.overloads[..] else {
+      return None;
+    };
+    let tree = self.program().tree();
+    let decl = tree.decl(only);
+    let global = decl.kind == DeclKind::Variable
+      && !matches!(
+        tree.scope_kind(decl.scope),
+        oj_scope::ScopeKind::Imperative
+          | oj_scope::ScopeKind::ProcedureArguments
+          | oj_scope::ScopeKind::ProcedureReturns
+      );
+    global.then_some(only)
+  }
+
   /// The scope a named `#import` binding stands for, when `left` is one
   /// (**L§11.2**).
   fn module_scope(&mut self, scope: ScopeId, source: SourceId, left: NodeId) -> Option<ScopeId> {
@@ -262,5 +366,33 @@ impl Checker<'_> {
         DeclKind::Module(target) => Some(target),
         _ => None,
       })
+  }
+}
+
+/// The `Type_Info_Tag` member a type carries (**L§17**). The same table the
+/// type table image is built from, kept here because the checker answers
+/// `type_info(T).type` before anything is laid out.
+fn tag_name(kind: &oj_types::TypeKind) -> &'static str {
+  use oj_types::TypeKind;
+  match kind {
+    TypeKind::Integer(_) | TypeKind::UntypedInt => "INTEGER",
+    TypeKind::Float(_) | TypeKind::UntypedFloat(_) => "FLOAT",
+    TypeKind::Bool => "BOOL",
+    TypeKind::String => "STRING",
+    TypeKind::Pointer(_) => "POINTER",
+    TypeKind::Procedure(_) => "PROCEDURE",
+    TypeKind::Void => "VOID",
+    TypeKind::Struct(_) => "STRUCT",
+    TypeKind::Array { .. } => "ARRAY",
+    TypeKind::OverloadSet => "OVERLOAD_SET",
+    TypeKind::Any => "ANY",
+    TypeKind::Enum(_) => "ENUM",
+    TypeKind::Polymorph(_) => "POLYMORPHIC_VARIABLE",
+    TypeKind::Type => "TYPE",
+    TypeKind::Code => "CODE",
+    TypeKind::UntypedLiteral => "UNTYPED_LITERAL",
+    TypeKind::UntypedEnum => "UNTYPED_ENUM",
+    TypeKind::Variant(_) => "VARIANT",
+    _ => "VOID",
   }
 }

@@ -86,9 +86,35 @@ impl Checker<'_> {
         }
         FileInfoKind::Line => Expr::constant(Const::untyped_int(0)),
       },
-      NodeData::DirectiveLocation(_) => {
+      // `#location` is a constant struct literal, whatever it names
+      // (**L§5.11**); `#caller_location` names the call site, which is what
+      // keeps two of them apart when a `$x := #caller_location` bakes them.
+      NodeData::DirectiveLocation(directive) => {
+        let is_caller = directive.is_caller_location;
+        let written = directive.expression.unwrap_or(node);
         let location = self.source_code_location_type();
-        Expr::value(location)
+        let place = match is_caller {
+          true => self
+            .expansion_site()
+            .or(self.call_site)
+            .map(|site| (site.source, site.node)),
+          // `#location(x)` where `x` names a procedure is where *that* was
+          // written, which is what `#location(#this)` asks for (**L§5.14**).
+          false => match self.procedure_named_at(scope, source, directive.expression) {
+            Some(place) => Some(place),
+            None => Some((source, written)),
+          },
+        };
+        match place {
+          Some((at_source, at_node)) => Expr::constant(Const::new(
+            location,
+            Value::Location {
+              source: at_source,
+              node: at_node,
+            },
+          )),
+          None => Expr::value(location),
+        }
       }
       // `#caller_code` is the whole call the macro was expanded from, as
       // `Code` (**L§7.13**).
@@ -236,6 +262,20 @@ impl Checker<'_> {
         let arguments = literal.arguments.clone();
         match self.fold_struct_literal(scope, source, type_id, &arguments) {
           Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(RunBytes::plain(bytes)))),
+          // A literal whose members are all constants but whose bytes cannot
+          // be laid out — a `Type` among them is an address only the back end
+          // has — is still a constant; what it is, is what it was written as
+          // (**L§5.11**).
+          None if self.arguments_are_constant(scope, source, &arguments) => {
+            Expr::constant(Const::new(
+              type_id,
+              Value::Written {
+                source,
+                node,
+                scope,
+              },
+            ))
+          }
           None => Expr::value(type_id),
         }
       }
@@ -844,7 +884,21 @@ impl Checker<'_> {
       OperatorType::TIMES => match inner.denoted {
         Some(denoted) => Expr::type_expression(self.types_mut().pointer_to(denoted)),
         None if inner.is_unknown() => Expr::UNKNOWN,
-        None => Expr::value(self.types_mut().pointer_to(inner.type_id)),
+        None => {
+          let pointer = self.types_mut().pointer_to(inner.type_id);
+          // The address of a *global* is one the linker settles, so it is a
+          // constant; a local's storage moves with the frame (**L§5.11**).
+          match self.global_named_by(&inner) {
+            Some(decl) => Expr::constant(Const::new(
+              pointer,
+              Value::Address(crate::constants::Address {
+                at: crate::constants::AddressOf::Global(decl),
+                offset: 0,
+              }),
+            )),
+            None => Expr::value(pointer),
+          }
+        }
       },
       OperatorType::POINTER_DEREFERENCE | OperatorType::POSTFIX_DEREFERENCE => {
         match self.types().pointee(inner.type_id) {
@@ -927,7 +981,12 @@ impl Checker<'_> {
     if operator == OperatorType::ARRAY_SUBSCRIPT {
       let base = self.expression_type(scope, source, left);
       let index = self.expression_type(scope, source, right);
-      if let Some((element, _)) = self.types().array_of(base.type_id) {
+      if let Some((element, kind)) = self.types().array_of(base.type_id) {
+        // Subscripting a constant string or array literal by a constant index
+        // is a constant (**L§5.11**).
+        if let Some(value) = self.fold_subscript(&base, &index, element, kind) {
+          return Expr::constant(value);
+        }
         return Expr::place(element);
       }
       // `operator []` reads, `operator *[]` gives the address of, an element
@@ -995,6 +1054,23 @@ impl Checker<'_> {
         return Expr::value(TypeId::S64);
       }
       if self.types().is_integer(self.harden(right_type.type_id)) {
+        // An address the linker settles stays constant when a constant number
+        // of elements is added to it: `global_fixed.data + 10` (**L§5.11**).
+        if let Some(Value::Address(address)) = left_type.constant.as_ref().map(|value| &value.value)
+          && let Some(steps) = right_type.constant.as_ref().and_then(Const::as_int)
+          && let Some(pointee) = self.types().pointee(left_type.type_id)
+        {
+          let stride = self.layout(pointee).map_or(1, |layout| layout.size) as i128;
+          let by = match operator {
+            OperatorType::MINUS => -steps,
+            _ => steps,
+          };
+          let moved = crate::constants::Address {
+            at: address.at.clone(),
+            offset: address.offset + (by * stride) as i64,
+          };
+          return Expr::constant(Const::new(left_type.type_id, Value::Address(moved)));
+        }
         return Expr::value(left_type.type_id);
       }
     }
@@ -1161,15 +1237,30 @@ impl Checker<'_> {
         // with an unknown value: it is not known at all.
         None => Expr::UNKNOWN,
       },
+      // A `type_info(T)` is the address of `T`'s record in the table, which
+      // the linker settles rather than the compiler — constant since 0.1.090
+      // (**L§5.11**, **L§17**).
       TypeQueryKind::TypeInfo => {
         let info = self.type_info_type(type_id);
-        Expr::value(self.types_mut().pointer_to(info))
+        let pointer = self.types_mut().pointer_to(info);
+        let address = crate::constants::Address {
+          at: crate::constants::AddressOf::TypeInfo(type_id),
+          offset: 0,
+        };
+        Expr::constant(Const::new(pointer, Value::Address(address)))
       }
+      // `initializer_of(T)` is a procedure the compiler writes out, and a
+      // procedure name is a constant like any other (**L§5.11**).
       TypeQueryKind::InitializerOf => {
         let void_pointer = TypeId::VOID_POINTER;
         let mut signature = oj_types::ProcedureType::new(vec![void_pointer], Vec::new());
         signature.flags = oj_types::ProcedureFlags::HAS_NO_CONTEXT;
-        Expr::value(self.types_mut().procedure(signature))
+        let procedure = self.types_mut().procedure(signature);
+        let address = crate::constants::Address {
+          at: crate::constants::AddressOf::Initializer(type_id),
+          offset: 0,
+        };
+        Expr::constant(Const::new(procedure, Value::Address(address)))
       }
     }
   }
@@ -1193,6 +1284,87 @@ impl Checker<'_> {
       }
       ExpressionQueryKind::CodeOf => Expr::value(TypeId::CODE),
     }
+  }
+
+  /// Where the procedure an expression names was written, when it names one
+  /// (**L§5.14**).
+  fn procedure_named_at(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    expression: Option<NodeId>,
+  ) -> Option<(SourceId, NodeId)> {
+    let expression = expression?;
+    let value = self.expression_type(scope, source, expression);
+    let Value::Procedure(decl) = value.constant?.value else {
+      return None;
+    };
+    let info = self.program().tree().decl(decl);
+    Some((info.source?, info.node?))
+  }
+
+  /// Whether every argument of a literal folded, which is what makes the
+  /// literal itself a constant even when its bytes cannot be laid out
+  /// (**L§5.11**).
+  fn arguments_are_constant(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    arguments: &[oj_syntax::ast::Argument],
+  ) -> bool {
+    arguments.iter().all(|argument| {
+      self
+        .expression_type(scope, source, argument.expression)
+        .constant
+        .is_some()
+    })
+  }
+
+  /// `s[3]` of a constant string, `a[1]` of a constant array literal: the
+  /// element read straight out of the bytes the constant is (**L§5.11**). An
+  /// index outside them folds to nothing, so the bounds check stays the
+  /// program's.
+  fn fold_subscript(
+    &mut self,
+    base: &Expr,
+    index: &Expr,
+    element: TypeId,
+    kind: ArrayKind,
+  ) -> Option<Const> {
+    // A view's constant bytes are its `{count, data}` pair rather than what it
+    // points at, so only a string and a fixed array hold their elements.
+    let bytes = match &base.constant.as_ref()?.value {
+      Value::String(text) => text.clone(),
+      Value::Bytes(bytes) if matches!(kind, ArrayKind::Fixed(_)) => bytes.data.clone(),
+      _ => return None,
+    };
+    let at = usize::try_from(index.constant.as_ref()?.as_int()?).ok()?;
+    // Only the numbers are read back out; anything else is left to the
+    // program, which is what a fixed array of structs is.
+    let element_kind = self.types().integer_kind(element)?;
+    let layout = self.layout(element)?;
+    let size = layout.size as usize;
+    if size == 0 || size > 8 {
+      return None;
+    }
+    let start = at.checked_mul(size)?;
+    let slice = bytes.get(start..start.checked_add(size)?)?;
+    let mut number: u64 = 0;
+    for (step, byte) in slice.iter().enumerate() {
+      number |= u64::from(*byte) << (step * 8);
+    }
+    let value = match element_kind.is_signed() && size < 8 {
+      true => {
+        let bits = size * 8;
+        let sign = 1u64 << (bits - 1);
+        match number & sign != 0 {
+          true => i128::from(number as i64 - (1i64 << bits)),
+          false => i128::from(number),
+        }
+      }
+      false => i128::from(number as i64),
+    };
+    Some(Const::new(element, Value::Int(value)))
   }
 
   fn ifx_type(

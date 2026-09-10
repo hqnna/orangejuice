@@ -30,6 +30,52 @@ pub enum Value {
     node: oj_syntax::ast::NodeId,
     scope: oj_scope::ScopeId,
   },
+  /// An address the *linker* settles rather than the compiler: the read-only
+  /// storage a constant string or array literal was laid down in, or a
+  /// global's own (**L§5.11**). `.data` of a constant and of a global fixed
+  /// array is constant in that sense, and so is that address plus an offset —
+  /// nothing here knows the number, so what it carries is the place. The back
+  /// end lowers the expression it came from rather than the value.
+  Address(Address),
+  /// A `Source_Code_Location`, which `#location` and `#caller_location` are
+  /// constants of (**L§5.11**): the place it names, which the back end builds
+  /// the struct from. A `#caller_location` names the call site rather than the
+  /// header it was written in, which is what keeps two call sites apart.
+  Location {
+    source: oj_diag::SourceId,
+    node: oj_syntax::ast::NodeId,
+  },
+  /// A constant the back end builds by lowering the expression it was written
+  /// as: a struct literal all of whose members are constants but whose bytes
+  /// the compiler cannot lay out, because a `Type` among them is an address
+  /// only the back end has (**L§5.11**).
+  Written {
+    source: oj_diag::SourceId,
+    node: oj_syntax::ast::NodeId,
+    scope: oj_scope::ScopeId,
+  },
+}
+
+/// Where a constant address points, and how far into it (**L§5.11**).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Address {
+  pub at: AddressOf,
+  /// Bytes past the start of that storage.
+  pub offset: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AddressOf {
+  /// The bytes of a constant, which the back end lays down as read-only data.
+  Data(Box<[u8]>),
+  /// A global's own storage, named by the declaration it was written at.
+  Global(oj_scope::DeclId),
+  /// A type's record inside the type table image (**L§17**), which is where
+  /// `type_info(T)` points.
+  TypeInfo(TypeId),
+  /// The generated `initializer_of(T)`, whose address the back end supplies
+  /// the way it supplies a procedure's (**L§17**).
+  Initializer(TypeId),
 }
 
 /// Bytes a `#run` produced, and the compile-time storage the pointers among
@@ -90,8 +136,12 @@ impl Value {
       Self::String(text) => Some(!text.is_empty()),
       Self::Type(_) | Self::EnumName(_) | Self::Bytes(_) | Self::Code { .. } => None,
       // A procedure name is never null, but its truth is an address the back
-      // end supplies rather than anything foldable here.
-      Self::Procedure(_) => None,
+      // end supplies rather than anything foldable here — and so is any other
+      // address the linker settles.
+      Self::Procedure(_) | Self::Address(_) => None,
+      // A location and a written aggregate are values the back end builds,
+      // which have no truth of their own.
+      Self::Location { .. } | Self::Written { .. } => None,
     }
   }
 
@@ -192,6 +242,14 @@ impl Const {
     }
     if types.is_float(target) {
       return Some(Self::new(target, Value::Float(self.value.as_float()?)));
+    }
+    // An address the linker settles stays one when it is read as another
+    // pointer type; reading it as a *number* is not constant, since nothing
+    // here knows what the number is (**L§5.11**).
+    if let Value::Address(address) = &self.value
+      && types.is_pointer(types.underlying(target))
+    {
+      return Some(Self::new(target, Value::Address(address.clone())));
     }
     // A string literal is bytes, so it casts to a fixed array of them and stays
     // constant while it does: `cast([5] u8) "Hello"` (**L§5.6**).

@@ -1089,7 +1089,16 @@ impl<'c, 'p> Lowering<'c, 'p> {
       }),
       // A `Code` value is a piece of the program, not data (**L§13.1**), and a
       // procedure is an address only the module that generates it can supply.
-      Value::Type(_) | Value::EnumName(_) | Value::Code { .. } | Value::Procedure(_) => None,
+      // A `.data` or a global address is settled by the linker rather than by
+      // the compiler (**L§5.11**), so the expression it came from is lowered
+      // instead of the value.
+      Value::Type(_)
+      | Value::EnumName(_)
+      | Value::Code { .. }
+      | Value::Procedure(_)
+      | Value::Address(_)
+      | Value::Location { .. }
+      | Value::Written { .. } => None,
     }
   }
 
