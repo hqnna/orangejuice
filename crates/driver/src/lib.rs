@@ -42,6 +42,12 @@ pub struct Report {
   pub output: String,
   /// Diagnostics, already rendered in the reference format (**C§12**).
   pub diagnostics: Vec<String>,
+  /// How many of them are *errors*. A metaprogram is sent one `Message.ERROR`
+  /// each (**C§3.2**), and `Default_Metaprogram` and every example's own build
+  /// file `exit(1)` the moment they see one — so a warning must not be counted
+  /// among them, and neither must a diagnostic belonging to some other
+  /// workspace this one only carried out.
+  pub errors: usize,
   pub failed: bool,
   /// The executable a successful `Stage::Executable` produced.
   pub executable: Option<PathBuf>,
@@ -56,6 +62,7 @@ impl Report {
   fn failure(message: impl Into<String>) -> Self {
     Self {
       diagnostics: vec![format!("error: {}\n", message.into())],
+      errors: 1,
       failed: true,
       ..Self::default()
     }
@@ -229,6 +236,7 @@ fn run_workspace_once(
   };
   let render = |diagnostics: &[oj_diag::Diagnostic], report: &mut Report| {
     for diagnostic in diagnostics {
+      report.errors += usize::from(diagnostic.is_error());
       if diagnostic.source == oj_diag::SourceId::NONE {
         report
           .diagnostics
@@ -720,7 +728,7 @@ fn workspace_compiler(
       }
     };
     let mut compiled = report.compiled;
-    compiled.errors = report.diagnostics.len();
+    compiled.errors = report.errors;
     compiled.failed |= report.failed;
     // The compiler says which workspace a diagnostic belongs to before it
     // reports one, since the compilation it came from is not the one the
@@ -980,6 +988,9 @@ fn report_metaprogram_diagnostics(meta: &oj_meta::Meta, report: &mut Report) {
       oj_meta::ReportMode::Warning => "Warning",
       oj_meta::ReportMode::Info => "Info",
     };
+    if label == "Error" {
+      report.errors += 1;
+    }
     let location = if entry.filename.is_empty() {
       String::new()
     } else {

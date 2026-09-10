@@ -1797,3 +1797,36 @@ fn a_rewritten_call_keeps_the_names_its_arguments_were_written_under() {
     .expect("the program runs");
   assert_eq!(String::from_utf8_lossy(&output.stdout), "A+b\n");
 }
+
+#[test]
+fn a_warning_in_a_watched_workspace_is_not_reported_as_an_error() {
+  // A metaprogram gets one `Message.ERROR` per error (**C§3.2**), and every
+  // build file in the distribution's own examples `exit(1)` the moment it sees
+  // one — so a program that merely warns must not send any. `skeletal
+  // -animation` is the one that found this: it reaches a `Text_File_Handler`
+  // whose control paths do not all return a value.
+  let fixture = Fixture::new();
+  let Some(report) = build_watching(
+    &fixture,
+    "#run {\n\
+       w := compiler_create_workspace(\"target\");\n\
+       options := get_build_options(w);\n\
+       options.output_executable_name = \"warned\";\n\
+       set_build_options(options, w);\n\
+       compiler_begin_intercept(w);\n\
+       add_build_string(\"f :: (x: bool) -> int { if x return 1; }\\nmain :: () { f(true); }\", w);\n\
+       errors := 0;\n\
+       while true {\n\
+         message := compiler_wait_for_message();\n\
+         if message.kind == .ERROR  errors += 1;\n\
+         if message.kind == .COMPLETE  break;\n\
+       }\n\
+       compiler_end_intercept(w);\n\
+       if errors  compiler_report(\"a warning was reported as an error\");\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("warned"));
+}
