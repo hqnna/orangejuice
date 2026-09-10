@@ -242,7 +242,7 @@ struct Lowering<'c, 'p> {
   union_members: HashMap<(Option<InstanceId>, DeclId), (LocalId, TypeId)>,
   /// The constants whose value is being built right now, so that one that
   /// names itself stops instead of looping.
-  constants: std::collections::HashSet<DeclId>,
+  constants: rustc_hash::FxHashSet<DeclId>,
   loops: Vec<Loop>,
   /// The `for`s a `for_expansion` is standing in for right now: the name the
   /// caller wrote its iterator with, and how deep the loop stack was when the
@@ -333,7 +333,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       current_procedure: None,
       local_of_decl: HashMap::default(),
       union_members: HashMap::default(),
-      constants: std::collections::HashSet::default(),
+      constants: rustc_hash::FxHashSet::default(),
       loops: Vec::new(),
       expanded_loops: Vec::new(),
       insert_controls: Vec::new(),

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use oj_lexer::Symbol;
 
@@ -65,7 +65,7 @@ impl Types {
   pub fn new() -> Self {
     let mut types = Self {
       kinds: Vec::new(),
-      interned: HashMap::new(),
+      interned: HashMap::default(),
       structs: Vec::new(),
       enums: Vec::new(),
       variants: Vec::new(),

@@ -11,7 +11,7 @@
 //! `Type_Info*` structs the program's own Preload declares, which is what
 //! keeps the image right when those structs change.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use oj_lexer::Interner;
 use oj_sema::Checker;
@@ -590,7 +590,7 @@ impl Records {
         _ => None,
       }
     };
-    let mut tags = HashMap::new();
+    let mut tags = HashMap::default();
     let tag_type = checker.preload_named_type("Type_Info_Tag");
     if let Some(definition) = checker.types().enum_of(tag_type) {
       let interner: &Interner = checker.interner();

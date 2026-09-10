@@ -12,7 +12,7 @@
 //! leaves the pointer null rather than dragging that declaration's whole
 //! subtree in behind it (`docs/spec.md` §10).
 
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use oj_diag::SourceId;
 use oj_meta::{
@@ -60,11 +60,16 @@ pub struct Exporter<'c, 'p> {
   generation: u32,
   parent_block: *const CodeBlock,
   owning_statement: *const CodeNode,
+  /// The `Message_File` of each file this export has already met. Every node
+  /// of a file answers the same, and a program has as many nodes as it has, so
+  /// looking one up by path per node hashes that path as many times and
+  /// allocates a `PathBuf` to do it (**C§3.2**).
+  file_messages: HashMap<u32, *const oj_meta::MessageFile>,
   /// Where each type's `Type_Info` sits, when the caller built an image for
   /// this compilation and placed it somewhere the metaprogram can read
   /// (**C§5.3**). Without one a node carries no type, which is what a dump
   /// stage and a compilation nobody is watching see.
-  type_addresses: std::collections::HashMap<oj_types::TypeId, usize>,
+  type_addresses: HashMap<oj_types::TypeId, usize>,
 }
 
 impl<'c, 'p> Exporter<'c, 'p> {
@@ -74,10 +79,11 @@ impl<'c, 'p> Exporter<'c, 'p> {
       nodes,
       touched: Vec::new(),
       reached: HashSet::default(),
+      file_messages: HashMap::default(),
       generation,
       parent_block: std::ptr::null(),
       owning_statement: std::ptr::null(),
-      type_addresses: std::collections::HashMap::default(),
+      type_addresses: HashMap::default(),
     }
   }
 
@@ -273,9 +279,16 @@ impl<'c, 'p> Exporter<'c, 'p> {
     let file = self.checker.program().sources().file(source);
     let start = file.location(node.span.start);
     let end = file.location(node.span.end);
-    let path = file.path().to_path_buf();
-    let enclosing_load = self.nodes.file_message(&path);
-    self.nodes.record_path((self.generation, source.0), path);
+    let enclosing_load = match self.file_messages.get(&source.0) {
+      Some(found) => *found,
+      None => {
+        let path = file.path().to_path_buf();
+        let found = self.nodes.file_message(&path);
+        self.nodes.record_path((self.generation, source.0), path);
+        self.file_messages.insert(source.0, found);
+        found
+      }
+    };
     self.nodes.record_span(
       (self.generation, source.0, id.0),
       (node.span.start, node.span.end),

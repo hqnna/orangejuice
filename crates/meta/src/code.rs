@@ -10,7 +10,7 @@
 //! is the storage: [`Nodes`] hands out stable addresses that live as long as
 //! the compilation, since a metaprogram keeps every pointer it was given.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::ffi::c_void;
 
 use crate::abi::{Slice, Str};

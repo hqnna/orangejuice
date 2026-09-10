@@ -929,7 +929,7 @@ impl Meta {
       self.push_message(stored);
     }
 
-    let mut by_path = std::collections::HashMap::new();
+    let mut by_path = rustc_hash::FxHashMap::default();
     for file in &compiled.files {
       let filename = self.intern(file.path.display().to_string().as_bytes());
       let enclosing_import = file
@@ -1104,7 +1104,7 @@ impl Meta {
   /// `Code` while it is still running.
   pub fn declare_own_files(&mut self, compiled: &Compiled) {
     let workspace = self.current;
-    let mut by_path = std::collections::HashMap::new();
+    let mut by_path = rustc_hash::FxHashMap::default();
     for file in &compiled.files {
       if self.own_files.contains_key(&file.path) {
         continue;

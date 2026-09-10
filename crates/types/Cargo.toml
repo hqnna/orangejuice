@@ -7,5 +7,6 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+rustc-hash.workspace = true
 bitflags.workspace = true
 oj-lexer.workspace = true

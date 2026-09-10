@@ -6,6 +6,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[dependencies]
+rustc-hash.workspace = true
+
 [dev-dependencies]
 oj-diag.workspace = true
 oj-lexer.workspace = true

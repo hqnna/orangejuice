@@ -509,16 +509,22 @@ impl ScopeTree {
         // so a real declaration in the same scope replaces it and one further
         // out is still reached: it neither shadows nor stops the walk
         // (**C§3.3**). Everything that is not a procedure does both.
-        let real: Vec<DeclId> = here
-          .iter()
-          .copied()
-          .filter(|decl| self.decl(*decl).kind != DeclKind::Placeholder)
-          .collect();
-        let stops = !real.is_empty()
-          && !real
+        let (mut real, mut procedures) = (false, true);
+        for decl in &here {
+          match self.decl(*decl).kind {
+            DeclKind::Placeholder => continue,
+            kind => {
+              real = true;
+              procedures &= kind == DeclKind::Procedure;
+            }
+          }
+        }
+        if real && !procedures {
+          let real: Vec<DeclId> = here
             .iter()
-            .all(|decl| self.decl(*decl).kind == DeclKind::Procedure);
-        if stops {
+            .copied()
+            .filter(|decl| self.decl(*decl).kind != DeclKind::Placeholder)
+            .collect();
           // What a nearer scope gathered wins — unless all it gathered is
           // `#placeholder`s, which are promises rather than declarations: the
           // one that stopped the walk is what fills them (**C§3.3**).
@@ -542,7 +548,13 @@ impl ScopeTree {
       // holds, which is not a name any scope wrote down (**L§6.8**,
       // **L§11.2**): a miss here is a wait for the typechecker to look through
       // that value, the way it is inside the module itself.
-      pending |= has_pending || self.imports_a_using(id);
+      // Whether anything is still to come only decides what a lookup that
+      // found *nothing* answers, and what has been gathered never goes away —
+      // so once either question is settled the import graph need not be walked
+      // again for the rest of the way out.
+      if collected.is_empty() && !pending {
+        pending = has_pending || self.imports_a_using(id);
+      }
       current = parent;
     }
 
@@ -589,12 +601,19 @@ impl ScopeTree {
   /// value: what that brings in is a member of something rather than a name any
   /// scope holds, so only the typechecker can answer for it (**L§6.8**).
   fn imports_a_using(&self, scope: ScopeId) -> bool {
-    self.imports(scope).iter().any(|edge| {
-      self.with_scope(edge.target, |target| !target.used_values.is_empty())
-        || self
-          .imports(edge.target)
-          .iter()
-          .any(|inner| self.with_scope(inner.target, |target| !target.used_values.is_empty()))
+    // Read the edges where they lie rather than copying them out: this is on
+    // the lookup path, and taking a scope's imports by value once per edge
+    // makes the copying the square of how many a scope has.
+    self.with_scope(scope, |outer| {
+      outer.imports.iter().any(|edge| {
+        self.with_scope(edge.target, |target| {
+          !target.used_values.is_empty()
+            || target
+              .imports
+              .iter()
+              .any(|inner| self.with_scope(inner.target, |inner| !inner.used_values.is_empty()))
+        })
+      })
     })
   }
 

@@ -685,9 +685,16 @@ impl<'a> Program<'a> {
   }
 
   pub fn is_uninstantiated(&self, scope: ScopeId) -> bool {
+    // Almost every program has no uninstantiated body at all, and this is
+    // asked on the way to resolving a name, so the borrow and the walk are
+    // worth not starting.
+    let uninstantiated = self.uninstantiated_scopes.borrow();
+    if uninstantiated.is_empty() {
+      return false;
+    }
     let mut current = Some(scope);
     while let Some(id) = current {
-      if self.uninstantiated_scopes.borrow().contains(&id) {
+      if uninstantiated.contains(&id) {
         return true;
       }
       current = self.tree.parent(id);
