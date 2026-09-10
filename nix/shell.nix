@@ -29,6 +29,14 @@ pkgs.mkShell {
     pkgs.ncurses
     pkgs.gdb
     pkgs.valgrind
+    # What the vendor tree's graphical programs link against: `invaders`,
+    # `treemap`, `skeletal-animation` and `codex_view` name `libGL`, `libX11`,
+    # `libasound` and `freetype` with `#library,system`, which the linker has to
+    # be able to find.
+    pkgs.libGL
+    pkgs.libx11
+    pkgs.alsa-lib
+    pkgs.freetype
   ];
 
   env = {
