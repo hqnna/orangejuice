@@ -126,7 +126,12 @@ pub fn run_through_metaprogram(
   stage: Stage,
 ) -> Report {
   let mut driver = options.clone();
-  driver.compile_time_command_line = std::iter::once(file.display().to_string())
+  // Absolute, because the metaprogram hands this to `add_build_file` and a
+  // workspace resolves a relative path against the file that created it —
+  // which is the metaprogram, sitting in the distribution's own modules
+  // directory, not wherever the user is standing.
+  let named = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+  driver.compile_time_command_line = std::iter::once(named.display().to_string())
     .chain(arguments.iter().cloned())
     .collect();
   // The target workspace's output belongs where its own file is, not where the

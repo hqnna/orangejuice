@@ -1021,8 +1021,10 @@ Build_Options :: struct {
     intermediate_path:                        string;
     append_executable_filename_extension      := true;
 
-    os_target:                                Operating_System_Tag;
-    cpu_target:                               CPU_Tag;
+    // Default to what this compiler is building for; `OS` and `CPU` are
+    // injected by the compiler (**L§4.3**).
+    os_target                                 := OS;
+    cpu_target                                := CPU;
 
     backend                                   := Backend.LLVM;
     llvm_options:                             Llvm_Options;
@@ -1059,6 +1061,32 @@ Build_Options_During_Compile :: struct {
     runtime_storageless_type_info    := false;
     use_visual_studio_message_format := false;
     stack_trace_on_error             := true;
+}
+
+// Copies the fields a workspace should inherit from the compilation that
+// created it (**C§4**). Where the output goes is deliberately *not* among
+// them: a fresh workspace writes beside the first file it was given unless it
+// says otherwise, which is what lets one metaprogram build a library and then
+// a program that links it.
+copy_commonly_propagated_fields :: (from: Build_Options, to: *Build_Options) {
+    to.os_target                 = from.os_target;
+    to.cpu_target                = from.cpu_target;
+    to.backend                   = from.backend;
+    to.llvm_options              = from.llvm_options;
+
+    to.optimization_level        = from.optimization_level;
+    to.emit_debug_info           = from.emit_debug_info;
+    to.backtrace_on_crash        = from.backtrace_on_crash;
+    to.stack_trace               = from.stack_trace;
+    to.array_bounds_check        = from.array_bounds_check;
+    to.cast_bounds_check         = from.cast_bounds_check;
+    to.null_pointer_check        = from.null_pointer_check;
+    to.arithmetic_overflow_check = from.arithmetic_overflow_check;
+    to.dead_code_elimination     = from.dead_code_elimination;
+
+    to.import_path               = from.import_path;
+    to.temporary_storage_size    = from.temporary_storage_size;
+    to.context_size_max          = from.context_size_max;
 }
 
 Version_Info :: struct {
