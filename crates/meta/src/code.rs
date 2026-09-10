@@ -764,6 +764,10 @@ pub struct Nodes {
   /// Which node an exported address came from, and how many bytes of it there
   /// are, so that what a metaprogram hands back can be recognised.
   origin: HashMap<usize, (Key, usize)>,
+  /// What has been placed since the last [`Nodes::freeze`]. A compilation
+  /// exports one tree at a time and freezes after each, so picturing the whole
+  /// arena every time would cost the square of what it holds.
+  unpictured: Vec<usize>,
   /// The byte range each exported node was written at, and the text of the
   /// file it was written in. A node a metaprogram handed back unchanged prints
   /// as the text it was written as rather than as a reconstruction of it.
@@ -820,6 +824,7 @@ impl Nodes {
     let address = self.arena.alloc_zeroed::<T>();
     self.placed.insert(key, address.cast());
     self.origin.insert(address as usize, (key, size_of::<T>()));
+    self.unpictured.push(address as usize);
     address
   }
 
@@ -858,12 +863,12 @@ impl Nodes {
   /// compiler exports on demand, so there is no one moment after which nothing
   /// of its own is filled in.
   pub fn freeze(&mut self) {
-    for (address, (_, size)) in &self.origin {
-      let bytes = unsafe { std::slice::from_raw_parts(*address as *const u8, *size) };
-      self
-        .shadow
-        .entry(*address)
-        .or_insert_with(|| bytes.to_vec());
+    for address in std::mem::take(&mut self.unpictured) {
+      let Some((_, size)) = self.origin.get(&address) else {
+        continue;
+      };
+      let bytes = unsafe { std::slice::from_raw_parts(address as *const u8, *size) };
+      self.shadow.entry(address).or_insert_with(|| bytes.to_vec());
     }
   }
 
