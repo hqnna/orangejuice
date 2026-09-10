@@ -74,9 +74,16 @@ build :: () {
 
     set_build_options(options, w);
 
+    // `Check` runs unless told not to, the way the reference runs it: a
+    // checker nobody remembers to ask for is a checker nobody benefits from.
+    names: [..] string;
+    for options_from_command_line.plugin_names  array_add(*names, it);
+    if !options_from_command_line.no_check  array_add(*names, "Check");
+
     plugins: [..] *Metaprogram_Plugin;
-    if options_from_command_line.plugin_names.count {
-        init_plugins(options_from_command_line.plugin_names, *plugins, w);
+    if names.count {
+        request_plugin_table(names);
+        init_plugins(names, *plugins, w);
     }
 
     intercept_flags: Intercept_Flags;
@@ -125,6 +132,7 @@ Command_Line_State :: struct {
     plugin_names:           [..] string;
     program_arguments:      [..] string;
     release:                bool;
+    no_check:               bool;
     wants_help:             bool;
 }
 
@@ -176,8 +184,7 @@ parse_command_line :: (args: [] string, state: *Command_Line_State) {
                 at += 2;
 
             case "-no_check";
-                // Nothing to do: a plugin nobody named is a plugin nobody
-                // loads.
+                state.no_check = true;
                 at += 1;
 
             case;

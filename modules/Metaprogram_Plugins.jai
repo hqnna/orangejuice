@@ -46,6 +46,29 @@ Metaprogram_Plugin :: struct {
 // which is what `-no_check` amounts to.
 #placeholder PLUGIN_TABLE_INSERT;
 
+// Fills the placeholder above with a table naming the plugins asked for, by
+// adding the declaration to this very compilation. The compilation then runs
+// again with it in place (`docs/spec.md` §6.5) and `make_plugin` can answer.
+//
+// This has to happen before `init_plugins` is any use, and it can only happen
+// once the names are known — which is inside the `#run` whose code is already
+// compiled. That circularity is the whole reason for the placeholder.
+request_plugin_table :: (names: [] string) {
+    builder: String_Builder;
+    init_string_builder(*builder, temp);
+
+    append(*builder, "PLUGIN_TABLE_INSERT :: #code {\n");
+    for names {
+        print_to_builder(*builder, "    if name == \"%\" {\n", it);
+        print_to_builder(*builder, "        M_% :: #import \"%\";\n", it_index, it);
+        print_to_builder(*builder, "        return M_%.get_plugin();\n", it_index);
+        append(*builder, "    }\n");
+    }
+    append(*builder, "};\n");
+
+    add_build_string(builder_to_string(*builder, temp), get_current_workspace());
+}
+
 // Creates a plugin for each name, in the order given. A name nothing answers
 // is reported and skipped rather than failing the build: a missing plugin
 // should not stop a compilation that would otherwise succeed.
@@ -115,9 +138,15 @@ log_plugin_help :: (plugins: [] *Metaprogram_Plugin) {
 
 #scope_module
 
-// What the driver's inserted table answers. Without the insert this finds
-// nothing, and a build simply runs without plugins.
+// The plugins this distribution ships answer directly. A user plugin is
+// answered by the table the driver inserts, which needs the compilation to run
+// again with the declaration in place — so a built-in that waited for that
+// would not be available to the very `#run` that asked for it.
 make_plugin :: (name: string) -> *Metaprogram_Plugin {
+    if name == "Check" {
+        Check :: #import "Check";
+        return Check.get_plugin();
+    }
     #insert PLUGIN_TABLE_INSERT;
     return null;
 }
