@@ -189,6 +189,46 @@ libc :: #system_library "c";
 
 #scope_export
 
+// ---------------------------------------------------------- sockets ---
+
+AF_INET     :: 2;
+AF_INET6    :: 10;
+SOCK_STREAM :: 1;
+SOCK_DGRAM  :: 2;
+
+SOL_SOCKET   :: 1;
+SO_REUSEADDR :: 2;
+
+SHUT_RD   :: 0;
+SHUT_WR   :: 1;
+SHUT_RDWR :: 2;
+
+// @Volatile: `sockaddr_in` is fixed by the kernel. The address and port are
+// network byte order, which is big-endian whatever the machine is.
+sockaddr_in :: struct {
+    sin_family: u16;
+    sin_port:   u16;
+    sin_addr:   u32;
+    sin_zero:   [8] u8;
+}
+
+socket   :: (domain: s32, kind: s32, protocol: s32) -> s32 #foreign libc;
+bind     :: (fd: s32, address: *sockaddr_in, length: u32) -> s32 #foreign libc;
+listen   :: (fd: s32, backlog: s32) -> s32 #foreign libc;
+accept   :: (fd: s32, address: *sockaddr_in, length: *u32) -> s32 #foreign libc;
+connect  :: (fd: s32, address: *sockaddr_in, length: u32) -> s32 #foreign libc;
+shutdown :: (fd: s32, how: s32) -> s32 #foreign libc;
+setsockopt :: (fd: s32, level: s32, option: s32, value: *void, length: u32) -> s32 #foreign libc;
+getsockname :: (fd: s32, address: *sockaddr_in, length: *u32) -> s32 #foreign libc;
+
+send :: (fd: s32, buffer: *void, length: u64, flags: s32) -> s64 #foreign libc;
+recv :: (fd: s32, buffer: *void, length: u64, flags: s32) -> s64 #foreign libc;
+
+htons :: (value: u16) -> u16 #foreign libc;
+ntohs :: (value: u16) -> u16 #foreign libc;
+htonl :: (value: u32) -> u32 #foreign libc;
+inet_addr :: (text: *u8) -> u32 #foreign libc;
+
 // ------------------------------------------------------ file watching ---
 
 // inotify: the kernel tells the process about changes rather than the process
