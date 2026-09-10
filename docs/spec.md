@@ -283,3 +283,33 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 ## 11. Definition of done for each change
 
 A change is complete when: the code follows the style rules; unit tests cover it; `cargo check`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` pass inside `nix develop`; affected corpus/how_to tests are updated; the commit message is conventional and describes one logical change; documentation (`docs/*.md`) is updated when behavior or architecture changes.
+
+### 10.1 Gaps found while writing our own modules
+
+Writing `modules/` against the language spec turned these up in the compiler
+itself. None of them mis-compiles a valid program; each is recorded here with
+what it actually does.
+
+- **`type_info(#Context).initializer` is null.** No struct initializer is
+  emitted for `#Context`, so a metaprogram or a runtime that tries to apply
+  member defaults through the type table gets nothing. `Runtime_Support`
+  builds its context from a declaration without a value instead, which is what
+  **L§4.6** says applies defaults, and that works — but the field should be
+  filled.
+- **A `return` whose arity is short is caught in code generation, not by the
+  checker.** `return f();` in a procedure with two return values is invalid
+  Jai — the reference says `Not enough return values: Wanted 2, got 1.` —
+  but the checker accepts it and the back end then reports a milestone error
+  naming M7, which is both wrong and confusing. Checking it properly needs the
+  return list's *defaults* plumbed into `Context`, since **L§7.2** allows a
+  partial `return x;` when the rest have them.
+- **A mixed-width bitwise expression needs its casts written out.** `u32 ^ u8`
+  reports that the front end cannot work out the type. Whether the reference
+  accepts it has not been measured.
+- **An untyped integer literal wider than `s64` has no type inside a shift.**
+  `0xffff_ffff_ffff_ffff << n` fails to check; a typed constant works.
+
+Two things that looked like gaps and are not, both measured against the
+reference: `1e6` is not a float literal (a mantissa needs its decimal point),
+and there are no octal literals — the reference writes `0x1B4` with `// 0o664`
+beside it.
