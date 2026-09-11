@@ -2509,6 +2509,7 @@ clock_nanosleep :: (__clock_id: clockid_t, __flags: s32, __req: *timespec, __rem
 clock_settime :: (__clock_id: clockid_t, __tp: *timespec) -> s32 #foreign libc;
 clone :: (__fn: #type (*void) -> s32 #c_call, __child_stack: *void, __flags: s32, __arg: *void, __args: ..Any) -> s32 #foreign libc;
 confstr :: (__name: s32, __buf: *u8, __len: size_t) -> size_t #foreign libc;
+copy_file_range :: (__infd: s32, __pinoff: *__off64_t, __outfd: s32, __poutoff: *__off64_t, __length: size_t, __flags: u32) -> ssize_t #foreign libc;
 creat :: (__file: *u8, __mode: mode_t) -> s32 #foreign libc;
 creat64 :: (__file: *u8, __mode: mode_t) -> s32 #foreign libc;
 ctermid :: (__s: *u8) -> *u8 #foreign libc;
@@ -2621,6 +2622,7 @@ getdirentries64 :: (__fd: s32, __buf: *u8, __nbytes: size_t, __basep: *__off64_t
 getdomainname :: (__name: *u8, __len: size_t) -> s32 #foreign libc;
 getdtablesize :: () -> s32 #foreign libc;
 getegid :: () -> __gid_t #foreign libc;
+getentropy :: (__buffer: *void, __length: size_t) -> s32 #foreign libc;
 geteuid :: () -> __uid_t #foreign libc;
 getgid :: () -> __gid_t #foreign libc;
 getgroups :: (__size: s32, __list: *__gid_t) -> s32 #foreign libc;

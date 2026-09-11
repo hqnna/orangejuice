@@ -10,6 +10,8 @@
 
 #scope_export
 
+#load "generated.jai";
+
 // ------------------------------------------------------------- allocation ---
 
 malloc  :: (size: u64) -> *void #foreign libc;

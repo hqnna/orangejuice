@@ -15,17 +15,18 @@
 #import "POSIX";
 #import "String";
 
-Socket :: struct {
-    handle: s32 = -1;
-}
+#load "generated.jai";
+
+// `Socket` is declared in generated.jai as the file descriptor it is on this
+// platform, which is what the reference does too.
 
 is_open :: (s: Socket) -> bool {
-    return s.handle >= 0;
+    return s >= 0;
 }
 
 close_socket :: (s: *Socket) {
-    if s.handle >= 0  close(s.handle);
-    s.handle = -1;
+    if s.* >= 0  close(s.*);
+    s.* = INVALID_SOCKET;
 }
 
 // ------------------------------------------------------------ listening ---
@@ -33,7 +34,7 @@ close_socket :: (s: *Socket) {
 // A listening socket on `port`. `SO_REUSEADDR` is set so that restarting a
 // server does not fail for the minute the old socket spends in TIME_WAIT.
 listen_on_port :: (port: u16, backlog := 16) -> (listener: Socket, ok: bool) {
-    result: Socket;
+    result: Socket = INVALID_SOCKET;
 
     fd := socket(AF_INET, SOCK_STREAM, 0);
     if fd < 0  return result, false;
@@ -44,7 +45,7 @@ listen_on_port :: (port: u16, backlog := 16) -> (listener: Socket, ok: bool) {
     address: sockaddr_in;
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
-    address.sin_addr = 0;              // INADDR_ANY
+    address.sin_addr.s_addr = 0;              // INADDR_ANY
 
     if bind(fd, *address, size_of(sockaddr_in)) != 0 {
         close(fd);
@@ -55,21 +56,21 @@ listen_on_port :: (port: u16, backlog := 16) -> (listener: Socket, ok: bool) {
         return result, false;
     }
 
-    result.handle = fd;
+    result = fd;
     return result, true;
 }
 
 // Waits for a connection. Blocks until one arrives.
 accept_connection :: (listener: Socket) -> (connection: Socket, ok: bool) {
-    result: Socket;
-    if listener.handle < 0  return result, false;
+    result: Socket = INVALID_SOCKET;
+    if listener < 0  return result, false;
 
     address: sockaddr_in;
     length: u32 = size_of(sockaddr_in);
     while true {
-        fd := accept(listener.handle, *address, *length);
+        fd := accept(listener, *address, *length);
         if fd >= 0 {
-            result.handle = fd;
+            result = fd;
             return result, true;
         }
         // A signal can interrupt the wait; that is not a failure.
@@ -81,10 +82,10 @@ accept_connection :: (listener: Socket) -> (connection: Socket, ok: bool) {
 // The port a listener actually got, which is what a caller that asked for 0
 // needs in order to tell anyone where to connect.
 get_port :: (s: Socket) -> (port: u16, ok: bool) {
-    if s.handle < 0  return 0, false;
+    if s < 0  return 0, false;
     address: sockaddr_in;
     length: u32 = size_of(sockaddr_in);
-    if getsockname(s.handle, *address, *length) != 0  return 0, false;
+    if getsockname(s, *address, *length) != 0  return 0, false;
     return ntohs(address.sin_port), true;
 }
 
@@ -93,7 +94,7 @@ get_port :: (s: Socket) -> (port: u16, ok: bool) {
 // Connects to a dotted-quad address. Name resolution is deliberately not here:
 // it wants DNS, and a module this size should not pretend to do it.
 connect_to :: (address_text: string, port: u16) -> (connection: Socket, ok: bool) {
-    result: Socket;
+    result: Socket = INVALID_SOCKET;
 
     c_text := to_c_string(address_text, temp);
     if !c_text  return result, false;
@@ -109,13 +110,13 @@ connect_to :: (address_text: string, port: u16) -> (connection: Socket, ok: bool
     target: sockaddr_in;
     target.sin_family = AF_INET;
     target.sin_port = htons(port);
-    target.sin_addr = raw;
+    target.sin_addr.s_addr = raw;
 
     if connect(fd, *target, size_of(sockaddr_in)) != 0 {
         close(fd);
         return result, false;
     }
-    result.handle = fd;
+    result = fd;
     return result, true;
 }
 
@@ -123,10 +124,10 @@ connect_to :: (address_text: string, port: u16) -> (connection: Socket, ok: bool
 
 // Sends the whole buffer, looping over short writes.
 send_all :: (s: Socket, bytes: [] u8) -> bool {
-    if s.handle < 0  return false;
+    if s < 0  return false;
     sent := 0;
     while sent < bytes.count {
-        n := send(s.handle, bytes.data + sent, cast(u64) (bytes.count - sent), 0);
+        n := send(s, bytes.data + sent, cast(u64) (bytes.count - sent), 0);
         if n < 0 {
             if errno() == EINTR  continue;
             return false;
@@ -147,9 +148,9 @@ send_all :: (s: Socket, text: string) -> bool {
 // Whatever has arrived, up to the size of `buffer`. Zero with `ok` true means
 // the other end closed, which is not an error.
 receive :: (s: Socket, buffer: [] u8) -> (count: s64, ok: bool) {
-    if s.handle < 0  return 0, false;
+    if s < 0  return 0, false;
     while true {
-        n := recv(s.handle, buffer.data, cast(u64) buffer.count, 0);
+        n := recv(s, buffer.data, cast(u64) buffer.count, 0);
         if n >= 0  return n, true;
         if errno() != EINTR  return 0, false;
     }

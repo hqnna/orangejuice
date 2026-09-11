@@ -1,6 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
-
 fn main() {
   let args: Vec<String> = std::env::args().collect();
   let ast = std::fs::read_to_string(&args[1]).expect("ast file");
@@ -11,17 +8,10 @@ fn main() {
   let mut out: BTreeMap<String, String> = BTreeMap::new();
   for line in ast.lines() {
     let line = line.trim();
-    if !line.ends_with(59 as char) {
+    if !line.starts_with("extern ") || !line.ends_with(';') {
       continue;
     }
-    // A declaration may lead with `extern`, with attributes, or with neither;
-    // what is left once the attributes go is the declaration itself.
-    let bare = strip_attributes(&line[..line.len() - 1]);
-    let bare = bare.trim();
-    let decl = bare.strip_prefix("extern ").unwrap_or(bare).trim().to_string();
-    if !decl.contains(40 as char) {
-      continue;
-    }
+    let decl = strip_attributes(&line[7..line.len() - 1]);
     let Some((name, rendered)) = function(&decl) else { continue };
     if !wanted.contains(name.as_str()) {
       continue;
@@ -40,5 +30,3 @@ fn main() {
   }
 }
 
-
-include!("common.rs");

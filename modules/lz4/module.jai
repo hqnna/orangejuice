@@ -15,6 +15,8 @@
 
 #import "Basic";
 
+#load "generated.jai";
+
 MIN_MATCH        :: 4;
 // The last five bytes are always literals and the last match must end twelve
 // bytes before the end. Those are the format's rules and a decoder relies on

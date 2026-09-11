@@ -17,7 +17,10 @@ fn main() {
 
   let mut at = 0;
   while at < lines.len() {
-    let line = lines[at].trim_end();
+    // An attribute can sit between `struct` and the name, so it comes off
+    // before anything else is read.
+    let cleaned_line = strip_attributes(lines[at].trim_end());
+    let line = cleaned_line.trim();
 
     // `typedef ...;` on one line.
     if line.starts_with("typedef ") && line.ends_with(';') {
@@ -218,6 +221,11 @@ fn typedef(body: &str) -> Option<(String, String)> {
     return None;
   }
   let jai = jai_type(rest)?;
+  // `typedef struct X X;` names the tag after itself, which in Jai would be a
+  // declaration that is its own definition.
+  if jai == name {
+    return None;
+  }
   Some((name.clone(), format!("{name} :: {jai};")))
 }
 /// Emits a struct's members, descending into the anonymous structs and unions

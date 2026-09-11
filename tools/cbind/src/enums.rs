@@ -73,6 +73,15 @@ fn main() {
       candidates.push(prefix.trim_start_matches('_').to_string());
       candidates.push(format!("{}_definitions", prefix.trim_start_matches('_')));
       candidates.push(format!("{prefix}_definitions"));
+      // The reference suffixes some groups to say what they are, and spells
+      // io_uring `IO_URING` where the header says `IORING`.
+      let spaced = prefix.replacen("IORING", "IO_URING", 1);
+      for base in [prefix.as_str(), spaced.as_str()] {
+        for suffix in ["_Flag_Bits", "_Bits", "_Categories", "_OP", "_Flags"] {
+          candidates.push(format!("{base}{suffix}"));
+        }
+        candidates.push(base.to_string());
+      }
     }
 
     let free = |c: &String| wanted.contains(c) && !emitted.contains(c);
@@ -129,6 +138,25 @@ fn main() {
 
 /// A value that names a sibling has to name it by its new spelling.
 fn rewrite(value: &str, prefix: &str, strip: bool) -> String {
+  // C integer suffixes — `1U << 0`, `4096UL` — mean nothing in Jai.
+  let stripped: String = {
+    let mut out = String::new();
+    let chars: Vec<char> = value.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+      out.push(chars[i]);
+      if chars[i].is_ascii_digit() {
+        let mut j = i + 1;
+        while j < chars.len() && chars[j].is_ascii_digit() { out.push(chars[j]); j += 1; }
+        while j < chars.len() && matches!(chars[j], 'u' | 'U' | 'l' | 'L') { j += 1; }
+        i = j;
+        continue;
+      }
+      i += 1;
+    }
+    out
+  };
+  let value = stripped.as_str();
   let trimmed = value.trim();
   if strip && trimmed.starts_with(prefix) && trimmed.len() > prefix.len() + 1 {
     return trimmed[prefix.len() + 1..].to_string();
