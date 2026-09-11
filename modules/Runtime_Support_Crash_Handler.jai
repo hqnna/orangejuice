@@ -49,9 +49,11 @@ installed := false;
 SIGNAL_STACK_SIZE :: 65536;
 alternate_stack: [SIGNAL_STACK_SIZE] u8;
 
+#scope_export
+
 // The handler reports and then dies of the same signal, so that a parent shell
 // or a debugger still sees the real cause rather than a clean exit.
-handle :: (sig: s32, info: *siginfo_t, secret: *void) #c_call {
+handle_signal :: (sig: s32, info: *siginfo_t, secret: *void) #c_call {
     describe(sig, info, caller_address(secret));
     write_backtrace();
 
@@ -62,6 +64,8 @@ handle :: (sig: s32, info: *siginfo_t, secret: *void) #c_call {
     sigaction(sig, *action, null);
     raise(sig);
 }
+
+#scope_module
 
 describe :: (sig: s32, info: *siginfo_t, from: *void) #no_context {
     if sig == SIGSEGV {
@@ -186,7 +190,7 @@ werr_hex :: (value: u64) #no_context {
 
 install :: (sig: s32) #no_context {
     action: sigaction_t;
-    action.sa_handler = cast(*void) handle;
+    action.sa_handler = cast(*void) handle_signal;
     // SIGINFO gives the three-argument handler, ONSTACK puts it on the
     // alternate stack, RESTART is what everything else in the program expects
     // of a signal that did not kill it.
@@ -195,9 +199,14 @@ install :: (sig: s32) #no_context {
     sigaction(sig, *action, null);
 }
 
-SIGILL  :: 4;
-SIGFPE  :: 8;
-SIGBUS  :: 7;
+#scope_export
+
+SIGQUIT ::  3;
+SIGILL  ::  4;
+SIGTRAP ::  5;
+SIGABRT ::  6;
+SIGBUS  ::  7;
+SIGFPE  ::  8;
 SIGSEGV :: 11;
 
 SEGV_MAPERR :: 1;
@@ -208,6 +217,9 @@ SEGV_PKUERR :: 4;
 SA_SIGINFO :: 0x4;
 SA_ONSTACK  :: 0x08000000;
 SA_RESTART  :: 0x10000000;
+
+// The three together, which is what the handler is installed with.
+SA_RESTART_ONSTACK_SIGINFO :: 0x18000004;
 
 SIG_DFL :: null;
 
@@ -244,12 +256,36 @@ stack_t :: struct {
     ss_size:  s64;
 }
 
-sigaction   :: (sig: s32, action: *sigaction_t, old: *sigaction_t) -> s32 #foreign libc_crash;
-sigemptyset :: (set: *sigset_t) -> s32 #foreign libc_crash;
-sigaltstack :: (stack: *stack_t, old: *stack_t) -> s32 #foreign libc_crash;
-raise       :: (sig: s32) -> s32 #foreign libc_crash;
+sigaction   :: (sig: s32, action: *sigaction_t, old: *sigaction_t) -> s32 #foreign libc;
+sigemptyset :: (set: *sigset_t) -> s32 #foreign libc;
+sigaltstack :: (stack: *stack_t, old: *stack_t) -> s32 #foreign libc;
+raise       :: (sig: s32) -> s32 #foreign libc;
 
-backtrace            :: (buffer: **void, size: s32) -> s32 #foreign libc_crash;
-backtrace_symbols_fd :: (buffer: **void, size: s32, fd: s32) #foreign libc_crash;
+backtrace            :: (buffer: **void, size: s32) -> s32 #foreign libc;
+backtrace_symbols_fd :: (buffer: **void, size: s32, fd: s32) #foreign libc;
 
-libc_crash :: #system_library "c";
+libc :: #system_library "c";
+
+// glibc folded the backtrace routines into libc; the name is kept because a
+// program written against the reference may say it.
+libexecinfo :: libc;
+
+size_t  :: u64;
+clock_t :: s64;
+
+// What `sigqueue` carries. Not read here; it is part of the shape.
+sigval_t :: union {
+    sival_int: s32;
+    sival_ptr: *void;
+}
+
+// Enough of the machine context to find the instruction that faulted. Not the
+// real size — nothing here makes one.
+ucontext_t :: struct {
+    uc_flags: u64;
+    uc_link: *ucontext_t;
+    ss_sp:    *void;
+    ss_flags: s32;
+    ss_size:  size_t;
+    gregs: [23] s64;
+}
