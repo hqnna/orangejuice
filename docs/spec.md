@@ -390,18 +390,7 @@ what it actually does.
   builds its context from a declaration without a value instead, which is what
   **L§4.6** says applies defaults, and that works — but the field should be
   filled.
-- **Variadic type parameters on a struct are not supported.** `Tagged_Union ::
-  struct (value_types: .. Type)` is how the reference declares it, and the
-  reference's own module failed under orangejuice the same way ours did.
-  Supporting it means gathering the remaining arguments into a compile-time
-  array of `Type` that the struct body can index and iterate, which is the
-  same missing piece as the `Code` one above. The header is refused where it
-  is written, `orangejuice does not support a variadic parameter on a struct.
-  Declare one parameter per argument instead.`
-  `modules/Tagged_Union.jai` takes four defaulted parameters instead, which
-  keeps the call syntax for up to four types.
-
-Eight that were gaps and are now closed, each pinned by a test in
+Nine that were gaps and are now closed, each pinned by a test in
 `crates/driver/tests/build.rs`, `crates/sema/tests/matching.rs` or
 `crates/scope/tests/scopes.rs`:
 
@@ -414,6 +403,16 @@ Eight that were gaps and are now closed, each pinned by a test in
   becoming bytes — a `Code` is an exported node's address and a `Type` is a
   place in the type table image, so the back end builds the array into storage
   of its own one element at a time.
+- **A variadic parameter on a struct** gathers the same way (**L§8.5**):
+  `Tagged_Union :: struct (value_types: .. Type)` is how the reference
+  declares it, and `modules/Tagged_Union.jai` is written that way now. Every
+  positional argument from that slot on joins the array; the body indexes it
+  (`bytes: [NUM_VALUE_BYTES] u8` sized by a `#run` over it), counts it, and
+  iterates it, and a procedure taking the bare family reaches it through a
+  `using` of its parameter. Subscripting a constant array by a constant index
+  is that element, so `types[0]` denotes a type; an instantiation's name
+  writes a gathered slot the way an array literal is written,
+  `Holder(types=.[s64, float32, u8])`.
 - **A wide literal in a shift** had no width to take. A shift's result is its
   left operand's type (**L§5.10**), and one written as a literal used to
   default to `s64` on the spot, so `m: u64 = 0xffff_ffff_ffff_ffff << n` was a

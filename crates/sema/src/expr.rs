@@ -1598,6 +1598,13 @@ impl Checker<'_> {
     element: TypeId,
     kind: ArrayKind,
   ) -> Option<Const> {
+    // An array of constants holds them one by one, so subscripting it by a
+    // constant index is that element — which is what lets a struct body read
+    // the `..Type` slot it was baked with (**L§8.5**).
+    if let Value::Array(elements) = &base.constant.as_ref()?.value {
+      let at = usize::try_from(index.constant.as_ref()?.as_int()?).ok()?;
+      return elements.get(at).cloned();
+    }
     // A view's constant bytes are its `{count, data}` pair rather than what it
     // points at, so only a string and a fixed array hold their elements.
     let bytes = match &base.constant.as_ref()?.value {

@@ -695,16 +695,16 @@ fn a_variadic_code_parameter_bakes_to_an_array_that_long() {
 }
 
 #[test]
-fn a_variadic_struct_parameter_is_refused_where_it_is_written() {
-  // `struct (types: .. Type)` gathers the rest of the arguments into an array
-  // the body can index (**L§8.5**), which orangejuice does not build
-  // (`docs/spec.md` §10.2).
-  assert_eq!(
-    errors("Holder :: struct (types: .. Type) { n: s64; }\nf :: () { h: Holder(s64); }"),
-    vec![
-      "orangejuice does not support a variadic parameter on a struct. Declare one parameter \
-       per argument instead."
-        .to_string()
-    ]
+fn a_variadic_struct_parameter_gathers_the_arguments_it_was_given() {
+  // `struct (types: .. Type)` gathers every argument from that slot on into a
+  // `[N] Type` the body can index and count (**L§8.5**).
+  accepts(
+    "
+    Holder :: struct (types: .. Type) {
+      COUNT :: types.count;
+      first: types[0];
+    }
+    f :: () { h: Holder(s64, bool); n: s64 = h.first; c: s64 = Holder(s64, bool).COUNT; }
+    ",
   );
 }

@@ -304,7 +304,11 @@ impl Checker<'_> {
     let parameters = self.struct_parameters(arguments_scope);
     // Struct arguments may be given by name, in any order, and two
     // instantiations that agree on them are one type (**L§8.5**).
+    let variadic = self.variadic_struct_parameter(&parameters);
     let mut given: Vec<Option<NodeId>> = vec![None; parameters.len()];
+    // `Tagged_Union :: struct (value_types: .. Type)` gathers every positional
+    // argument from that slot on, the way a procedure's `..T` does (**L§7.3**).
+    let mut gathered: Vec<NodeId> = Vec::new();
     let mut next = 0usize;
     for argument in &call.arguments {
       let index = match argument.name.and_then(|node| self.ident_name(source, node)) {
@@ -316,9 +320,42 @@ impl Checker<'_> {
           next - 1
         }
       };
+      if variadic == Some(index) {
+        gathered.push(argument.expression);
+        // Every argument after the varargs slot is still its own, so the
+        // positional counter stays where it is.
+        next = index;
+        continue;
+      }
       *given.get_mut(index)? = Some(argument.expression);
     }
-    self.bake_struct(family, definition, &given, scope, source)
+    self.bake_struct(family, definition, &given, &gathered, scope, source)
+  }
+
+  /// Which of a struct's parameters was written `..`, when one was
+  /// (**L§8.5**). Only the last one may be, the way a procedure's is.
+  fn variadic_struct_parameter(&mut self, parameters: &[DeclId]) -> Option<usize> {
+    parameters.iter().position(|id| {
+      let decl = self.program().tree().decl(*id);
+      let (Some(source), Some(node)) = (decl.source, decl.node) else {
+        return false;
+      };
+      let Some(ast) = self.ast(source) else {
+        return false;
+      };
+      let NodeData::Declaration(declaration) = ast.data(node) else {
+        return false;
+      };
+      declaration.type_inst.is_some_and(|inst| {
+        matches!(
+          ast.data(inst),
+          NodeData::TypeInstantiation(instantiation)
+            if instantiation
+              .inst_flags
+              .contains(oj_syntax::ast::InstFlags::VARARGS)
+        )
+      })
+    })
   }
 
   /// A polymorphic struct named without an argument list at all: it bakes with
@@ -343,6 +380,7 @@ impl Checker<'_> {
       family,
       definition,
       &vec![None; count],
+      &[],
       arguments_scope,
       source,
     )
@@ -356,6 +394,7 @@ impl Checker<'_> {
     family: TypeId,
     definition: oj_types::StructId,
     given: &[Option<NodeId>],
+    gathered: &[NodeId],
     scope: ScopeId,
     source: SourceId,
   ) -> Option<TypeId> {
@@ -367,9 +406,33 @@ impl Checker<'_> {
     // Every argument has to be a constant, since the members are laid out
     // against them (**L§8.5**).
     let parameters = self.struct_parameters(arguments_scope);
+    let variadic = self.variadic_struct_parameter(&parameters);
+    let mut overrides = Vec::new();
     let given = given.iter().copied();
     let mut bindings = Vec::with_capacity(parameters.len());
-    for (parameter, expression) in parameters.iter().zip(given) {
+    for (index, (parameter, expression)) in parameters.iter().zip(given).enumerate() {
+      // A `..Type` slot is every argument that landed in it, gathered into a
+      // `[N] Type` the body can index and iterate (**L§8.5**).
+      if variadic == Some(index) {
+        let declared = self.decl_type(*parameter).value;
+        let element = self
+          .types()
+          .array_of(declared)
+          .map_or(TypeId::TYPE, |(element, _)| element);
+        let mut elements = Vec::with_capacity(gathered.len());
+        for written in gathered {
+          let value = self.expression_type(scope, source, *written);
+          let named = self.named_procedure(&value);
+          let value = value.constant.or(named)?;
+          elements.push(Const::new(element, value.value));
+        }
+        let array = self
+          .types_mut()
+          .array(element, ArrayKind::Fixed(elements.len() as u64));
+        overrides.push((*parameter, array));
+        bindings.push((*parameter, Const::new(array, Value::Array(elements.into()))));
+        continue;
+      }
       let declared = self.decl_type(*parameter).value;
       let value = match expression {
         Some(expression) => {
@@ -477,7 +540,7 @@ impl Checker<'_> {
           root: arguments_scope,
           outer_scope,
           bindings,
-          overrides: Vec::new(),
+          overrides,
           type_id: TypeId::UNKNOWN,
           parent: self.current_instance,
           expansion: None,
@@ -603,23 +666,35 @@ impl Checker<'_> {
       let name = self.program().tree().decl(*parameter).name;
       text.push_str(&self.symbol_text(name));
       text.push('=');
-      match value.as_type() {
-        Some(type_id) => text.push_str(&self.type_name(type_id)),
-        None => match &value.value {
-          Value::Int(number) => text.push_str(&number.to_string()),
-          Value::Float(number) => text.push_str(&number.to_string()),
-          Value::Bool(value) => text.push_str(if *value { "true" } else { "false" }),
-          Value::String(bytes) => {
-            text.push('"');
-            text.push_str(&String::from_utf8_lossy(bytes));
-            text.push('"');
-          }
-          _ => text.push('?'),
-        },
-      }
+      let written = self.written_constant(value);
+      text.push_str(&written);
     }
     text.push(')');
     Some(self.interned().intern(text.as_bytes()))
+  }
+
+  /// One argument as an instantiation's name writes it (**L§8.5**). A gathered
+  /// `..` slot is written the way an array literal is, so that two
+  /// specializations of one family are told apart by what they were given.
+  fn written_constant(&mut self, value: &Const) -> String {
+    if let Some(type_id) = value.as_type() {
+      return self.type_name(type_id);
+    }
+    match &value.value {
+      Value::Int(number) => number.to_string(),
+      Value::Float(number) => number.to_string(),
+      Value::Bool(value) => String::from(if *value { "true" } else { "false" }),
+      Value::String(bytes) => format!("\"{}\"", String::from_utf8_lossy(bytes)),
+      Value::Array(elements) => {
+        let elements = elements.clone();
+        let written: Vec<String> = elements
+          .iter()
+          .map(|element| self.written_constant(element))
+          .collect();
+        format!(".[{}]", written.join(", "))
+      }
+      _ => String::from("?"),
+    }
   }
 
   /// The candidate a polymorphic header becomes for one call site's arguments:

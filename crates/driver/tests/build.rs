@@ -5497,3 +5497,28 @@ fn a_variadic_code_parameter_bakes_every_argument_it_was_given() {
   };
   assert_eq!(built.output, "x = 42\nv.y = 4\nx + 1 = 43\n");
 }
+
+#[test]
+fn a_variadic_struct_parameter_gathers_the_types_it_was_baked_with() {
+  // `Tagged_Union :: struct (value_types: .. Type)` is how the reference
+  // declares it (**L§8.5**): the arguments gather into a `[N] Type` the body
+  // indexes to size its storage and the procedures iterate to check a tag.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Tagged_Union\";\n\
+     Vector3 :: struct { x: float; y: float; z: float; }\n\
+     main :: () {\n  \
+       u: Tagged_Union(int, float64, Vector3);\n  \
+       set(*u, 42);\n  \
+       value, ok := get(*u, int);\n  \
+       print(\"% % %\\n\", value, ok, isa(*u, float64));\n  \
+       set(*u, Vector3.{1, 2, 3});\n  \
+       v, held := get(*u, Vector3);\n  \
+       print(\"% % %\\n\", v.x, v.z, held);\n  \
+       print(\"%\\n\", size_of(Tagged_Union(int, float64, Vector3)));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "42 true false\n1 3 true\n24\n");
+}

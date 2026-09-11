@@ -88,13 +88,6 @@ impl Checker<'_> {
 
     self.record_struct_scope(definition, scope, own.is_some());
 
-    // `struct (types: .. Type)` gathers the remaining arguments into an array
-    // the body can index and iterate (**L§8.5**). orangejuice has no constant
-    // array of `Type` to gather them into, so the header is refused where it
-    // is written rather than leaving every use of it untyped
-    // (`docs/spec.md` §10.2).
-    self.report_variadic_struct_parameter(source, &payload.arguments);
-
     // A polymorphic struct with no instantiation in hand is a family, not a
     // type: its members need the arguments (**L§8.5**).
     let instantiated = self.instance_of_scope(scope).is_some();
@@ -109,40 +102,6 @@ impl Checker<'_> {
 
     self.record_pending_body(definition, source, node, scope);
     type_id
-  }
-
-  /// Reports a `..` parameter on a struct header, which orangejuice does not
-  /// gather (`docs/spec.md` §10.2).
-  fn report_variadic_struct_parameter(&mut self, source: SourceId, arguments: &[NodeId]) {
-    let Some(ast) = self.ast(source) else {
-      return;
-    };
-    let varargs: Vec<(NodeId, oj_diag::Span)> = arguments
-      .iter()
-      .filter_map(|parameter| match ast.data(*parameter) {
-        NodeData::Declaration(declaration) => {
-          declaration.type_inst.and_then(|inst| match ast.data(inst) {
-            NodeData::TypeInstantiation(instantiation)
-              if instantiation
-                .inst_flags
-                .contains(oj_syntax::ast::InstFlags::VARARGS) =>
-            {
-              Some((*parameter, ast.node(*parameter).span))
-            }
-            _ => None,
-          })
-        }
-        _ => None,
-      })
-      .collect();
-    for (_, span) in varargs {
-      self.error(
-        source,
-        span,
-        "orangejuice does not support a variadic parameter on a struct. Declare one \
-         parameter per argument instead.",
-      );
-    }
   }
 
   /// Fills a struct's members and layout in. Re-entering one is the genuine
