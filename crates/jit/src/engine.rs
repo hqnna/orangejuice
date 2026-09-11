@@ -38,6 +38,15 @@ pub struct Engine {
   state: RefCell<State>,
 }
 
+/// One pointer in an image that names a procedure rather than a place inside
+/// the image itself (**L§17**): where it sits, and what it has to point at
+/// once the dylib can say where that is.
+struct ImageLink {
+  image: String,
+  at: u64,
+  procedure: String,
+}
+
 #[derive(Default)]
 struct State {
   segments: Segments,
@@ -116,7 +125,7 @@ impl Engine {
       return Err(String::new());
     }
 
-    self.prepare_data(&lowered.program)?;
+    let pending = self.prepare_data(&lowered.program)?;
     self.bind_intrinsics(&lowered.program)?;
     self.load_libraries(&lowered.program.libraries);
 
@@ -125,6 +134,7 @@ impl Engine {
     let module = oj_codegen::build_module(module, &lowered.program, &self.options)?;
     self.orc.add_module(module)?;
     self.share_committed(claimed);
+    self.link_image(&pending)?;
     let address = self.orc.lookup(&request.symbol)?;
 
     // A run behind a compound declaration writes every value it produced into
@@ -252,7 +262,7 @@ impl Engine {
       return Err(String::new());
     }
 
-    self.prepare_data(&lowered.program)?;
+    let pending = self.prepare_data(&lowered.program)?;
     self.bind_intrinsics(&lowered.program)?;
     self.load_libraries(&lowered.program.libraries);
 
@@ -261,6 +271,7 @@ impl Engine {
     let module = oj_codegen::build_module(module, &lowered.program, &self.options)?;
     self.orc.add_module(module)?;
     self.share_committed(claimed);
+    self.link_image(&pending)?;
     let address = self.orc.lookup(&request.symbol)?;
 
     let size = oj_ir::modify_result_size(request.variables.len());
@@ -334,8 +345,13 @@ impl Engine {
   }
   /// Gives every global the run reached storage the JIT can bind to. A global
   /// already bound keeps the address — and the contents — it had.
-  fn prepare_data(&self, program: &Program) -> Result<(), String> {
+  ///
+  /// What comes back are the pointers in an image that name a *procedure* —
+  /// a struct record's `initializer` (**L§17**) — which only have an address
+  /// once the module holding them is in the dylib; see [`Engine::link_image`].
+  fn prepare_data(&self, program: &Program) -> Result<Vec<ImageLink>, String> {
     let mut state = self.state.borrow_mut();
+    let mut pending = Vec::new();
     for global in &program.globals {
       // An `#elsewhere` global belongs to a library, so the process is where
       // its definition comes from (**L§4.8**).
@@ -363,15 +379,45 @@ impl Engine {
       // An image's pointers into itself only become addresses once it has one.
       if let GlobalInit::Image { relocations, .. } = &global.init {
         for (at, target) in relocations {
-          state
-            .segments
-            .write_pointer(&global.symbol, *at, address as u64 + *target);
+          match target {
+            ConstLink::Offset(offset) => {
+              state
+                .segments
+                .write_pointer(&global.symbol, *at, address as u64 + *offset)
+            }
+            // A procedure's address is the dylib's to give, and the module
+            // that defines it is not in yet.
+            ConstLink::Procedure(procedure) => {
+              let Some(callee) = program.procedures.get(procedure.0 as usize) else {
+                continue;
+              };
+              pending.push(ImageLink {
+                image: global.symbol.clone(),
+                at: *at,
+                procedure: callee.symbol.clone(),
+              });
+            }
+          }
         }
       }
       if let Some(decl) = global.decl {
         state.bound.insert(decl, global.symbol.clone());
       }
       self.orc.define(&global.symbol, address as u64)?;
+    }
+    Ok(pending)
+  }
+
+  /// Writes the procedure addresses an image was waiting for, once the module
+  /// that defines them is in the dylib (**L§17**).
+  fn link_image(&self, pending: &[ImageLink]) -> Result<(), String> {
+    for link in pending {
+      let address = self.orc.lookup(&link.procedure)?;
+      self
+        .state
+        .borrow_mut()
+        .segments
+        .write_pointer(&link.image, link.at, address);
     }
     Ok(())
   }
@@ -388,7 +434,24 @@ impl Engine {
   /// once the module is really in — see [`Engine::share_committed`].
   fn share_procedures(&self, program: &mut Program) -> Vec<String> {
     let compiled = &self.state.borrow().compiled;
-    let table_bound = reaches_type_table(program);
+    let mut table_bound = reaches_type_table(program);
+    // A procedure the image *points at* — a struct record's `initializer`
+    // (**L§17**) — is one the engine writes into the image by symbol, so it
+    // has to have one whether or not it reads the table. The first run to
+    // reach it compiles it and the rest share it, which is why a `#Context`
+    // initializer a later run's image names fills `context_info` with the
+    // earlier run's record: the same type, in a different image.
+    for global in &program.globals {
+      if let GlobalInit::Image { relocations, .. } = &global.init {
+        for (_, link) in relocations {
+          if let ConstLink::Procedure(procedure) = link
+            && let Some(slot) = table_bound.get_mut(procedure.0 as usize)
+          {
+            *slot = false;
+          }
+        }
+      }
+    }
     let mut claimed = Vec::new();
     for (index, procedure) in program.procedures.iter_mut().enumerate() {
       if !procedure.has_body() || program.entry == Some(oj_ir::ProcId(index as u32)) {

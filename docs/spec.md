@@ -381,19 +381,25 @@ the honest way to record a fact learned that way is to write it into **L** or
 ### 10.2 Gaps found while writing our own modules
 
 Writing `modules/` against the language spec turned these up in the compiler
-itself. None of them mis-compiles a valid program; each is recorded here with
-what it actually does.
+itself. None of them mis-compiled a valid program, and all of them are closed
+now, each pinned by a test in `crates/driver/tests/build.rs`,
+`crates/sema/tests/matching.rs` or `crates/scope/tests/scopes.rs`:
 
-- **`type_info(#Context).initializer` is null.** No struct initializer is
-  emitted for `#Context`, so a metaprogram or a runtime that tries to apply
-  member defaults through the type table gets nothing. `Runtime_Support`
-  builds its context from a declaration without a value instead, which is what
-  **L§4.6** says applies defaults, and that works — but the field should be
-  filled.
-Nine that were gaps and are now closed, each pinned by a test in
-`crates/driver/tests/build.rs`, `crates/sema/tests/matching.rs` or
-`crates/scope/tests/scopes.rs`:
-
+- **`Type_Info_Struct.initializer`** used to be null for every struct. It is
+  the generated `initializer_of(T)` now, so a program applying defaults
+  through the type table gets what a declaration of that type would — the
+  `#Context` one included, which is what a library handed a context reads to
+  build its own. A struct that starts as all zeroes gets none, since zeroing
+  is all it needs; that is what keeps every struct in the table from dragging
+  a procedure into the executable behind it, and a hello-world grows by about
+  3%. The image's relocations carry a `ConstLink` now rather than a bare
+  offset, so a pointer in one may name a procedure; the executable's is
+  written by `oj-codegen` (which declares its functions before its globals for
+  it) and a `#run`'s by the engine, once the module defining them is in the
+  dylib. A procedure the image names is shared even when it reads the table,
+  since the engine writes it in by symbol — so a `#Context` initializer a
+  later run's image names fills `context_info` with the earlier run's record:
+  the same type, in a different image.
 - **A `$`-marked varargs parameter** now bakes to a `[N] T` whose `N` is how
   many arguments landed in the slot (**L§7.3**), each one a constant: a `Code`
   element takes the syntax the call site wrote, the way a single `$c: Code`

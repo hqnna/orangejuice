@@ -20,7 +20,14 @@ pub fn print_ir(program: &Program, interner: &Interner, only: Option<&str>) -> S
         GlobalInit::Constant(value) => constant_text(value),
         GlobalInit::Bytes(bytes) => format!("{} bytes kept from compile time", bytes.len()),
         GlobalInit::Image { relocations, .. } => {
-          format!("an image with {} pointers into itself", relocations.len())
+          let procedures = relocations
+            .iter()
+            .filter(|(_, link)| matches!(link, crate::ir::ConstLink::Procedure(_)))
+            .count();
+          format!(
+            "an image with {} pointers into itself and {procedures} into procedures",
+            relocations.len() - procedures
+          )
         }
       };
       let kind = if global.imported {

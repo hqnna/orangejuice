@@ -578,6 +578,26 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let Some(id) = self.type_table_global else {
       return;
     };
+    // A struct record whose members have defaults carries the address of the
+    // generated `initializer_of(T)` (**L§17**), which is a procedure this
+    // lowering has to reach before the image is closed — generating one may
+    // ask for a type the table does not hold yet, and a record added that way
+    // wants an initializer of its own.
+    let mut initializers: Vec<(u64, ProcId)> = Vec::new();
+    let mut reached = 0usize;
+    loop {
+      let wanted: Vec<(u64, TypeId)> = self.type_table.initializers()[reached..].to_vec();
+      if wanted.is_empty() {
+        break;
+      }
+      reached += wanted.len();
+      for (at, type_id) in wanted {
+        let procedure = self.initializer_id(type_id);
+        initializers.push((at, procedure));
+      }
+      self.drain_queue();
+    }
+
     // The image begins with the `Runtime_Info` the program reads through
     // `__runtime_info`, and ends with the `[] *Type_Info` that struct points
     // at (**C§3.3**).
@@ -585,10 +605,23 @@ impl<'c, 'p> Lowering<'c, 'p> {
     table.finish(self.checker);
     self.type_table = table;
     let bytes: Box<[u8]> = Box::from(self.type_table.bytes());
-    let relocations: Box<[(u64, u64)]> = Box::from(self.type_table.relocations());
+    let mut relocations: Vec<(u64, crate::ir::ConstLink)> = self
+      .type_table
+      .relocations()
+      .iter()
+      .map(|(at, target)| (*at, crate::ir::ConstLink::Offset(*target)))
+      .collect();
+    relocations.extend(
+      initializers
+        .into_iter()
+        .map(|(at, procedure)| (at, crate::ir::ConstLink::Procedure(procedure))),
+    );
     let global = &mut self.globals[id.0 as usize];
     global.size = bytes.len() as u64;
-    global.init = GlobalInit::Image { bytes, relocations };
+    global.init = GlobalInit::Image {
+      bytes,
+      relocations: relocations.into(),
+    };
   }
 
   fn finish(mut self) -> Lowered {

@@ -34,6 +34,11 @@ pub(crate) struct TypeTable {
   /// both relative to wherever the image is placed.
   relocations: Vec<(u64, u64)>,
   offsets: HashMap<TypeId, u64>,
+  /// `(at, type_id)`: the eight bytes at `at` are a struct record's
+  /// `initializer`, which holds the address of the generated
+  /// `initializer_of(T)` (**L§17**). Only the back end has that address, so
+  /// the slot is recorded here and filled in when the image is placed.
+  initializers: Vec<(u64, TypeId)>,
   /// Character data, shared between every name that spells the same thing.
   data: HashMap<Vec<u8>, u64>,
   records: Option<Records>,
@@ -92,6 +97,12 @@ impl TypeTable {
 
   pub(crate) fn relocations(&self) -> &[(u64, u64)] {
     &self.relocations
+  }
+
+  /// The struct records whose `initializer` is waiting for the address of a
+  /// generated `initializer_of(T)` (**L§17**).
+  pub(crate) fn initializers(&self) -> &[(u64, TypeId)] {
+    &self.initializers
   }
 
   /// Reserves the `Runtime_Info` the image begins with, whose `type_table` is
@@ -272,6 +283,18 @@ impl TypeTable {
       || set & TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS != 0;
     let members = self.member_array(checker, &info.members, erase);
     self.write_field_view(checker, record, at, "members", members);
+
+    // A struct that starts as anything other than all zeroes describes that
+    // with a generated `initializer_of(T)` (**L§17**), so that a program
+    // applying defaults through the type table gets what a declaration of the
+    // type would. Zeroing is all the rest need, and the field stays null for
+    // them — which is also what keeps every struct in the table from dragging
+    // a procedure into the executable behind it.
+    if checker.needs_initializer(type_id)
+      && let Some(offset) = self.field(checker, record, "initializer")
+    {
+      self.initializers.push((at + offset, type_id));
+    }
   }
 
   /// The `Type_Info_Struct_Member` array a struct's `members` view points at.

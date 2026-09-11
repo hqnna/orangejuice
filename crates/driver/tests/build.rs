@@ -5522,3 +5522,55 @@ fn a_variadic_struct_parameter_gathers_the_types_it_was_baked_with() {
   };
   assert_eq!(built.output, "42 true false\n1 3 true\n24\n");
 }
+
+#[test]
+fn a_struct_with_defaults_carries_its_initializer_in_the_type_table() {
+  // `Type_Info_Struct.initializer` is the generated `initializer_of(T)`
+  // (**L§17**): a program applying defaults through the type table gets what a
+  // declaration of that type would. Zeroing is all a struct with no defaults
+  // needs, so the field stays null for one — which is what keeps every struct
+  // in the table from dragging a procedure into the executable behind it.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Settings :: struct { width := 800; name := \"window\"; }\n\
+     Plain :: struct { a: int; b: int; }\n\
+     Nested :: struct { inner: Settings; }\n\
+     main :: () {\n  \
+       settings := cast(*Type_Info_Struct) type_info(Settings);\n  \
+       plain := cast(*Type_Info_Struct) type_info(Plain);\n  \
+       nested := cast(*Type_Info_Struct) type_info(Nested);\n  \
+       context_info := cast(*Type_Info_Struct) type_info(#Context);\n  \
+       print(\"% % % %\\n\", settings.initializer != null, plain.initializer != null,\n        \
+             nested.initializer != null, context_info.initializer != null);\n  \
+       storage: Settings = ---;\n  \
+       settings.initializer(*storage);\n  \
+       print(\"% %\\n\", storage.width, storage.name);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "true false true true\n800 window\n");
+}
+
+#[test]
+fn a_run_reaches_an_initializer_through_the_type_table_too() {
+  // The image a `#run` gets is storage the engine owns rather than data in the
+  // module, so the procedure addresses in it are written once the module is in
+  // the dylib (**L§17**, `docs/spec.md` §6.5).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Settings :: struct { width := 800; }\n\
+     at_compile_time :: () -> int {\n  \
+       info := cast(*Type_Info_Struct) type_info(Settings);\n  \
+       if !info.initializer  return -1;\n  \
+       storage: Settings = ---;\n  \
+       info.initializer(*storage);\n  \
+       return storage.width;\n\
+     }\n\
+     COMPILED :: #run at_compile_time();\n\
+     main :: () { print(\"%\\n\", COMPILED); }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "800\n");
+}

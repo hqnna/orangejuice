@@ -166,6 +166,59 @@ impl Checker<'_> {
     self.resolved_member_defaults(definition, false)
   }
 
+  /// Whether a declaration of this type starts as anything other than all
+  /// zeroes (**L§4.6**): a member default at any depth — `#Context` is a
+  /// `using` of `Context_Base`, whose allocator and logger are what a program
+  /// starts with — or the `context_info` the compiler writes into a `#Context`
+  /// itself (**C§13**).
+  ///
+  /// It is what decides whether a struct's `Type_Info_Struct.initializer`
+  /// names a generated procedure or stays null (**L§17**): zeroing is all the
+  /// rest need, so there is nothing for one of them to call.
+  pub fn needs_initializer(&mut self, type_id: TypeId) -> bool {
+    self.needs_initializer_at(type_id, 0)
+  }
+
+  fn needs_initializer_at(&mut self, type_id: TypeId, depth: u32) -> bool {
+    // The same bound the back end applies while it writes one, so the two
+    // always agree about whether there is anything to write.
+    const MAX_DEFAULT_DEPTH: u32 = 32;
+    if depth > MAX_DEFAULT_DEPTH {
+      return false;
+    }
+    let underlying = self.types().underlying(type_id);
+    let context = self.context_type();
+    if underlying == self.types().underlying(context) {
+      return true;
+    }
+    let Some(definition) = self.types().struct_of(underlying) else {
+      return false;
+    };
+    let defaults = self.member_defaults(definition);
+    if !defaults.is_empty() || !self.member_path_defaults(definition).is_empty() {
+      return true;
+    }
+    let nested: Vec<TypeId> = self
+      .types()
+      .struct_info(definition)
+      .members
+      .iter()
+      .filter(|member| {
+        member.imported_through.is_none()
+          && !member
+            .flags
+            .intersects(oj_types::MemberFlags::CONSTANT | oj_types::MemberFlags::IMPORTED)
+      })
+      .map(|member| member.type_id)
+      .collect();
+    for member in nested {
+      if self.needs_initializer_at(member, depth + 1) {
+        return true;
+      }
+    }
+    false
+  }
+
   /// The defaults a struct body wrote as `member.field = value;` rather than on
   /// a declaration (**L§8.1**). They are applied *after* the members they reach
   /// into have taken their own type's defaults, which is the order the body

@@ -494,11 +494,13 @@ pub enum GlobalInit {
   Bytes(Box<[u8]>),
   /// Bytes that point at themselves: the type table is one block of storage
   /// whose `*Type_Info` fields name other places inside the same block
-  /// (**L§17**). Each `(at, target)` says that the eight bytes at `at` hold
-  /// the address of `target`, both relative to where the block is placed.
+  /// (**L§17**). Each `(at, ConstLink::Offset(target))` says that the eight
+  /// bytes at `at` hold the address of `target`, both relative to where the
+  /// block is placed; a `ConstLink::Procedure` is a struct record's
+  /// `initializer`, whose address only the module that generates it has.
   Image {
     bytes: Box<[u8]>,
-    relocations: Box<[(u64, u64)]>,
+    relocations: Box<[(u64, ConstLink)]>,
   },
 }
 

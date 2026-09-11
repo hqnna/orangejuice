@@ -93,8 +93,12 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   }
 
   pub fn emit(&mut self) -> Result<(), String> {
-    self.declare_globals();
+    // Functions first: a global's own bytes may hold a procedure's address —
+    // a struct record's `initializer` in the type table image (**L§17**), or a
+    // constant array of procedures — so the declarations have to exist before
+    // the initializer that names them is built.
     self.declare_functions();
+    self.declare_globals();
     if self.debug.is_some() {
       for (index, procedure) in self.program.procedures.iter().enumerate() {
         if !procedure.has_body() || !self.unit.owns_procedure(index) {
@@ -277,11 +281,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       // The type table points at itself, so it has to exist before its own
       // initializer can be written (**L§17**).
       if let GlobalInit::Image { bytes, relocations } = &global.init {
-        let relocations: Vec<(u64, ConstLink)> = relocations
-          .iter()
-          .map(|(at, target)| (*at, ConstLink::Offset(*target)))
-          .collect();
-        let value = self.image_global(&global.symbol, global.alignment as u32, bytes, &relocations);
+        let value = self.image_global(&global.symbol, global.alignment as u32, bytes, relocations);
         self.globals.push(value);
         continue;
       }
