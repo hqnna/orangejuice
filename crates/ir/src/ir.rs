@@ -570,9 +570,21 @@ pub fn abi_of(
     false => None,
   };
 
+  // Across a `#c_call` boundary `-> void` means no return at all, the way C
+  // spells a procedure that gives nothing back (**L§7.2**); handing one a
+  // return pointer would shift every argument a register along.
+  let c_void = |types: &Types, type_id: TypeId| {
+    c_call
+      && matches!(
+        types.kind(types.underlying(type_id)),
+        oj_types::TypeKind::Void
+      )
+  };
+
   let mut parameters = Vec::new();
   let mut return_class = None;
   let direct_return = match signature.returns.first().copied() {
+    Some(type_id) if c_void(types, type_id) => None,
     Some(type_id) if is_scalar(types, type_id) => Some(type_id),
     Some(type_id) => {
       return_class = classify(types, type_id);
@@ -609,6 +621,9 @@ pub fn abi_of(
   // Every return after the first is written through storage the caller
   // supplies (**L§7.2**).
   for extra in signature.returns.iter().skip(1) {
+    if c_void(types, *extra) {
+      continue;
+    }
     parameters.push(AbiParameter {
       type_id: *extra,
       kind: ParameterKind::ReturnPointer,

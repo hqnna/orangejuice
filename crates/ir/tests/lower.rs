@@ -261,3 +261,26 @@ fn a_procedure_nothing_calls_is_lowered_only_when_asked_for() {
     "the procedure a metaprogram made live is lowered:\n{asked}"
   );
 }
+
+#[test]
+fn a_foreign_procedure_returning_void_is_handed_no_return_pointer() {
+  let listing = listing_of(
+    "libc :: #library,system \"libc\";\n\
+     init :: (a: s32, b: s32, c: *u8) -> void #foreign libc \"init_window\";\n\
+     main :: () { init(1280, 720, \"t\"); }\n",
+  );
+  let call = listing
+    .lines()
+    .find(|line| line.contains("call init_window"))
+    .unwrap_or_else(|| panic!("the call should be lowered, but: {listing}"));
+  assert_eq!(call.matches('%').count(), 3, "{listing}");
+}
+
+#[test]
+fn a_c_call_body_returning_void_returns_nothing() {
+  let listing = listing_of(
+    "note :: (n: s32) -> void #c_call { }\n\
+     main :: () { note(1); }\n",
+  );
+  assert!(listing.contains("procedure note (%0: s32) {"), "{listing}");
+}
