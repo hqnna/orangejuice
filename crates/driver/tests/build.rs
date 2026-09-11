@@ -1673,6 +1673,68 @@ struct Big   make_big(int64_t a)             { struct Big b = {a, a + 1, a + 2};
 "#;
 
 #[test]
+fn a_run_calls_into_a_library_whose_file_the_compiler_named() {
+  // The compile-time loader and the link line have to agree about what a
+  // library is called (**L§12.2**). A library the compiler built is
+  // `<name>.so`, which is not the `lib<name>.so` a loader would guess — so a
+  // `#run` calling into one used to link and then fail to resolve.
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let c_path = directory.path().join("answer.c");
+  std::fs::write(&c_path, "int answer(void) { return 42; }\n").expect("the C source is writable");
+  // `answer.so`, the way the compiler names a library of its own — not
+  // `libanswer.so`.
+  let built = Command::new(oj_link::driver())
+    .arg("-shared")
+    .arg("-fPIC")
+    .arg("-o")
+    .arg(directory.path().join("answer.so"))
+    .arg(&c_path)
+    .status();
+  if !built.is_ok_and(|status| status.success()) {
+    eprintln!("skipping: the C driver could not build the test library");
+    return;
+  }
+
+  let path = directory.path().join("program.jai");
+  std::fs::write(
+    &path,
+    format!(
+      "{PRELUDE}\n\
+       answer_lib :: #library \"answer\";\n\
+       answer :: () -> s32 #foreign answer_lib;\n\
+       AT_COMPILE_TIME :: #run answer();\n\
+       main :: () {{ put_number(AT_COMPILE_TIME); put_number(answer()); }}\n"
+    ),
+  )
+  .expect("the input should be writable");
+
+  unsafe {
+    oj_testsupport::use_own_modules();
+  }
+  let report = oj_driver::run(
+    &path,
+    &oj_driver::BuildOptions::new(),
+    oj_driver::Stage::Executable,
+    None,
+  );
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  // Once from the `#run`, once from the program itself.
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n42\n");
+}
+
+#[test]
 fn a_foreign_procedure_takes_and_returns_a_struct_by_value() {
   let Some(built) = with_c_library(
     C_ABI_LIBRARY,

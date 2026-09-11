@@ -730,6 +730,34 @@ pub struct Library {
   pub directory: Option<std::path::PathBuf>,
 }
 
+impl Library {
+  /// The library's name with a system library's `lib` prefix taken off, which
+  /// is how everything but the source spells it: `#library,system "libraylib"`
+  /// and `#library,system "raylib"` name one library, and `-l` wants `raylib`
+  /// for both (**L§12.2**).
+  ///
+  /// Both the link line and the compile-time loader ask here, because a name
+  /// that means one file to the linker and another to `dlopen` is a `#foreign`
+  /// procedure that links but cannot be called from a `#run`.
+  pub fn link_name(&self) -> &str {
+    match self.system {
+      true => self.name.strip_prefix("lib").unwrap_or(&self.name),
+      false => &self.name,
+    }
+  }
+
+  /// The files this library might be found under, in the order to try them.
+  /// The conventional spelling is `lib<name>.so`; a library the *compiler*
+  /// built is `<name>.so`, which is not a name a loader would guess.
+  pub fn shared_objects(&self) -> Vec<String> {
+    let mut names = vec![format!("lib{}.so", self.link_name())];
+    if !self.system {
+      names.push(format!("{}.so", self.name));
+    }
+    names
+  }
+}
+
 impl Program {
   pub fn procedure(&self, id: ProcId) -> &Procedure {
     &self.procedures[id.0 as usize]
@@ -737,5 +765,60 @@ impl Program {
 
   pub fn global(&self, id: GlobalId) -> &Global {
     &self.globals[id.0 as usize]
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::Library;
+
+  fn library(name: &str, system: bool) -> Library {
+    Library {
+      name: String::from(name),
+      system,
+      directory: None,
+    }
+  }
+
+  /// The two spellings **L§12.2** allows for a system library are one library,
+  /// and the link line and the compile-time loader have to agree about that —
+  /// a name that means `-lraylib` to one and `liblibraylib.so` to the other is
+  /// a `#foreign` procedure that links but cannot be called from a `#run`.
+  #[test]
+  fn a_system_library_is_the_same_library_written_either_way() {
+    assert_eq!(library("libraylib", true).link_name(), "raylib");
+    assert_eq!(library("raylib", true).link_name(), "raylib");
+    assert_eq!(
+      library("libraylib", true).shared_objects(),
+      library("raylib", true).shared_objects()
+    );
+    assert_eq!(
+      library("libraylib", true).shared_objects(),
+      ["libraylib.so"]
+    );
+  }
+
+  /// A library the compiler built is `<name>.so`, so both spellings are tried:
+  /// `#library "helper"` may name `libhelper.so` or `helper.so`, and only the
+  /// file that is there decides which.
+  #[test]
+  fn a_library_of_ones_own_is_tried_under_both_names() {
+    assert_eq!(library("helper", false).link_name(), "helper");
+    assert_eq!(
+      library("helper", false).shared_objects(),
+      ["libhelper.so", "helper.so"]
+    );
+  }
+
+  /// Only a system library loses the prefix: a file really called
+  /// `libfoo.so` beside the declaring source is named `libfoo`, and asking
+  /// for `foo` would miss it.
+  #[test]
+  fn a_lib_prefix_is_kept_where_it_is_part_of_the_file_name() {
+    assert_eq!(library("libfoo", false).link_name(), "libfoo");
+    assert_eq!(
+      library("libfoo", false).shared_objects(),
+      ["liblibfoo.so", "libfoo.so"]
+    );
   }
 }

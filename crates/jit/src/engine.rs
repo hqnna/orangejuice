@@ -429,14 +429,32 @@ impl Engine {
         }
       }
       self.state.borrow_mut().libraries.push(library.name.clone());
-      let file = format!("lib{}.so", library.name);
-      let candidates = library
-        .directory
-        .iter()
-        .map(|directory| directory.join(&file))
-        .chain([std::path::PathBuf::from(&file)]);
+      // The same names the link line is built from, so that a library a
+      // `#foreign` procedure links against is one a `#run` can also call
+      // (**L§12.2**). Beside the declaring file first, then wherever the
+      // loader's own search finds it.
+      let candidates = library.shared_objects().into_iter().flat_map(|file| {
+        library
+          .directory
+          .iter()
+          .map(|directory| directory.join(&file))
+          .chain([std::path::PathBuf::from(&file)])
+          .collect::<Vec<_>>()
+      });
       for candidate in candidates {
-        if let Ok(handle) = unsafe { libloading::Library::new(&candidate) } {
+        // `RTLD_GLOBAL`, and not `libloading`'s default of `RTLD_LOCAL`: the
+        // JIT resolves a `#foreign` procedure through the process search
+        // generator, which is `dlsym(RTLD_DEFAULT, ...)`, and that only sees
+        // what was loaded into the global namespace. Opened locally, the
+        // library is mapped and its symbols are still nowhere a `#run` can
+        // reach them.
+        let opened = unsafe {
+          libloading::os::unix::Library::open(
+            Some(&candidate),
+            libloading::os::unix::RTLD_LAZY | libloading::os::unix::RTLD_GLOBAL,
+          )
+        };
+        if let Ok(handle) = opened {
           // The symbols have to stay in the process for as long as anything
           // JIT-compiled might call them, which is until the compiler exits.
           std::mem::forget(handle);

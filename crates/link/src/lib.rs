@@ -135,7 +135,7 @@ pub fn link_line(request: &Request) -> LinkLine {
   let mut seen: Vec<(bool, &str)> = Vec::new();
   let mut unique: Vec<&Library> = Vec::new();
   for library in &request.libraries {
-    let key = (library.system, link_name(library));
+    let key = (library.system, library.link_name());
     if seen.contains(&key) {
       continue;
     }
@@ -145,7 +145,7 @@ pub fn link_line(request: &Request) -> LinkLine {
 
   let mut named: Vec<String> = Vec::new();
   for library in unique {
-    let name = link_name(library);
+    let name = library.link_name();
     let flag = match library.system.then(|| pkg_config_flags(name)).flatten() {
       Some(flags) => {
         for flag in flags {
@@ -204,16 +204,6 @@ fn library_file(library: &Library) -> Option<String> {
     .into_iter()
     .map(|extension| format!("{}.{extension}", library.name))
     .find(|file| directory.join(file).is_file())
-}
-
-/// What follows `-l`. A `#library,system "libc"` names the *file* the loader
-/// looks for, so the `lib` prefix comes off; a plain `#library "raylib"` names
-/// the library the way `-l` already spells it (**C§11**, **L§12.2**).
-fn link_name(library: &Library) -> &str {
-  match library.system {
-    true => library.name.strip_prefix("lib").unwrap_or(&library.name),
-    false => &library.name,
-  }
 }
 
 /// What `pkg-config` says a system library needs, when it has a `.pc` file for
