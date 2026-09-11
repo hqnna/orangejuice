@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "oj-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "mimalloc",
  "oj-diag",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "oj-codegen"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "inkwell",
  "oj-diag",
@@ -245,11 +245,11 @@ dependencies = [
 
 [[package]]
 name = "oj-diag"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "oj-driver"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "oj-codegen",
  "oj-diag",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "oj-ir"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bitflags",
  "oj-diag",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "oj-jit"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "inkwell",
  "libloading",
@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "oj-lexer"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bitflags",
  "indexmap",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "oj-link"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cc",
  "oj-ir",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "oj-meta"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "oj-diag",
  "oj-lexer",
@@ -336,11 +336,11 @@ dependencies = [
 
 [[package]]
 name = "oj-runtime"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "oj-scope"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "boxcar",
  "insta",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "oj-sema"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "indexmap",
  "insta",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "oj-source"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "memmap2",
  "oj-diag",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "oj-syntax"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bitflags",
  "insta",
@@ -396,11 +396,11 @@ dependencies = [
 
 [[package]]
 name = "oj-testsupport"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "oj-types"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bitflags",
  "oj-lexer",
