@@ -288,7 +288,37 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 
 A change is complete when: the code follows the style rules; unit tests cover it; `cargo check`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` pass inside `nix develop`; affected corpus/how_to tests are updated; the commit message is conventional and describes one logical change; documentation (`docs/*.md`) is updated when behavior or architecture changes.
 
-### 10.1 Gaps found while writing our own modules
+### 10.1 The module tree of our own
+
+`modules/` is orangejuice's own distribution: a clean-room reimplementation of
+the reference's, written against **L** and `docs/compiler.md` rather than
+transcribed, so that a checkout with no `vendor/jai` behind it still compiles
+and runs a program. It is meant to be a *drop-in*: the same names, the same
+signatures and the same behaviour, so that a program written against the
+reference's modules compiles against ours unchanged.
+
+That is measured by name. `oj dump scopes` over a file importing every module
+gives the exported surface of each, and the same listing from the reference's
+tree gives the other side; what is in theirs and not in ours is the gap. It
+started at 3076 names and stands at 36, all of which are one of three things:
+
+- a symbol this machine's glibc does not define (22 in `POSIX` — the `__xstat`
+  family, `_STAT_VER`, `_sys_siglist`), which would have to be invented to
+  declare;
+- a test or example entry point (`String.string_tests`, `Soa.example`,
+  `RadixSort.radix_tests`, `Base64.test_base64*`, `Flat_Pool.example`,
+  `Basic.stb_print_float`, `Basic.test_unsigned_division`);
+- an artifact of the scope dump itself — a `pending` marker, or an anonymous
+  struct the listing names after a local.
+
+Behaviour is measured against the reference compiler running its *own* modules,
+from a directory with no `modules/` of its own (the reference resolves module
+imports against the working directory first, so running it from the checkout
+root picks up ours instead — which is a useful cross-check of its own, but not
+an equivalence test). Every module rewritten this way has a program whose
+output was compared that way, byte for byte.
+
+### 10.2 Gaps found while writing our own modules
 
 Writing `modules/` against the language spec turned these up in the compiler
 itself. None of them mis-compiles a valid program; each is recorded here with

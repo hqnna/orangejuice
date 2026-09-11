@@ -1258,6 +1258,363 @@ get_root_type :: (info: *Type_Info) -> *Type_Info #compiler;
 
 get_toplevel_command_line :: () -> [] string #compiler;
 
-// Answered by the compiler for a compilation it is running; a program that
-// links this module and runs normally gets nothing from it.
-get_runtime_info :: () -> *void #compiler;
+
+// -------------------------------------------------- the performance report ---
+//
+// What `compiler_begin_intercept` reports when asked for it. A metaprogram
+// gets these to find out where a slow compilation went.
+
+Time_Report :: struct {
+    run_directives:      float64;
+    bytecode_inlining:   float64;
+    bytecode_generating: float64;
+}
+
+Run_Directive_Report :: struct {
+    // Only true when the interception asked for the report; otherwise
+    // everything below is blank.
+    reported := false;
+
+    Record :: struct {
+        callee:       *Code_Procedure_Header;
+        num_stalls:   s64;
+        elapsed_time: float64;
+    }
+
+    records: [] Record;
+}
+
+Polymorph_Report :: struct {
+    // How many times the solver ran, and how many of those produced something
+    // that was used. A low ratio means overload resolution is doing a lot of
+    // work that is thrown away, which is what makes a compilation slow.
+    num_solves_invoked: s64;
+    num_solves_used:    s64;
+
+    reported := false;
+
+    Record :: struct {
+        source: *Code_Procedure_Header;
+        num_call_sites: s64;
+        num_deduplications_by_constants: s64;
+        num_deduplications_by_bytecode:  s64;
+
+        distinct_polymorphs: [] Distinct_Polymorph;
+    }
+
+    Distinct_Polymorph :: struct {
+        polymorphed: *Code_Procedure_Header;
+        num_call_sites: s64;
+    }
+
+    records: [] Record;
+}
+
+Bytecode_Report :: struct {
+    // Bytecode inlining only: what an optimizing back end decides afterwards
+    // is not counted, and neither are inlined initializers.
+    num_calls_inlined:        s64;
+    num_calls_total:          s64;
+    num_instructions_inlined: s64;
+    num_instructions_total:   s64;
+}
+
+Message_Debug_Dump :: struct {
+    #as using m: Message;
+
+    dump_text: string;
+}
+
+Message_Performance_Report :: struct {
+    #as using m: Message;
+
+    time_report:          Time_Report;
+    run_directive_report: Run_Directive_Report;
+    polymorph_report:     Polymorph_Report;
+    bytecode_report:      Bytecode_Report;
+}
+
+// ------------------------------------------------------- back-end options ---
+
+X64_Options :: struct {
+    use_dlls := false;
+    enable_register_allocation := false;
+    // The stack frame information in `.eh_frame`, which is loaded at runtime,
+    // rather than in `.debug_frame`, which a debugger has to be told to read.
+    enable_unix_runtime_frame_information := true;
+}
+
+Llvm_Bitcode_Optimization_Setting :: enum u8 {
+    UNSET :: 0;
+    O0    :: 1;
+    O1    :: 2;
+    O2    :: 3;
+    O3    :: 4;
+    OS    :: 5;
+    OZ    :: 6;
+}
+
+// Left UNSET it follows from the bitcode setting.
+Llvm_Machine_Code_Optimization_Setting :: enum u8 {
+    UNSET      :: 0;
+    NONE       :: 1;
+    LESS       :: 2;
+    DEFAULT    :: 3;
+    AGGRESSIVE :: 4;
+}
+
+// ------------------------------------------------------- data and segments ---
+
+// Which of the program's segments a blob goes in. `WRITABLE_NO_RESET` is the
+// one whose bytes survive from compile time into the executable unchanged.
+Data_Segment_Index :: enum u16 {
+    WRITABLE          :: 0x0;
+    WRITABLE_NO_RESET :: 0x1;
+    READ_ONLY         :: 0x2;
+    BSS               :: 0x3;
+    USER_SEGMENT      :: 0x10;
+}
+
+// Opaque: a segment a metaprogram made is named by its address and nothing
+// else.
+Data_Segment :: struct {}
+
+Data_Segment_Characteristics :: enum_flags u32 {
+    READ    :: 0x1;
+    WRITE   :: 0x2;
+    EXECUTE :: 0x4;
+    ZEROED  :: 0x8;
+}
+
+// What a running program's `Runtime_Info` says about the segments it was built
+// with. Null at compile time.
+Global_Data_Segment_Info :: struct {
+    segment_tag: enum u16 {
+        BSS      :: 0;
+        DATA     :: 1;
+        RDATA    :: 2;
+        NO_RESET :: 3;
+
+        USER :: 5;
+    }
+
+    data: [] u8;
+}
+
+Global_Data_Info :: struct {
+    version_stamp: u64;
+    segment_info: [] Global_Data_Segment_Info;
+}
+
+// ------------------------------------------------------------ type queries ---
+
+Type_Info_Flags :: enum u32 {
+    NO_TYPE_INFO                 :: 0x1;
+    PROCEDURES_ARE_VOID_POINTERS :: 0x2;
+    NO_SIZE_COMPLAINT            :: 0x4;
+}
+
+Get_Root_Type_Status :: enum u8 {
+    UNINITIALIZED      :: 0;
+    SUCCESS            :: 1;
+    INPUT_IS_CODE_NULL :: 2;
+    // The `code` given is malformed.
+    CORRUPTED          :: 3;
+    // The `code` given is not typechecked, so its identifiers mean nothing
+    // yet. A `#code,infer` produces one that is.
+    NOT_TYPED          :: 4;
+}
+
+Workspace_Status :: enum u8 {
+    OK     :: 0;
+    FAILED :: 1;
+}
+
+// Whether a metaprogram was able to fix a value a register has to hold. Not
+// answered by this compiler.
+Compiler_Pin :: struct {
+    name: string;
+    pin:  string;
+}
+
+// ------------------------------------------------- what a running program has ---
+
+Runtime_Info :: struct {
+    type_table: [] *Type_Info;
+
+    // Null at compile time; only a running program has one.
+    global_data_info: *Global_Data_Info;
+}
+
+// The whole type table of the program that is running. `#elsewhere` because
+// the symbol is the image the compiler laid down beside the program rather
+// than anything a library exports.
+get_runtime_info :: (w: Workspace = -1) -> Runtime_Info #compiler {
+    __runtime_info: Runtime_Info #elsewhere;
+    return __runtime_info;
+}
+
+get_type_table :: (w: Workspace = -1) -> [] *Type_Info {
+    return get_runtime_info(w).type_table;
+}
+
+// --------------------------------------------------------- little utilities ---
+
+// Anything at or below this is a single character, printed as its own ASCII
+// value; `operator_to_string` handles the rest.
+OPERATOR_TYPE_MAX_ASCII_VALUE :: 127;
+
+operator_to_string :: (op: Operator_Type) -> string {
+    if op == {
+      case .PLUS_ASSIGN;         return "+=";
+      case .MINUS_ASSIGN;        return "-=";
+      case .TIMES_ASSIGN;        return "*=";
+      case .DIV_ASSIGN;          return "/=";
+      case .MOD_ASSIGN;          return "%=";
+      case .IS_EQUAL;            return "==";
+      case .IS_NOT_EQUAL;        return "!=";
+      case .LOGICAL_AND;         return "&&";
+      case .LOGICAL_OR;          return "||";
+      case .LESS_OR_EQUAL;       return "<=";
+      case .GREATER_OR_EQUAL;    return ">=";
+
+      case .SHIFT_LEFT;          return "<<";
+      case .SHIFT_RIGHT;         return ">>";
+
+      case .ROTATE_LEFT;         return "<<<";
+      case .ROTATE_RIGHT;        return ">>>";
+
+      case .SHIFT_LEFT_ASSIGN;   return "<<=";
+      case .SHIFT_RIGHT_ASSIGN;  return ">>=";
+
+      case .ROTATE_LEFT_ASSIGN;  return "<<<=";
+      case .ROTATE_RIGHT_ASSIGN; return ">>>=";
+
+      case .BITWISE_AND_ASSIGN;  return "&=";
+      case .BITWISE_OR_ASSIGN;   return "|=";
+      case .BITWISE_XOR_ASSIGN;  return "^=";
+
+      case .LOGICAL_AND_ASSIGN;  return "&&=";
+      case .LOGICAL_OR_ASSIGN;   return "||=";
+
+      case .POINTER_DEREFERENCE; return "(.*)";
+      case .POSTFIX_DEREFERENCE; return ".*";
+
+      case .ARRAY_SUBSCRIPT;     return "[]";
+
+      case; return "";
+    }
+}
+
+make_integer_literal :: (v: s64) -> *Code_Literal {
+    Basic :: #import "Basic";
+
+    literal := Basic.New(Code_Literal);
+
+    literal.kind        = .LITERAL;
+    literal.value_type  = .NUMBER;
+    literal.value_flags = .IS_A_NUMBER;
+    literal._s64        = v;
+
+    return literal;
+}
+
+make_string_literal :: (s: string) -> *Code_Literal {
+    Basic :: #import "Basic";
+
+    literal := Basic.New(Code_Literal);
+    literal.kind       = .LITERAL;
+    literal.value_type = .STRING;
+
+    // Copied and zero-terminated, since the node outlives whatever the caller
+    // had.
+    c_str := Basic.to_c_string(s);
+    literal._string = to_string(c_str);
+
+    return literal;
+}
+
+// Whether a struct reaches `base_name` through a chain of `#as using` members
+// — an entity hierarchy written the way this language writes one. A struct is
+// not a subclass of itself, which is what `first_call` is for.
+is_subclass_of :: (info: *Type_Info, base_name: string, first_call := true) -> bool {
+    if info.type != .STRUCT  return false;
+
+    info_struct := cast(*Type_Info_Struct) info;
+
+    while true {
+        if info_struct.name == base_name  return !first_call;
+
+        if info_struct.members.count == 0  break;
+
+        member := info_struct.members[0];
+        if !(member.flags & .AS)  break;
+
+        type := member.type;
+        if type.type == .STRUCT {
+            info_struct = cast(*Type_Info_Struct) type;
+            first_call = false;
+            continue;
+        } else if type.type == .POINTER {
+            pointer := cast(*Type_Info_Pointer) type;
+            return is_subclass_of(pointer.pointer_to, base_name, false);
+        } else {
+            break;
+        }
+    }
+
+    return false;
+}
+
+// The file a node was written in, which is what its enclosing `#load` says.
+get_filename :: (node: *Code_Node) -> string {
+    if !node.enclosing_load  return "";
+    return node.enclosing_load.fully_pathed_filename;
+}
+
+make_location :: (c: *Code_Node) -> Source_Code_Location {
+    loc: Source_Code_Location = ---;
+    loc.fully_pathed_filename = get_filename(c);
+    loc.line_number           = c.l0;
+    loc.character_number      = c.c0;
+    return loc;
+}
+
+// `"a/b/c/d.foo.txt"` becomes `"d.foo"` and `"a/b/c/"` — the path keeps its
+// trailing slash. A string operation, but it is here because almost every
+// startup metaprogram wants it and importing `String` for it would cost more
+// than it saves.
+get_basename_and_path :: (input_name: string) -> (basename: string, path: string) {
+    Basic :: #import "Basic";
+
+    if !input_name  return "", "";
+
+    dot_index   := -1;
+    slash_index := -1;
+    // From the right, so the *last* slash and the dot after it are the ones
+    // that matter.
+    for < c, i: input_name {
+        if c == #char "." && dot_index == -1  dot_index = i;
+
+        if c == #char "/" || c == #char "\\" {
+            slash_index = i;
+            break;
+        }
+    }
+
+    basename    := input_name;
+    output_path := "";
+    if slash_index >= 0 {
+        basename    = Basic.advance(basename, slash_index + 1);
+        output_path = input_name;
+        output_path.count = slash_index + 1;
+    }
+
+    // A dot before the last slash belongs to a directory name, not to this
+    // file's extension.
+    if dot_index >= 0 && dot_index > slash_index {
+        basename.count = dot_index - slash_index - 1;
+    }
+
+    return basename, output_path;
+}
