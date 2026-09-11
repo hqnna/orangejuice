@@ -5151,3 +5151,78 @@ fn a_polymorphic_parameter_takes_its_type_from_the_default_it_was_given() {
   };
   assert_eq!(built.output, "B 0 A 5\n");
 }
+
+#[test]
+fn a_static_if_contributes_its_statements_to_the_block_around_it() {
+  // A `#if` splices the branch it kept into the block it was written in, the
+  // way it contributes declarations at file scope (**L§6.10**), so a `defer`
+  // inside one belongs to the enclosing block — which is what `Soa`'s
+  // `for_expansion` needs to scatter an item back at the end of the loop body
+  // rather than the moment the `#if` closes.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     COND :: true;\n\
+     main :: () {\n  \
+       for i: 0..1 {\n    \
+         #if COND {\n      \
+           defer print(\"defer %\\n\", i);\n    \
+         }\n    \
+         print(\"body %\\n\", i);\n  \
+       }\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "body 0\ndefer 0\nbody 1\ndefer 1\n");
+}
+
+#[test]
+fn an_insert_replacement_block_declares_names_of_its_own() {
+  // `#insert (remove = { … })` writes its replacement where the `#insert`
+  // stands (**L§13.2**), which is what `Bucket_Array`'s `for_expansion` builds
+  // a `Bucket_Locator` in. Neither the scope tree nor the checker was looking
+  // at the replacements, so anything one declared had nowhere to live.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Holder :: struct { items: [4] int; live: [4] bool; }\n\
+     drop :: (h: *Holder, i: int) { h.live[i] = false; }\n\
+     for_expansion :: (h: *Holder, body: Code, flags: For_Flags) #expand {\n  \
+       for `it, i: h.items {\n    \
+         if !h.live[i]  continue;\n    \
+         `it_index := i;\n    \
+         #insert (remove = { index := i; drop(h, index); }) body;\n  \
+       }\n\
+     }\n\
+     main :: () {\n  \
+       h: Holder;\n  \
+       for * h.live  it.* = true;\n  \
+       for * h.items  it.* = it_index * 3;\n  \
+       for h  { if it > 3  remove; }\n  \
+       for h  print(\"% \", it);\n  \
+       print(\"\\n\");\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "0 3 \n");
+}
+
+#[test]
+fn a_using_of_a_polymorphic_struct_brings_in_its_parameters() {
+  // `operator *[] :: (using array: Bucket_Array, index: int)` divides by
+  // `items_per_bucket`, which is the struct's own *parameter* rather than one
+  // of its members (**L§6.8**, **L§8.5**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Holder :: struct (T: Type, N: int) { count: s64; items: [N] T; }\n\
+     take_value :: (using h: Holder) -> int { return N + items.count; }\n\
+     take_pointer :: (using h: *Holder) -> int { return N + items.count; }\n\
+     main :: () {\n  \
+       h: Holder(int, 5);\n  \
+       print(\"% %\\n\", take_value(h), take_pointer(*h));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "10 10\n");
+}

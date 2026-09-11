@@ -745,11 +745,37 @@ protoent :: struct {
     p_proto: s32;
 }
 
+AI :: enum_flags u32 {
+    PASSIVE                  :: 0x0001;
+    CANONNAME                :: 0x0002;
+    NUMERICHOST              :: 0x0004;
+    V4MAPPED                 :: 0x0008;
+    ALL                      :: 0x0010;
+    ADDRCONFIG               :: 0x0020;
+    IDN                      :: 0x0040;
+    CANONIDN                 :: 0x0080;
+    IDN_ALLOW_UNASSIGNED     :: 0x0100;
+    IDN_USE_STD3_ASCII_RULES :: 0x0200;
+    NUMERICSERV              :: 0x0400;
+
+    AI_PASSIVE                  :: PASSIVE;
+    AI_CANONNAME                :: CANONNAME;
+    AI_NUMERICHOST              :: NUMERICHOST;
+    AI_V4MAPPED                 :: V4MAPPED;
+    AI_ALL                      :: ALL;
+    AI_ADDRCONFIG               :: ADDRCONFIG;
+    AI_IDN                      :: IDN;
+    AI_CANONIDN                 :: CANONIDN;
+    AI_IDN_ALLOW_UNASSIGNED     :: IDN_ALLOW_UNASSIGNED;
+    AI_IDN_USE_STD3_ASCII_RULES :: IDN_USE_STD3_ASCII_RULES;
+    AI_NUMERICSERV              :: NUMERICSERV;
+}
+
 addrinfo :: struct {
-    ai_flags: s32;
+    ai_flags: AI;
     ai_family: s32;
-    ai_socktype: s32;
-    ai_protocol: s32;
+    ai_socktype: SOCK;
+    ai_protocol: IPPROTO;
     ai_addrlen: socklen_t;
     ai_addr: *sockaddr;
     ai_canonname: *u8;

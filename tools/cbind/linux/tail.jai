@@ -40,3 +40,38 @@ __kernel_rwf_t :: s32;
 // `<sys/epoll.h>` defines these two outside the event enum.
 EPOLLNVAL        :: 0x20;
 EPOLL_URING_WAKE :: 0x8000_0000;
+
+// The per-opcode flag words of a submission, which the header declares as one
+// `#define` family per opcode and which share the same `u32` slot. `using` so
+// that each name reads the way the header spells it.
+using IORING_OP_Flags :: enum_flags u32 #specified {
+    // close
+    IORING_CLOSE_FD_AND_FILE_SLOT :: 1 << 0;
+
+    // fsync
+    IORING_FSYNC_DATASYNC :: 1 << 0;
+
+    // timeout
+    IORING_TIMEOUT_ABS           :: 1 << 0;
+    IORING_TIMEOUT_UPDATE        :: 1 << 1;
+    IORING_TIMEOUT_BOOTTIME      :: 1 << 2;
+    IORING_TIMEOUT_REALTIME      :: 1 << 3;
+    IORING_LINK_TIMEOUT_UPDATE   :: 1 << 4;
+    IORING_TIMEOUT_ETIME_SUCCESS :: 1 << 5;
+
+    IORING_TIMEOUT_CLOCK_MASK  :: IORING_TIMEOUT_BOOTTIME | IORING_TIMEOUT_REALTIME;
+    IORING_TIMEOUT_UPDATE_MASK :: IORING_TIMEOUT_UPDATE | IORING_LINK_TIMEOUT_UPDATE;
+
+    // splice, extending the flags of `splice(2)`
+    SPLICE_F_FD_IN_FIXED :: 1 << 31;
+
+    // async cancel
+    IORING_ASYNC_CANCEL_ALL :: 1 << 0;
+    IORING_ASYNC_CANCEL_FD  :: 1 << 1;
+    IORING_ASYNC_CANCEL_ANY :: 1 << 2;
+}
+
+// What `io_uring_probe_op.flags` says about one opcode.
+using IO_URING_OP_Flags :: enum_flags u16 {
+    IO_URING_OP_SUPPORTED :: 1 << 0;
+}

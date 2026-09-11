@@ -176,6 +176,48 @@ impl Checker<'_> {
     })
   }
 
+  /// The struct a `using`ed value is, following one pointer.
+  fn struct_of_used_value(
+    &mut self,
+    owner: ScopeId,
+    value: &oj_scope::UsedValue,
+  ) -> Option<oj_types::StructId> {
+    let base_type = match self.used_base(value) {
+      Some(decl) => {
+        let declared_in = self.program().tree().decl(decl).scope;
+        if self.is_resolving(decl) || self.scope_is_completing(declared_in) {
+          return None;
+        }
+        self.decl_type(decl).value
+      }
+      None => self.used_expression_base(value, owner)?.1,
+    };
+    let pointee = self.types().pointee(base_type).unwrap_or(base_type);
+    self.types().struct_of(pointee)
+  }
+
+  /// What a `using`ed polymorphic struct's own argument list contributes: the
+  /// constants its specialization was baked with, which live in the arguments
+  /// scope above the members (**L§8.5**).
+  fn parameter_of_used_value(
+    &mut self,
+    owner: ScopeId,
+    value: &oj_scope::UsedValue,
+    name: Symbol,
+  ) -> Option<Expr> {
+    let definition = self.struct_of_used_value(owner, value)?;
+    let instance = self.struct_instance(definition)?;
+    let members = self.struct_scope(definition)?;
+    let arguments = self.program().tree().parent(members)?;
+    let found = self.with_instance(Some(instance), |checker| {
+      checker.member_in_scope(arguments, name)
+    });
+    match found.is_unknown() {
+      true => None,
+      false => Some(found),
+    }
+  }
+
   /// Whether the lookup was written inside the struct's own body.
   fn encloses_lookup(&self, definition: oj_types::StructId, from: ScopeId) -> bool {
     match self.struct_scope(definition) {
@@ -204,6 +246,13 @@ impl Checker<'_> {
   pub(crate) fn used_name_type(&mut self, scope: ScopeId, name: Symbol) -> Option<Expr> {
     self.walk_used_values(scope, name, |checker, from, owner, value, name| {
       if let Some(found) = checker.name_of_used_type(value, owner, name) {
+        return Some(found);
+      }
+      // A `using` of a polymorphic struct brings in its *parameters* as well
+      // as its members: `using array: Bucket_Array` is what makes
+      // `items_per_bucket` a name inside `operator *[]` (**L§6.8**,
+      // **L§8.5**).
+      if let Some(found) = checker.parameter_of_used_value(owner, value, name) {
         return Some(found);
       }
       let member = checker.member_of_used_value(from, owner, value, name)?;

@@ -393,7 +393,7 @@ impl Lowering<'_, '_> {
           match self.checker.static_if_branches(scope, source, &payload) {
             Some(branches) => {
               for branch in branches {
-                self.statement(branch);
+                self.spliced_branch(branch);
               }
             }
             None => self.switch_statement(node, &payload),
@@ -823,15 +823,40 @@ impl Lowering<'_, '_> {
       }
       return;
     }
+    // `a, b = b, a` assigns simultaneously (**L§4.5**): every right-hand side
+    // is worked out, and held, before any of them is stored — otherwise the
+    // swap would read back what the first store had just written.
+    let mut computed: Vec<Option<Val>> = Vec::with_capacity(targets.len());
     for (index, target) in targets.iter().enumerate() {
-      let Some((address, type_id)) = *target else {
+      let Some((_, type_id)) = *target else {
+        computed.push(None);
         continue;
       };
       let value_node = value_at(index);
       let scope = self.checker.scope_for(source, value_node, self.body_scope);
-      if let Some(value) = self.expression(scope, source, value_node, Some(type_id)) {
+      let value = self.expression(scope, source, value_node, Some(type_id));
+      computed.push(value.map(|value| self.held(value, type_id)));
+    }
+    for (index, target) in targets.into_iter().enumerate() {
+      let Some((address, _)) = target else {
+        continue;
+      };
+      if let Some(value) = computed[index] {
         self.store(address, value);
       }
+    }
+  }
+
+  /// A value copied into storage of its own, so that what it was read out of
+  /// may be written before it is used.
+  fn held(&mut self, value: Val, type_id: TypeId) -> Val {
+    let local = self.new_local(String::from("held"), type_id);
+    let address = self.local_address(local);
+    self.store(address, value);
+    Val {
+      id: address,
+      type_id,
+      indirect: true,
     }
   }
 
@@ -1024,6 +1049,26 @@ impl Lowering<'_, '_> {
     }
   }
 
+  /// The branch of a `#if` that survived, lowered *into* the block the `#if`
+  /// was written in rather than as a block of its own (**L§6.10**). A `#if`
+  /// contributes its statements the way it contributes declarations at file
+  /// scope, so a `defer` inside one belongs to the enclosing block — which is
+  /// what `Soa`'s `for_expansion` relies on to scatter an item back at the end
+  /// of the loop's body rather than immediately.
+  fn spliced_branch(&mut self, branch: NodeId) {
+    let Some(ast) = self.checker.tree_of(self.body_source) else {
+      return;
+    };
+    let NodeData::Block(block) = ast.data(branch) else {
+      self.statement(branch);
+      return;
+    };
+    let statements = block.statements.clone();
+    for statement in statements {
+      self.statement(statement);
+    }
+  }
+
   fn if_statement(&mut self, payload: &ast::IfNode) {
     let source = self.body_source;
     let scope = self
@@ -1034,7 +1079,7 @@ impl Lowering<'_, '_> {
     // so there is nothing here to lower.
     if let Some(branches) = self.checker.static_if_branches(scope, source, payload) {
       for branch in branches {
-        self.statement(branch);
+        self.spliced_branch(branch);
       }
       return;
     }

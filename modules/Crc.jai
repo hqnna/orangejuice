@@ -72,27 +72,33 @@ crc_table :: () -> [] u32 {
     return result;
 }
 
-// The 64-bit variant, ECMA-182's polynomial. The same shift-and-xor as the
-// 32-bit one, over a table built the same way.
+#scope_export
+
+// The 64-bit variant, ECMA-182's polynomial. Unlike the 32-bit one above this
+// one runs most-significant bit first, so the byte is folded in at the *top*
+// of the register and the shift goes the other way.
 crc64 :: (s: string) -> u64 {
-    crc: u64 = 0xffff_ffff_ffff_ffff;
+    sum: u64 = 0xFFFF_FFFF_FFFF_FFFF;
     for 0..s.count - 1 {
-        crc = CRC64_TABLE[(crc ^ s[it]) & 0xff] ^ (crc >> 8);
+        slot := ((sum >> 56) ^ s[it]) & 0xFF;
+        sum = CRC64_TABLE[slot] ^ (sum << 8);
     }
-    return crc ^ 0xffff_ffff_ffff_ffff;
+    return ~sum;
 }
 
 #scope_module
 
-CRC64_POLYNOMIAL :: 0xC96C_5795_D787_0F42;
+CRC64_POLYNOMIAL : u64 : 0x42F0_E1EB_A9EA_3693;
 
+// Each entry is one byte pushed through the register from the top, which is
+// the eight steps of the loop above done in advance.
 CRC64_TABLE :: #run -> [256] u64 {
     table: [256] u64;
     for byte: 0..255 {
-        remainder := cast(u64) byte;
+        remainder := cast(u64) byte << 56;
         for 1..8 {
-            if remainder & 1  remainder = (remainder >> 1) ^ CRC64_POLYNOMIAL;
-            else              remainder = remainder >> 1;
+            if remainder & 0x8000_0000_0000_0000  remainder = (remainder << 1) ^ CRC64_POLYNOMIAL;
+            else                                  remainder = remainder << 1;
         }
         table[byte] = remainder;
     }

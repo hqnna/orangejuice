@@ -230,7 +230,7 @@ impl Checker<'_> {
     Expr::UNKNOWN
   }
 
-  fn member_in_scope(&mut self, scope: ScopeId, name: Symbol) -> Expr {
+  pub(crate) fn member_in_scope(&mut self, scope: ScopeId, name: Symbol) -> Expr {
     let candidates = self
       .program()
       .tree()

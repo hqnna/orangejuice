@@ -138,9 +138,12 @@ median_of_three :: (array: [] $T, low: s64, high: s64, compare: (T, T) -> $R) ->
     return b;
 }
 
+#scope_export
+
 // The simplest sort there is: walk the array swapping neighbours until a pass
 // changes nothing. Quadratic, and here for the cases where that does not
 // matter and clarity does.
+
 bubble_sort :: (array: [] $T, f: (T, T) -> s64) {
     if array.count < 2  return;
     last := array.count - 1;

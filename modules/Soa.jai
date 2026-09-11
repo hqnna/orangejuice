@@ -86,3 +86,56 @@ soa_set :: (soa: *$S, index: s64, value: S.Item) {
         return builder_to_string(*builder);
     }
 }
+
+// `soa[i]` and `soa[i] = value` in the ordinary spelling. The subscript takes
+// the struct by value, since what it produces is a copy anyway.
+operator [] :: (soa: $S/Soa, i: int) -> S.T {
+    result: S.T = ---;
+    #insert #run member_statements(S, "    result.% = soa.%[i];\n");
+    return result;
+}
+
+operator []= :: (array: *$S/Soa, index: int, value: S.T) {
+    #insert #run member_statements(S, "    array.%[index] = value.%;\n");
+}
+
+// `for` over one visits the items as whole `T`s, gathered on the way in.
+// Iterating by pointer works, but it is slow: there is no `T` in the storage
+// to point at, so each item is gathered into a local, handed over, and
+// scattered back.
+for_expansion :: (array: *$S/Soa, body: Code, flags: For_Flags) #expand {
+    #assert !(flags & .REVERSE);
+
+    pointer_storage: array.T = ---;
+
+    for `it_index: 0..S.N - 1 {
+        #if flags & .POINTER {
+            `it := *pointer_storage;
+            pointer_storage = array.*[it_index];
+            defer array.*[it_index] = pointer_storage;
+        } else {
+            `it := array.*[it_index];
+        }
+
+        #insert body;
+    }
+}
+
+#scope_file
+
+// One line per member of the SOA struct, with the member's name substituted
+// into `format` twice.
+member_statements :: ($S: Type, format: string) -> string {
+    builder: String_Builder;
+    info := cast(*Type_Info_Struct) S;
+    // The same filter the struct body used to decide which arrays to make, so
+    // that the two lists line up.
+    highest := -1;
+    for * member: info.members {
+        if member.flags & .CONSTANT          continue;
+        if member.offset_in_bytes < highest  continue;
+        highest = member.offset_in_bytes + member.type.runtime_size;
+        print_to_builder(*builder, format, member.name, member.name);
+    }
+    return builder_to_string(*builder);
+}

@@ -242,6 +242,8 @@ pool_free_list :: (pool: *Pool, list: **Memblock) {
     list.* = null;
 }
 
+#scope_export
+
 // The older spelling of the block size, and the overhead a block carries.
 POOL_BUCKET_SIZE_DEFAULT :: POOL_BLOCK_SIZE_DEFAULT;
 HEADER_SIZE :: size_of(Memblock);

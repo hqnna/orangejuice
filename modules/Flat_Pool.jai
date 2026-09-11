@@ -167,6 +167,8 @@ pool_advance :: (pool: *Flat_Pool, wanted: s64) -> bool {
     return true;
 }
 
+#scope_export
+
 // The name this module answers to when an allocator is asked what it is.
 CAPS_VERSION_STRING :: "modules/Flat_Pool";
 

@@ -61,7 +61,7 @@ incomplete type is.
 - `<module>/tail.jai` holds what no header can answer: C's macros (`S_IS*`,
   `W*`, `FD_*`, `CMSG_*`), the globals libc defines, the io_uring syscall
   wrappers, and the conveniences the reference ships beside its bindings.
-- `linux/flaggroups.txt` lists the families of `#define`s the reference groups
+- `<module>/flaggroups.txt` lists the families of `#define`s the reference groups
   into `enum_flags`, with the width it gives each.
 
 ## What it deliberately leaves out

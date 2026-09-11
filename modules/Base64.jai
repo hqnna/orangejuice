@@ -1,150 +1,121 @@
 //
-// Base64 (RFC 4648).
+// Base64, and the URL-safe alphabet beside it.
 //
-// Three bytes become four characters of six bits each; input that does not
-// divide by three is padded with `=`. The URL-safe alphabet swaps `+/` for
-// `-_`, which is what a filename or a query parameter needs.
+// Three bytes become four characters, each standing for six bits. A length
+// that is not a multiple of three is padded out with `=` unless the caller
+// says otherwise — the padding carries no information, which is why a URL
+// encoding leaves it off.
+//
+// The alphabet is a parameter rather than a flag, so a caller with one of its
+// own can pass it.
 //
 
-#import "Basic";
-
-STANDARD_ALPHABET :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-URL_ALPHABET      :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-base64_encode :: (bytes: [] u8, allocator := context.allocator, url_safe := false, pad := true) -> string {
-    result: string;
-    if !bytes.count  return result;
-
-    alphabet := ifx url_safe then URL_ALPHABET else STANDARD_ALPHABET;
-
-    groups := (bytes.count + 2) / 3;
+base64_encode :: (input: string, table: string = BASE64_ENCODER_TABLE, pad := true) -> string #must {
+    // Four characters per three bytes, rounded up.
+    groups := (input.count + 2) / 3;
     size := groups * 4;
-    if !pad {
-        // Without padding the last group is only as long as it needs to be.
-        leftover := bytes.count % 3;
-        if leftover == 1  size -= 2;
-        if leftover == 2  size -= 1;
-    }
 
-    result.data = cast(*u8) alloc(size, allocator);
-    if !result.data  return result;
-    result.count = size;
+    // Zero-terminated, so that dropping the padding is a matter of leaving the
+    // bytes zero and letting the string end early.
+    output := cast(*u8) alloc(size + 1);
+    output[size] = 0;
 
     at := 0;
-    index := 0;
-    while index < bytes.count {
-        // Gather up to three bytes into one 24-bit accumulator.
-        have := min(3, bytes.count - index);
-        accumulator: u32 = 0;
-        for 0..2 {
-            accumulator <<= 8;
-            if it < have  accumulator |= bytes[index + it];
-        }
+    out := 0;
+    while at < input.count {
+        // The three bytes as one 24-bit number, short ones padded with zeroes.
+        v := cast(int) input[at];
+        v = (v << 8) | (ifx at + 1 < input.count then cast(int) input[at + 1] else 0);
+        v = (v << 8) | (ifx at + 2 < input.count then cast(int) input[at + 2] else 0);
 
-        // Four six-bit digits, of which only `have + 1` carry data.
-        for 0..3 {
-            if it <= have {
-                digit := (accumulator >> cast(u32) (18 - 6 * it)) & 0x3f;
-                result[at] = alphabet[digit];
-            } else {
-                if !pad  break;
-                result[at] = #char "=";
-            }
-            at += 1;
-            if at >= size  break;
-        }
-        index += 3;
+        output[out]     = table.data[(v >> 18) & 0x3F];
+        output[out + 1] = table.data[(v >> 12) & 0x3F];
+        output[out + 2] = ifx at + 1 < input.count then table.data[(v >> 6) & 0x3F] else pad_byte(pad);
+        output[out + 3] = ifx at + 2 < input.count then table.data[v & 0x3F]        else pad_byte(pad);
+
+        at  += 3;
+        out += 4;
     }
-    return result;
+
+    return to_string(output);
 }
 
-base64_encode :: (s: string, allocator := context.allocator, url_safe := false, pad := true) -> string {
-    bytes: [] u8;
-    bytes.data = s.data;
-    bytes.count = s.count;
-    return base64_encode(bytes, allocator, url_safe, pad);
-}
+// `success` is false as soon as a character the table calls invalid turns up;
+// whatever had decoded before that comes back with it. A newline is skipped
+// and an `=` ends the input.
+base64_decode :: (input: string, table: [256] u8 = BASE64_DECODER_TABLE) -> (result: string #must, success: bool) {
+    builder: String_Builder;
+    buffer: u32;
+    held: int;
 
-// Accepts both alphabets and tolerates missing padding; `ok` is false when a
-// character belongs to neither.
-base64_decode :: (text: string, allocator := context.allocator) -> (bytes: [] u8, ok: bool) {
-    result: [] u8;
-    if !text.count  return result, true;
-
-    // At most three bytes per four characters.
-    capacity := (text.count / 4 + 1) * 3;
-    storage := cast(*u8) alloc(capacity, allocator);
-    if !storage  return result, false;
-
-    accumulator: u32 = 0;
-    bits := 0;
-    at := 0;
-
-    for 0..text.count - 1 {
-        c := text[it];
-        if c == #char "=" || is_space(c)  continue;
-
-        value := base64_value(c);
-        if value < 0 {
-            free(storage, allocator);
-            return result, false;
-        }
-
-        accumulator = (accumulator << 6) | cast(u32) value;
-        bits += 6;
-        // Every time eight bits have accumulated, a byte falls out.
-        if bits >= 8 {
-            bits -= 8;
-            storage[at] = cast(u8) ((accumulator >> cast(u32) bits) & 0xff);
-            at += 1;
+    for c: cast([] u8) input {
+        d := table[c];
+        if d == {
+            case WHITESPACE; continue;
+            case INVALID;    return builder_to_string(*builder), false;
+            case EQUALS;     break;
+            case;
+                buffer = (buffer << 6) | d;
+                held += 1;
+                if held == 4 {
+                    append(*builder, cast(u8) ((buffer >> 16) & 255));
+                    append(*builder, cast(u8) ((buffer >> 8)  & 255));
+                    append(*builder, cast(u8) (buffer         & 255));
+                    buffer = 0;
+                    held = 0;
+                }
         }
     }
 
-    result.data = storage;
-    result.count = at;
-    return result, true;
+    // Three characters carry two whole bytes, two carry one; the leftover bits
+    // are the padding and are dropped.
+    if held == 3 {
+        append(*builder, cast(u8) ((buffer >> 10) & 255));
+        append(*builder, cast(u8) ((buffer >> 2)  & 255));
+    } else if held == 2 {
+        append(*builder, cast(u8) ((buffer >> 4) & 255));
+    }
+
+    return builder_to_string(*builder), true;
 }
-
-#scope_module
-
-// The six-bit value of a character in either alphabet, or -1.
-base64_value :: (c: u8) -> s64 {
-    if c >= #char "A" && c <= #char "Z"  return cast(s64) (c - #char "A");
-    if c >= #char "a" && c <= #char "z"  return cast(s64) (c - #char "a") + 26;
-    if c >= #char "0" && c <= #char "9"  return cast(s64) (c - #char "0") + 52;
-    if c == #char "+" || c == #char "-"  return 62;
-    if c == #char "/" || c == #char "_"  return 63;
-    return -1;
-}
-
-// The two alphabets by the names the reference gives them. The URL-safe one
-// swaps `+/` for `-_`, which are safe in a path or a query string.
-BASE64_ENCODER_TABLE    :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-BASE64URL_ENCODER_TABLE :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-// The reverse: a byte's value, or 0xff when it is not in the alphabet.
-BASE64_DECODER_TABLE    :: #run decoder_table(BASE64_ENCODER_TABLE);
-BASE64URL_DECODER_TABLE :: #run decoder_table(BASE64URL_ENCODER_TABLE);
 
 base64url_encode :: (input: string) -> string {
-    return base64_encode(input, url_safe = true, pad = false);
+    return base64_encode(input, BASE64URL_ENCODER_TABLE, false);
 }
 
 base64url_decode :: (input: string) -> (result: string, success: bool) {
-    bytes, ok := base64_decode(input);
-    text: string;
-    text.data = bytes.data;
-    text.count = bytes.count;
-    return text, ok;
+    return base64_decode(input, BASE64URL_DECODER_TABLE);
 }
 
-#scope_module
+BASE64_ENCODER_TABLE :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+BASE64_DECODER_TABLE :: #run decoder_table(BASE64_ENCODER_TABLE);
 
+BASE64URL_ENCODER_TABLE :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+BASE64URL_DECODER_TABLE :: #run decoder_table(BASE64URL_ENCODER_TABLE);
+
+#scope_file
+
+#import "Basic";
+
+// The three answers that are not a six-bit value.
+WHITESPACE :: 64;
+EQUALS     :: 65;
+INVALID    :: 66;
+
+// The inverse of an alphabet: which six bits each byte stands for, with the
+// three sentinels above for the bytes that stand for none.
 decoder_table :: (alphabet: string) -> [256] u8 {
     table: [256] u8;
-    for 0..255  table[it] = 0xff;
+    for * table  it.* = INVALID;
+
+    table[#char "\n"] = WHITESPACE;
+    table[#char "="]  = EQUALS;
     for 0..alphabet.count - 1  table[alphabet[it]] = cast(u8) it;
+
     return table;
 }
 
-#scope_export
+pad_byte :: inline (pad: bool) -> u8 {
+    // Not padding leaves a zero, which is where the returned string ends.
+    return ifx pad then cast(u8) #char "=" else 0;
+}

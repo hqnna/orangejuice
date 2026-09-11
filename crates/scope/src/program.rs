@@ -2645,6 +2645,19 @@ impl<'a> Program<'a> {
       return;
     };
     let expression = insert.expression;
+    // `#insert (break = break outer, remove = { … })` writes its replacements
+    // where the `#insert` stands, so whatever they declare belongs to this
+    // scope rather than to the spliced body (**L§13.2**).
+    for replacement in [
+      insert.break_replacement,
+      insert.continue_replacement,
+      insert.remove_replacement,
+    ]
+    .into_iter()
+    .flatten()
+    {
+      self.walk(parsed, replacement, scope, source);
+    }
     if let Some(ConstValue::String(text)) = self.fold(scope, source, expression) {
       self.insert_source(scope, kind, (source, node, 0), &text);
       return;

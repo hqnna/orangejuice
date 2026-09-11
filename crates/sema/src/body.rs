@@ -432,6 +432,21 @@ impl Checker<'_> {
   /// are the caller's, so they are checked with the caller's return types and
   /// in the scope they were admitted to (**L§13.2**).
   fn check_insert(&mut self, context: &Context, node: NodeId) {
+    // The loop-control replacements stand where the `#insert` was written, so
+    // they are checked here rather than wherever the spliced body puts them
+    // (**L§13.2**).
+    if let Some(NodeData::DirectiveInsert(insert)) =
+      self.ast(context.source).map(|ast| ast.data(node))
+    {
+      let replacements = [
+        insert.break_replacement,
+        insert.continue_replacement,
+        insert.remove_replacement,
+      ];
+      for replacement in replacements.into_iter().flatten() {
+        self.check_statement(context, replacement);
+      }
+    }
     let Some(expansion) = self.expand_insert(context.scope, context.source, node) else {
       return;
     };

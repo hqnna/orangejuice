@@ -1,136 +1,204 @@
 //
-// Bucket_Array: many items whose addresses never move.
+// A growing array whose items never move.
 //
-// A `[..] T` reallocates when it grows, so a pointer into one is only good
-// until the next add. This keeps a list of fixed buckets instead: adding never
-// moves what is already there, so a pointer handed out stays valid for the
-// life of the array. That is what makes it right for things other structures
-// point at.
+// Storage comes in buckets of a fixed size; adding an item fills a slot in one
+// of them rather than reallocating anything, so a pointer taken to an item
+// stays good for as long as the item does. That is the whole point of it — a
+// `[..]` array is faster to walk and cheaper per item, but every pointer into
+// one dies the next time it grows.
 //
-// An item removed leaves its slot occupied-no-longer rather than shuffling
-// what follows, so indices stay stable too.
+// A removed slot is marked free rather than filled in from the end, so the
+// items keep the positions they were given and a `Bucket_Locator` stays
+// meaningful. `for` skips the free ones.
 //
+
+Bucket_Array :: struct (type: Type, items_per_bucket: int, always_iterate_by_pointer := false) {
+    count: s64;
+
+    allocator: Allocator;
+
+    My_Bucket :: Bucket(type, items_per_bucket);
+
+    all_buckets:    [..] *My_Bucket;
+    // The ones with a free slot, so adding never has to look through the full
+    // buckets at all.
+    unfull_buckets: [..] *My_Bucket;
+}
+
+Bucket :: struct (type: Type, items_per_bucket: int) {
+    occupied: [items_per_bucket] bool;
+    data:     [items_per_bucket] type = ---;
+
+    // Where the search for a free slot starts. Everything below it is taken.
+    lowest_maybe_not_occupied: s32;
+    bucket_index: u32;
+
+    count := 0;
+}
+
+// Where one item lives. A locator survives anything but the removal of the
+// item it names.
+Bucket_Locator :: struct {
+    bucket_index: u32;
+    // Signed so that -1 can mean "nowhere".
+    slot_index:   s32;
+}
+
+// Gives every bucket back and leaves the array as though it were fresh.
+bucket_array_reset :: (using array: *Bucket_Array) {
+    for all_buckets  free(it,, allocator);
+    array_reset(*all_buckets);
+    array_reset(*unfull_buckets);
+
+    count = 0;
+}
+
+bucket_array_add :: (using array: *Bucket_Array, item: array.type) -> (locator: Bucket_Locator, pointer: *array.type) {
+    pointer, locator := find_and_occupy_empty_slot(array, initialize = false);
+    pointer.* = item;
+
+    return locator, pointer;
+}
+
+bucket_array_find :: (using array: *Bucket_Array, locator: Bucket_Locator) -> array.type {
+    bucket := all_buckets[locator.bucket_index];
+    assert(bucket.occupied[locator.slot_index] == true);
+    return bucket.data[locator.slot_index];
+}
+
+bucket_array_remove :: (using array: *Bucket_Array, locator: Bucket_Locator) {
+    bucket := all_buckets[locator.bucket_index];
+    assert(bucket.occupied[locator.slot_index] == true);
+
+    was_full := bucket.count == bucket.items_per_bucket;
+
+    bucket.occupied[locator.slot_index] = false;
+
+    if locator.slot_index < bucket.lowest_maybe_not_occupied {
+        bucket.lowest_maybe_not_occupied = locator.slot_index;
+    }
+
+    bucket.count -= 1;
+    array.count  -= 1;
+
+    // A bucket that was full is not on the unfull list, and now belongs there.
+    if was_full {
+        assert(array_find(array.unfull_buckets, bucket) == false);
+        array_add(*array.unfull_buckets, bucket);
+    }
+}
+
+// Takes a slot without putting anything in it, and hands back where it is.
+// `initialize` false leaves the bytes alone, which is what `bucket_array_add`
+// wants since it is about to overwrite them.
+find_and_occupy_empty_slot :: (using array: *Bucket_Array, $initialize := true) -> (pointer: *array.type, locator: Bucket_Locator) {
+    if !unfull_buckets.count  add_bucket(array);
+    assert(unfull_buckets.count > 0);
+
+    bucket := unfull_buckets[0];
+
+    index := -1;
+    for bucket.lowest_maybe_not_occupied..bucket.items_per_bucket - 1 {
+        if !bucket.occupied[it] {
+            index = it;
+            break;
+        }
+    }
+
+    assert(index != -1);
+
+    bucket.occupied[index] = true;
+    bucket.count += 1;
+    bucket.lowest_maybe_not_occupied = cast(s32) (index + 1);
+    assert(bucket.count <= bucket.items_per_bucket);
+
+    memory := *bucket.data[index];
+    #if initialize {
+        ini :: initializer_of(bucket.type);
+        #if ini  ini(memory);
+        else     memset(memory, 0, size_of(bucket.type));
+    }
+
+    array.count += 1;
+
+    if bucket.count == bucket.items_per_bucket {
+        removed := array_unordered_remove_by_value(*array.unfull_buckets, bucket);
+        assert(removed == 1);
+    }
+
+    locator: Bucket_Locator;
+    locator.bucket_index = bucket.bucket_index;
+    locator.slot_index   = cast(s32) index;
+
+    return memory, locator;
+}
+
+// `it_index` counts the *items*, not the slots, so a removed slot does not
+// leave a gap in it. `remove` inside the loop body removes the item being
+// visited.
+for_expansion :: (array: *$T/Bucket_Array, body: Code, flags: For_Flags) #expand {
+    `it_index: int;
+
+    REVERSE :: cast(bool) (flags & .REVERSE);
+
+    #if REVERSE  it_index = array.count;
+    else         it_index = -1;
+
+    // A struct may ask to always be visited by pointer, which is right when
+    // its items are big enough that copying one is the expensive part.
+    DO_POINTER :: (flags & .POINTER) || array.always_iterate_by_pointer;
+
+    for <=REVERSE bucket, bi: array.all_buckets {
+        for <=REVERSE *=DO_POINTER  `it, i: bucket.data {
+            if !bucket.occupied[i]  continue;
+
+            #if REVERSE  it_index -= 1;
+            else         it_index += 1;
+
+            // `break` leaves the *outer* loop, since the inner one is only a
+            // bucket's worth of the array.
+            #insert (break = break bucket, remove = {
+                locator: Bucket_Locator;
+                locator.bucket_index = cast(u32) bi;
+                locator.slot_index   = cast(s32) i;
+                bucket_array_remove(array, locator);
+            }) body;
+        }
+    }
+}
+
+// By position rather than by locator, which only means anything while no slot
+// below `index` has been freed.
+operator *[] :: (using array: Bucket_Array, index: int) -> *array.type {
+    bucket_index := index / items_per_bucket;
+    slot_index   := index % items_per_bucket;
+    bucket := all_buckets[bucket_index];
+    assert(bucket.occupied[slot_index] == true);
+    return *bucket.data[slot_index];
+}
+
+#scope_file
 
 #import "Basic";
 
-Bucket_Array :: struct (T: Type, ITEMS_PER_BUCKET := 128) {
-    Bucket :: struct {
-        count:    s64;          // how many slots have ever been used
-        occupied: [ITEMS_PER_BUCKET] bool;
-        items:    [ITEMS_PER_BUCKET] T;
+add_bucket :: (using array: *Bucket_Array) -> *array.My_Bucket {
+    assert(unfull_buckets.count == 0);
+
+    // The array's own allocator reaches the two bucket lists on the first add,
+    // which is the earliest moment it is known.
+    if !all_buckets.count && allocator.proc {
+        all_buckets.allocator    = allocator;
+        unfull_buckets.allocator = allocator;
     }
 
-    buckets:   [..] *Bucket;
-    count:     s64;             // live items
-    allocator: Allocator;
-}
+    new_bucket := New(My_Bucket,, allocator);
+    new_bucket.bucket_index = cast(u32) all_buckets.count;
+    // Catches the overflow of the 32-bit index rather than letting two buckets
+    // answer to one number.
+    assert(new_bucket.bucket_index == all_buckets.count);
 
-// Where an item sits. Stays correct as the array grows.
-Bucket_Locator :: struct {
-    bucket: s64;
-    slot:   s64;
-}
+    array_add(*all_buckets,    new_bucket);
+    array_add(*unfull_buckets, new_bucket);
 
-INVALID_LOCATOR :: Bucket_Locator.{-1, -1};
-
-init :: (array: *Bucket_Array($T, $N), allocator := context.allocator) {
-    array.allocator = allocator;
-    array.buckets.allocator = allocator;
-    array.count = 0;
-}
-
-deinit :: (array: *Bucket_Array($T, $N)) {
-    for array.buckets  free(it, bucket_allocator(array));
-    array_free(*array.buckets);
-    array.count = 0;
-}
-
-// The item's address and where it went. The address stays good until the item
-// is removed or the array is thrown away.
-bucket_array_add :: (array: *Bucket_Array($T, $N), value: T) -> (pointer: *T, locator: Bucket_Locator) {
-    locator := first_free_slot(array);
-    if locator.bucket < 0 {
-        if !add_bucket(array)  return null, INVALID_LOCATOR;
-        locator = .{array.buckets.count - 1, 0};
-    }
-
-    bucket := array.buckets[locator.bucket];
-    bucket.items[locator.slot] = value;
-    bucket.occupied[locator.slot] = true;
-    if locator.slot >= bucket.count  bucket.count = locator.slot + 1;
-    array.count += 1;
-    return *bucket.items[locator.slot], locator;
-}
-
-// Null when the locator names a slot nothing lives in.
-bucket_array_find :: (array: *Bucket_Array($T, $N), locator: Bucket_Locator) -> *T {
-    if locator.bucket < 0 || locator.bucket >= array.buckets.count  return null;
-    bucket := array.buckets[locator.bucket];
-    if locator.slot < 0 || locator.slot >= N       return null;
-    if !bucket.occupied[locator.slot]              return null;
-    return *bucket.items[locator.slot];
-}
-
-// Leaves the slot free for the next add. Nothing else moves, so every other
-// pointer and locator stays valid.
-bucket_array_remove :: (array: *Bucket_Array($T, $N), locator: Bucket_Locator) -> bool {
-    if locator.bucket < 0 || locator.bucket >= array.buckets.count  return false;
-    bucket := array.buckets[locator.bucket];
-    if locator.slot < 0 || locator.slot >= N       return false;
-    if !bucket.occupied[locator.slot]              return false;
-
-    bucket.occupied[locator.slot] = false;
-    array.count -= 1;
-    return true;
-}
-
-// Skips the empty slots, so a loop sees only what is live. `it_index` counts
-// the items seen rather than naming a slot.
-for_expansion :: (array: *Bucket_Array($T, $N), body: Code, flags: For_Flags) #expand {
-    `it_index := 0;
-    for bucket_index: 0..array.buckets.count - 1 {
-        bucket := array.buckets[bucket_index];
-        for slot: 0..bucket.count - 1 {
-            if !bucket.occupied[slot]  continue;
-
-            #if flags & .POINTER {
-                `it := *bucket.items[slot];
-            } else {
-                `it := bucket.items[slot];
-            }
-            #insert body;
-            `it_index += 1;
-        }
-    }
-}
-
-#scope_module
-
-bucket_allocator :: (array: *Bucket_Array($T, $N)) -> Allocator {
-    if array.allocator.proc  return array.allocator;
-    return context.allocator;
-}
-
-first_free_slot :: (array: *Bucket_Array($T, $N)) -> Bucket_Locator {
-    for bucket_index: 0..array.buckets.count - 1 {
-        bucket := array.buckets[bucket_index];
-        // Past the high-water mark is free by definition; below it, only what
-        // was given back.
-        if bucket.count < N  return .{bucket_index, bucket.count};
-        for slot: 0..bucket.count - 1 {
-            if !bucket.occupied[slot]  return .{bucket_index, slot};
-        }
-    }
-    return INVALID_LOCATOR;
-}
-
-add_bucket :: (array: *Bucket_Array($T, $N)) -> bool {
-    allocator := bucket_allocator(array);
-    bucket_bytes := size_of(Bucket_Array(T, N).Bucket);
-    memory := alloc(bucket_bytes, allocator);
-    if memory  memset(memory, 0, bucket_bytes);
-    if !memory  return false;
-    array.buckets.allocator = allocator;
-    array_add(*array.buckets, cast(*Bucket_Array(T, N).Bucket) memory);
-    return true;
+    return new_bucket;
 }

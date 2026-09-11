@@ -1,87 +1,212 @@
 //
-// Radix sort: no comparisons, eleven bits at a time.
+// A radix sort that produces an *order* rather than a sorted array.
 //
-// A comparison sort cannot beat O(n log n); a radix sort is O(n · passes) and
-// for 64-bit keys that is six passes of counting and scattering. It wins on
-// large arrays of numbers and loses on small ones, where the extra buffer and
-// the counting passes cost more than a quicksort.
+// `sort` fills the `ranks` array with the indices of the input in ascending
+// order and leaves the input where it was, which is what a caller with several
+// parallel arrays wants: sort one, then apply the same order to the rest.
+// `reorder` does that application for an array of any type.
 //
-// Stable, which is what makes sorting by one key and then another work.
+// Eight bits at a time, one pass per byte of the key, counting first and then
+// placing — so the work is linear in the input rather than n log n, at the
+// cost of a pass over it per byte. Under 32 elements an insertion sort wins
+// and is what runs.
+//
+// Sorting the same array again is cheap: the ranks from last time are kept and
+// used as the starting order, which is nearly sorted if the data barely moved.
+//
+// Floats are sorted by flipping their bits into an order that compares the
+// same way unsigned — the sign bit inverted for a positive number and every
+// bit for a negative one — and flipping them back afterwards.
 //
 
 #import "Basic";
 
-BITS_PER_PASS :: 11;
-BUCKETS       :: 1 << BITS_PER_PASS;
-PASSES        :: 6;   // 6 * 11 = 66 >= 64
+RadixSort :: struct {
+    // The order, and the buffer the next pass builds into. They swap at the
+    // end of every pass.
+    ranks:  [] u32;
+    ranks2: [] u32;
 
-// Sorts unsigned keys ascending, using `scratch` as the second buffer. The
-// result is in `values` either way: an odd number of passes copies back.
-radix_sort :: (values: [] u64, scratch: [] u64) -> bool {
-    if values.count < 2  return true;
-    if scratch.count < values.count  return false;
+    // Whether `ranks` holds an order worth starting from.
+    valid_ranks: bool;
 
-    counts: [BUCKETS] s64;
-    source := values;
-    target := scratch;
+    allocator: Allocator;
+}
 
+// Forgets the order without giving the storage back, so the next sort starts
+// from scratch.
+reset :: (using radix: *RadixSort) {
+    valid_ranks = false;
+}
+
+resize :: (using radix: *RadixSort, new_size: u32) {
+    size := ranks.count;
+    if new_size == size  return;
+
+    if new_size > size {
+        ranks.data  = realloc(ranks.data,  new_size * size_of(u32), size * size_of(u32),, allocator);
+        ranks2.data = realloc(ranks2.data, new_size * size_of(u32), size * size_of(u32),, allocator);
+    }
+
+    ranks.count  = new_size;
+    ranks2.count = new_size;
+
+    valid_ranks = false;
+}
+
+free_resources :: (using radix: *RadixSort) {
+    free(ranks.data,,  allocator);
+    free(ranks2.data,, allocator);
+}
+
+// The index of the `i`th smallest element of the last input sorted.
+operator[] :: (using radix: RadixSort, i: int) -> u32 {
+    return ranks[i];
+}
+
+rank :: (using radix: *RadixSort, i: int) -> u32 {
+    return ranks[i];
+}
+
+sort :: (using radix: *RadixSort, input: *u32, count: u32) {
+    if input == null || count == 0  return;
+    resize(radix, count);
+
+    if count < INSERTION_SORT_LIMIT  insertion_sort(radix, input, count);
+    else                             radix_sort(radix, input, count);
+}
+
+sort :: (using radix: *RadixSort, input: *u64, count: u32) {
+    if input == null || count == 0  return;
+    resize(radix, count);
+
+    if count < INSERTION_SORT_LIMIT  insertion_sort(radix, input, count);
+    else                             radix_sort(radix, input, count);
+}
+
+sort :: (using radix: *RadixSort, input: *float, count: u32) {
+    if input == null || count == 0  return;
+    resize(radix, count);
+
+    if count < INSERTION_SORT_LIMIT {
+        // An insertion sort compares the floats themselves, so nothing has to
+        // be flipped.
+        insertion_sort(radix, input, count);
+        return;
+    }
+
+    for 0..count - 1  float_flip(cast(*u32) *input[it]);
+    radix_sort(radix, input, count);
+    for 0..count - 1  inverse_float_flip(cast(*u32) *input[it]);
+}
+
+sort :: (using radix: *RadixSort, input: [] u32)   { sort(radix, input.data, xx input.count); }
+sort :: (using radix: *RadixSort, input: [] u64)   { sort(radix, input.data, xx input.count); }
+sort :: (using radix: *RadixSort, input: [] float) { sort(radix, input.data, xx input.count); }
+
+// Applies the order to an array of anything, in place.
+reorder :: (input: *[..] $T, radix: RadixSort) {
+    output: [..] T;
+    array_resize(*output, input.count);
+
+    for * output  it.* = input.*[radix.ranks[it_index]];
+
+    array_free(input.*);
+    input.* = output;
+}
+
+#scope_file
+
+INSERTION_SORT_LIMIT :: 32;
+
+// Turns a float's bits into an unsigned number that orders the same way: a
+// positive float only needs its sign bit set, a negative one needs every bit
+// inverted, and the arithmetic shift of the sign bit produces exactly that
+// mask either way.
+float_flip :: (f: *u32) {
+    mask: u32 = cast,no_check(u32) (cast,no_check(s32) f[0] >> 31) | 0x8000_0000;
+    f[0] ^= mask;
+}
+
+inverse_float_flip :: (f: *u32) {
+    mask: u32 = ((f[0] >> 31) - 1) | 0x8000_0000;
+    f[0] ^= mask;
+}
+
+// Under the limit, and for a nearly-sorted second run, this beats the passes.
+insertion_sort :: (using radix: *RadixSort, input: *$T, count: u32) {
+    if !valid_ranks {
+        ranks[0] = 0;
+        for i: 1..count - 1  ranks[i] = i;
+        valid_ranks = true;
+    }
+
+    for i: 1..count - 1 {
+        moving := ranks[i];
+        j := i;
+        while j != 0 && input[moving] < input[ranks[j - 1]] {
+            ranks[j] = ranks[j - 1];
+            j -= 1;
+        }
+        if i != j  ranks[j] = moving;
+    }
+}
+
+radix_sort :: (using radix: *RadixSort, input: *$T, count: u32) {
+    // One pass per byte of the key.
+    PASSES :: size_of(T);
+
+    histogram: [256 * PASSES] u32;
+    // Where the next index for each byte value goes.
+    link: [256] *u32 = ---;
+
+    // Every pass's counts come out of one walk over the input.
+    bytes := cast(*u8) input;
+    for i: 0..count - 1 {
+        for pass: 0..PASSES - 1 {
+            histogram[pass * 256 + bytes[i * PASSES + pass]] += 1;
+        }
+    }
+
+    // Least significant byte first, so that each pass keeps the order the
+    // previous ones established.
     for pass: 0..PASSES - 1 {
-        shift := cast(u64) (pass * BITS_PER_PASS);
-        if shift >= 64  break;
+        counts := *histogram[pass * 256];
 
-        for * counts  it.* = 0;
-        for source  counts[(it >> shift) & (BUCKETS - 1)] += 1;
+        // Little-endian, so byte `pass` of element `i` is at `i * PASSES +
+        // pass`.
+        pass_bytes := cast(*u8) input;
+        pass_bytes += pass;
 
-        // A pass whose keys all land in one bucket changes nothing, so it is
-        // skipped rather than copied back and forth.
-        if counts[(source[0] >> shift) & (BUCKETS - 1)] == source.count  continue;
+        // Every key has the same byte here, so the pass would only copy the
+        // order across unchanged.
+        if counts[pass_bytes[0]] == count  continue;
 
-        // Prefix sums turn counts into where each bucket starts.
-        running := 0;
-        for * counts {
-            here := it.*;
-            it.* = running;
-            running += here;
+        link[0] = ranks2.data;
+        for i: 1..255  link[i] = link[i - 1] + counts[i - 1];
+
+        if !valid_ranks {
+            for i: 0..count - 1 {
+                link[pass_bytes[i * PASSES]].* = i;
+                link[pass_bytes[i * PASSES]] += 1;
+            }
+            valid_ranks = true;
+        } else {
+            for i: 0..count - 1 {
+                index := ranks[i];
+                link[pass_bytes[index * PASSES]].* = index;
+                link[pass_bytes[index * PASSES]] += 1;
+            }
         }
 
-        for source {
-            bucket := (it >> shift) & (BUCKETS - 1);
-            target[counts[bucket]] = it;
-            counts[bucket] += 1;
-        }
-
-        temporary := source;
-        source = target;
-        target = temporary;
+        // What was just built becomes the order; the old one becomes scratch.
+        ranks, ranks2 = ranks2, ranks;
     }
 
-    // If the last pass left the data in the scratch buffer, bring it home.
-    if source.data != values.data {
-        memcpy(values.data, source.data, values.count * size_of(u64));
+    // Every pass was skipped, which means every key is equal: the input's own
+    // order will do.
+    if !valid_ranks {
+        for 0..count - 1  ranks[it] = it;
+        valid_ranks = true;
     }
-    return true;
-}
-
-// Signed keys, by flipping the sign bit so that the unsigned order matches the
-// signed one: negatives have the top bit set and must sort first.
-radix_sort :: (values: [] s64, scratch: [] u64) -> bool {
-    if values.count < 2  return true;
-    if scratch.count < values.count  return false;
-
-    keys: [] u64;
-    keys.data = cast(*u64) values.data;
-    keys.count = values.count;
-
-    SIGN :: 0x8000_0000_0000_0000;
-    for * keys  it.* ^= SIGN;
-    ok := radix_sort(keys, scratch);
-    for * keys  it.* ^= SIGN;
-    return ok;
-}
-
-// Allocates its own scratch buffer, for a caller that does not want to.
-radix_sort :: (values: [] u64) -> bool {
-    scratch := NewArray(values.count, u64,, temp);
-    if !scratch.data && values.count  return false;
-    return radix_sort(values, scratch);
 }
