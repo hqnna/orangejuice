@@ -409,17 +409,17 @@ what it actually does.
   and iterate. `modules/Tagged_Union.jai` takes four defaulted parameters
   instead, which keeps the call syntax for up to four types.
 
-- **A member may be named after a primitive type.** `epoll_data`'s C members
-  are `u32` and `u64`; the reference rejects a declaration of either name with
-  `Primitive types cannot be shadowed. You must choose a different name for
-  this Declaration, that does not conflict with the name of a primitive type.`,
-  and orangejuice accepts it. `tools/cbind` now gives such a member the leading
-  underscore the reference's own bindings give it, so nothing in `modules/`
-  relies on the difference.
+Six that were gaps and are now closed, each pinned by a test in
+`crates/driver/tests/build.rs`, `crates/sema/tests/matching.rs` or
+`crates/scope/tests/scopes.rs`:
 
-Five that were gaps and are now closed, each pinned by a test in
-`crates/driver/tests/build.rs` or `crates/sema/tests/matching.rs`:
-
+- **A declaration named after a primitive type** was accepted where the
+  reference rejects it. The scope pass reports it now, in the reference's
+  words: `Primitive types cannot be shadowed. You must choose a different name
+  for this Declaration, that does not conflict with the name of a primitive
+  type.` `tools/cbind` already gave such a C member the leading underscore the
+  reference's own bindings give it, so nothing in `modules/` relied on the
+  difference.
 - **A `return` whose arity is short** used to be caught in code generation.
   The checker measures it now: the return list's defaults are carried in the
   body's `Context`, so `return x;` fills every value that was not written with

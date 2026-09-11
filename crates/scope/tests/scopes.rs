@@ -830,3 +830,23 @@ fn a_named_import_reaches_the_module_scope_a_plain_one_cannot() {
     assert_eq!(program.tree().lookup_exported(module, internal).len(), 0);
   });
 }
+
+#[test]
+fn a_declaration_may_not_take_a_primitive_type_s_name() {
+  // The basic types are injected rather than declared, so nothing may shadow
+  // one (**L§3.1**, **L§4.3**). `tools/cbind` gives a C member of such a name
+  // the leading underscore the reference's own bindings give it.
+  let fixture = Fixture::new();
+  fixture.write("main.jai", "Data :: struct { u32: u32; }\n");
+
+  resolve(&fixture, "main.jai", |program, _| {
+    assert_eq!(
+      errors(program),
+      vec![
+        "Primitive types cannot be shadowed. You must choose a different name for this \
+         Declaration, that does not conflict with the name of a primitive type."
+          .to_string()
+      ]
+    );
+  });
+}

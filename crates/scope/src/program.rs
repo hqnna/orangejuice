@@ -1234,6 +1234,18 @@ impl<'a> Program<'a> {
     let ident = ident.name;
     let span = parsed.ast.node(name).span;
 
+    // The basic types are injected rather than declared, and nothing may take
+    // one of their names (**L§3.1**, **L§4.3**).
+    if BASIC_TYPE_NAMES.contains(&self.interner.resolve_lossy(ident).as_bytes()) {
+      self.error(
+        source,
+        span,
+        "Primitive types cannot be shadowed. You must choose a different name for this \
+         Declaration, that does not conflict with the name of a primitive type.",
+      );
+      return None;
+    }
+
     let kind = self.declaration_kind(parsed, &declaration, target, source);
     let overloadable = self.is_overloadable(parsed, &declaration, kind);
     // `` `name := … `` inside a macro declares into whichever block the macro
