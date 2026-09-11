@@ -212,6 +212,7 @@ fn run_workspace_once(
   watching: Option<std::rc::Rc<std::cell::RefCell<oj_meta::Nodes>>>,
   self_added: &mut Vec<oj_scope::AddedString>,
 ) -> Report {
+  let mut timing = Timing::new();
   let root = &input.anchor();
   let sources = SourceMap::new();
   let interner = Interner::new();
@@ -232,6 +233,7 @@ fn run_workspace_once(
     &input.strings,
     scope_options,
   );
+  timing.mark("lex+parse+scope");
   let mut report = Report {
     compiled: oj_meta::Compiled {
       failed: true,
@@ -320,6 +322,7 @@ fn run_workspace_once(
   let outer = oj_meta::install(state);
   checker.check();
   let meta = oj_meta::uninstall().unwrap_or_default();
+  timing.mark("typecheck+#run");
   if meta.self_modified {
     *self_added = self_added_strings(&meta, root, &options.added_strings);
   }
@@ -413,6 +416,7 @@ fn run_workspace_once(
   };
   keep_compile_time_data(&mut lowered.program, &engine);
   let lowered = lowered;
+  timing.mark("lower to ir");
   render(&lowered.diagnostics, &mut report);
   if stage == Stage::Ir {
     report.output = format!(
@@ -475,6 +479,7 @@ fn run_workspace_once(
       ) {
         return Report::failure(error);
       }
+      timing.mark("llvm + object");
 
       let file = match options.append_extension {
         true => format!("{name}{}", output_extension(options.output_type)),
@@ -511,7 +516,9 @@ fn run_workspace_once(
         report.compiled.executable = Some(request.output);
         return report;
       }
-      match oj_link::link(&request) {
+      let linked = oj_link::link(&request);
+      timing.mark("link");
+      match linked {
         Ok(line) => {
           report.link_line = line.map(|line| line.display());
           report.compiled.failed = false;
@@ -1213,4 +1220,40 @@ pub fn own_distribution() -> Option<PathBuf> {
       .is_file()
       .then(|| directory.to_path_buf())
   })
+}
+
+/// Wall-clock time per stage, printed to stderr when `OJ_TIMING` is set.
+/// Compilation is one long chain of stages that hand work to one another, and
+/// which of them a program spends its time in is not the same for a small
+/// program as for a large one — so the answer has to be measured rather than
+/// assumed.
+pub(crate) struct Timing {
+  enabled: bool,
+  start: std::time::Instant,
+  last: std::time::Instant,
+}
+
+impl Timing {
+  pub(crate) fn new() -> Self {
+    let now = std::time::Instant::now();
+    Self {
+      enabled: std::env::var_os("OJ_TIMING").is_some(),
+      start: now,
+      last: now,
+    }
+  }
+
+  /// Records how long the stage that just finished took.
+  pub(crate) fn mark(&mut self, stage: &str) {
+    if !self.enabled {
+      return;
+    }
+    let now = std::time::Instant::now();
+    eprintln!(
+      "oj timing  {stage:<22} {:>8.1}ms   (total {:>8.1}ms)",
+      now.duration_since(self.last).as_secs_f64() * 1000.0,
+      now.duration_since(self.start).as_secs_f64() * 1000.0,
+    );
+    self.last = now;
+  }
 }

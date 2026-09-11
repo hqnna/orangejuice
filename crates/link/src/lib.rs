@@ -73,9 +73,34 @@ fn oj_codegen_triple() -> &'static str {
   "x86_64-unknown-linux-gnu"
 }
 
+/// Whether `ld.lld` is on the path for the C driver to find. Looked for once:
+/// a link asks this and nothing else does, but a build with several workspaces
+/// asks it several times.
+fn lld_available() -> bool {
+  static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+  *AVAILABLE.get_or_init(|| {
+    if std::env::var_os("OJ_NO_LLD").is_some() {
+      return false;
+    }
+    let Some(path) = std::env::var_os("PATH") else {
+      return false;
+    };
+    std::env::split_paths(&path).any(|directory| directory.join("ld.lld").is_file())
+  })
+}
+
 /// Builds the link line for a request without running it.
 pub fn link_line(request: &Request) -> LinkLine {
   let mut arguments = Vec::new();
+  // The reference links with `lld`; going through the C driver, it is asked
+  // for by name. It is several times faster than the `ld.bfd` a driver
+  // defaults to — most of a small program's build used to be the link — and
+  // the driver still supplies the C runtime and the search paths, which is
+  // what going through it was for (**C§11**). A machine without it links the
+  // way it did.
+  if lld_available() {
+    arguments.push(String::from("-fuse-ld=lld"));
+  }
   if request.output_type == OutputType::DynamicLibrary {
     arguments.push(String::from("-shared"));
   }
@@ -102,8 +127,24 @@ pub fn link_line(request: &Request) -> LinkLine {
   }
   // One library named by many `#foreign` procedures is one `-l`, and a system
   // library `pkg-config` knows takes the flags it gives instead (**C§11**).
-  let mut named: Vec<String> = Vec::new();
+  //
+  // The *names* are collapsed first. A program reaches libc through dozens of
+  // separate `#foreign` headers, and asking `pkg-config` about each of them is
+  // dozens of processes spawned to be told the same thing — which was most of
+  // the time this whole routine took.
+  let mut seen: Vec<(bool, &str)> = Vec::new();
+  let mut unique: Vec<&Library> = Vec::new();
   for library in &request.libraries {
+    let key = (library.system, link_name(library));
+    if seen.contains(&key) {
+      continue;
+    }
+    seen.push(key);
+    unique.push(library);
+  }
+
+  let mut named: Vec<String> = Vec::new();
+  for library in unique {
     let name = link_name(library);
     let flag = match library.system.then(|| pkg_config_flags(name)).flatten() {
       Some(flags) => {
@@ -286,7 +327,23 @@ mod tests {
       output_type: OutputType::DynamicLibrary,
       ..request()
     });
-    assert_eq!(line.arguments.first(), Some(&String::from("-shared")));
+    // `-fuse-ld=lld` may come first on a machine that has it.
+    assert!(
+      line.arguments.contains(&String::from("-shared")),
+      "{:?}",
+      line.arguments
+    );
+  }
+
+  #[test]
+  fn lld_is_asked_for_by_name_when_it_is_there() {
+    let line = link_line(&request());
+    assert_eq!(
+      line.arguments.contains(&String::from("-fuse-ld=lld")),
+      lld_available(),
+      "{:?}",
+      line.arguments
+    );
   }
 
   #[test]
