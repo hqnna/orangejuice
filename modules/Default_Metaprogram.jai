@@ -58,7 +58,7 @@ build :: () {
     if options_from_command_line.output_path.count {
         options.output_path = options_from_command_line.output_path;
     } else {
-        directory := path_directory(options_from_command_line.file);
+        directory := path_strip_filename(options_from_command_line.file);
         if directory.count  options.output_path = directory;
     }
     if options_from_command_line.import_paths.count {

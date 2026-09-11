@@ -35,7 +35,7 @@ find_executable :: (name: string, allocator := context.allocator) -> string {
     }
 
     for get_path_directories(temp) {
-        candidate := path_join(it, name, allocator = temp);
+        candidate := tprint("%/%", it, name);
         if file_exists_and_is_executable(candidate)  return copy_string(candidate, allocator);
     }
     return "";

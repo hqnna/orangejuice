@@ -144,6 +144,11 @@ temporary_allocator_proc :: (mode: Allocator_Mode, requested_size: s64, old_size
 
 temp :: Allocator.{temporary_allocator_proc, null};
 
+// The reference spells the same allocator these two ways as well; all three
+// name one thing, so a module written against any of them works.
+temporary_allocator :: temp;
+__temporary_allocator :: temporary_allocator_proc;
+
 // Gives the arena back all at once. Anything `temp` handed out before this is
 // no longer valid (**L§10.4**).
 reset_temporary_storage :: () {

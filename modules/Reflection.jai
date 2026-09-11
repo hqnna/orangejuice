@@ -8,6 +8,231 @@
 //
 
 #import "Basic";
+#import "String";
+
+// A value matching no member comes back as "", not as its number.
+enum_value_to_name :: (value: $T) -> string {
+    base := type_info(T);
+    if base.type != .ENUM  return "";
+    return enum_name(cast(*Type_Info_Enum) base, cast(s64) value);
+}
+
+// The member with that name, as a value of the enum itself.
+enum_name_to_value :: ($T: Type, name: string) -> (value: T, found: bool) {
+    base := type_info(T);
+    if base.type != .ENUM  return cast,no_check(T) 0, false;
+
+    info := cast(*Type_Info_Enum) base;
+    for info.names {
+        if it == name  return cast,no_check(T) info.values[it_index], true;
+    }
+    return cast,no_check(T) 0, false;
+}
+
+// ------------------------------------------------------------ storing ints ---
+
+// Writes `value` through `pointer` as the integer type `info` describes, but
+// only when it fits — a caller parsing text into a field it found by
+// reflection has no other way to know the number is in range.
+//
+// `low` and `high` come back so a diagnostic can say what the range was. They
+// are meaningful whether or not the store happened.
+range_check_and_store :: (value: $T, info: *Type_Info_Integer, pointer: *void) -> (success: bool, low: T, high: T) {
+    #assert(T == u64 || T == s64, "range_check_and_store takes a u64 or an s64.");
+
+    size := info.runtime_size;
+    low, high := integer_range(T, info);
+    if value < low || value > high  return false, low, high;
+
+    if size == {
+        case 1; (cast(*s8)  pointer).* = cast,no_check(s8)  value;
+        case 2; (cast(*s16) pointer).* = cast,no_check(s16) value;
+        case 4; (cast(*s32) pointer).* = cast,no_check(s32) value;
+        case 8; (cast(*s64) pointer).* = cast,no_check(s64) value;
+        case;   return false, low, high;
+    }
+    return true, low, high;
+}
+
+
+// ------------------------------------------------------------ enum storage ---
+
+// An enum's value read out of storage as an `s64`, whatever width and sign the
+// enum's own integer type has. A 64-bit unsigned enum whose top bit is set
+// comes back negative, which is the reference's behaviour too.
+get_enum_value :: (data: *void, info: *Type_Info_Enum) -> s64 {
+    size := ifx info.internal_type then info.internal_type.runtime_size else 8;
+    signed := ifx info.internal_type then info.internal_type.signed else true;
+
+    if signed {
+        if size == {
+            case 1; return (cast(*s8)  data).*;
+            case 2; return (cast(*s16) data).*;
+            case 4; return (cast(*s32) data).*;
+            case;   return (cast(*s64) data).*;
+        }
+    }
+    if size == {
+        case 1; return cast(s64) (cast(*u8)  data).*;
+        case 2; return cast(s64) (cast(*u16) data).*;
+        case 4; return cast(s64) (cast(*u32) data).*;
+        case;   return cast,no_check(s64) (cast(*u64) data).*;
+    }
+}
+
+set_enum_value :: (data: *void, info: *Type_Info_Enum, value: s64) {
+    size := ifx info.internal_type then info.internal_type.runtime_size else 8;
+    if size == {
+        case 1; (cast(*s8)  data).* = cast,no_check(s8)  value;
+        case 2; (cast(*s16) data).* = cast,no_check(s16) value;
+        case 4; (cast(*s32) data).* = cast,no_check(s32) value;
+        case;   (cast(*s64) data).* = value;
+    }
+}
+
+// ---------------------------------------------------------------- structs ---
+
+// The member with that name, or null. Only the struct's own members are
+// searched; one brought in by `using` belongs to the type it came from.
+get_struct_field_info :: (info: *Type_Info_Struct, name: string) -> *Type_Info_Struct_Member {
+    if !info || info.type != .STRUCT  return null;
+    for * member: info.members {
+        if member.name == name  return member;
+    }
+    return null;
+}
+
+// ----------------------------------------------------------------- arrays ---
+
+// How many elements an array of any kind holds and where they start. A fixed
+// array is its own storage; a view and a resizable one both begin with a count
+// and a pointer, which is what lets one branch cover them.
+get_array_count_and_data :: (pointer: *void, info: *Type_Info_Array) -> (count: s64, data: *void) {
+    if !info || info.type != .ARRAY  return 0, null;
+    if info.array_type == .FIXED     return info.array_count, pointer;
+
+    array := cast(*Array_View_64) pointer;
+    return array.count, array.data;
+}
+
+// --------------------------------------------------------- integer ranges ---
+
+// What an integer of that many bytes can hold. The size must be 1, 2, 4 or 8.
+signed_integer_range_from_size :: (size_in_bytes: int) -> (low: s64, high: s64) {
+    assert(size_in_bytes == 1 || size_in_bytes == 2 || size_in_bytes == 4 || size_in_bytes == 8);
+    if size_in_bytes == 8  return S64_LOW, S64_HIGH;
+    high := (cast(s64) 1 << (size_in_bytes * 8 - 1)) - 1;
+    return ~high, high;
+}
+
+unsigned_integer_range_from_size :: (size_in_bytes: int) -> (low: u64, high: u64) {
+    assert(size_in_bytes == 1 || size_in_bytes == 2 || size_in_bytes == 4 || size_in_bytes == 8);
+    // Shifting a 64-bit value by 64 is not defined, so the widest case is
+    // written out rather than computed.
+    if size_in_bytes == 8  return 0, 0xffff_ffff_ffff_ffff;
+    return 0, (cast(u64) 1 << (size_in_bytes * 8)) - 1;
+}
+
+// --------------------------------------------------------- text to a value ---
+
+// Reads one value of `any`'s type out of `text` and writes it through
+// `any.value_pointer`. The pointer form advances the string past what it read,
+// which is what a scanner walking a line needs.
+set_value_from_string :: (any: Any, text: string) -> bool {
+    scratch := text;
+    return set_value_from_string(any, *scratch);
+}
+
+set_value_from_string :: (any: Any, text: *string) -> bool {
+    if !any.type || !any.value_pointer  return false;
+
+    if any.type.type == {
+        case .INTEGER;
+            value, ok, rest := string_to_int(text.*);
+            if !ok  return false;
+            integer := cast(*Type_Info_Integer) any.type;
+            fits := range_check_and_store(value, integer, cast(*u8) any.value_pointer);
+            if !fits  return false;
+            text.* = rest;
+            return true;
+
+        case .FLOAT;
+            value, ok, rest := string_to_float64(text.*);
+            if !ok  return false;
+            // Braced because a parenthesis right after the condition would
+            // otherwise read as a call on it.
+            if any.type.runtime_size == 4 {
+                (cast(*float32) any.value_pointer).* = cast(float32) value;
+            } else {
+                (cast(*float64) any.value_pointer).* = value;
+            }
+            text.* = rest;
+            return true;
+
+        case .BOOL;
+            if begins_with(text.*, "true") {
+                (cast(*bool) any.value_pointer).* = true;
+                advance(text, 4);
+                return true;
+            }
+            if begins_with(text.*, "false") {
+                (cast(*bool) any.value_pointer).* = false;
+                advance(text, 5);
+                return true;
+            }
+            return false;
+
+        case .STRING;
+            value, ok := read_quoted(text);
+            if !ok  return false;
+            (cast(*string) any.value_pointer).* = value;
+            return true;
+
+        case .ENUM;
+            info := cast(*Type_Info_Enum) any.type;
+            // A name first, since that is what a person writes; a bare number
+            // is accepted too, which is what a flags combination needs.
+            name := stop_at_any(text.*, " \t\r\n,)]}");
+            for info.names {
+                if it == name {
+                    set_enum_value(any.value_pointer, info, info.values[it_index]);
+                    advance(text, name.count);
+                    return true;
+                }
+            }
+            value, ok, rest := string_to_int(text.*);
+            if !ok  return false;
+            set_enum_value(any.value_pointer, info, value);
+            text.* = rest;
+            return true;
+
+        case;
+            return false;
+    }
+}
+
+#scope_module
+
+S64_LOW  :: -9_223_372_036_854_775_808;
+S64_HIGH ::  9_223_372_036_854_775_807;
+
+// A `"`-delimited run, without the quotes. Escape sequences are not handled,
+// which is what the reference does too.
+read_quoted :: (text: *string) -> (value: string, ok: bool) {
+    if !text.count || text.*[0] != #char "\""  return "", false;
+    advance(text, 1);
+
+    at := 0;
+    while at < text.count {
+        if text.*[at] == #char "\"" {
+            result := slice(text.*, 0, at);
+            advance(text, at + 1);
+            return result, true;
+        }
+        at += 1;
+    }
+    return "", false;
+}
 
 // -------------------------------------------------------------- members ---
 
@@ -227,54 +452,6 @@ dereference :: (value: Any) -> (pointed_at: Any, ok: bool) {
     result.type = info.pointer_to;
     result.value_pointer = target;
     return result, true;
-}
-
-// The name of the member a value equals, from the value itself rather than
-// from a `Type_Info_Enum` the caller had to find — which is what makes
-// `enum_value_to_name(token.kind)` work on any enum at all.
-//
-// A value matching no member comes back as "", not as its number.
-enum_value_to_name :: (value: $T) -> string {
-    base := type_info(T);
-    if base.type != .ENUM  return "";
-    return enum_name(cast(*Type_Info_Enum) base, cast(s64) value);
-}
-
-// The member with that name, as a value of the enum itself.
-enum_name_to_value :: ($T: Type, name: string) -> (value: T, found: bool) {
-    base := type_info(T);
-    if base.type != .ENUM  return cast,no_check(T) 0, false;
-
-    info := cast(*Type_Info_Enum) base;
-    for info.names {
-        if it == name  return cast,no_check(T) info.values[it_index], true;
-    }
-    return cast,no_check(T) 0, false;
-}
-
-// ------------------------------------------------------------ storing ints ---
-
-// Writes `value` through `pointer` as the integer type `info` describes, but
-// only when it fits — a caller parsing text into a field it found by
-// reflection has no other way to know the number is in range.
-//
-// `low` and `high` come back so a diagnostic can say what the range was. They
-// are meaningful whether or not the store happened.
-range_check_and_store :: (value: $T, info: *Type_Info_Integer, pointer: *void) -> (success: bool, low: T, high: T) {
-    #assert(T == u64 || T == s64, "range_check_and_store takes a u64 or an s64.");
-
-    size := info.runtime_size;
-    low, high := integer_range(T, info);
-    if value < low || value > high  return false, low, high;
-
-    if size == {
-        case 1; (cast(*s8)  pointer).* = cast,no_check(s8)  value;
-        case 2; (cast(*s16) pointer).* = cast,no_check(s16) value;
-        case 4; (cast(*s32) pointer).* = cast,no_check(s32) value;
-        case 8; (cast(*s64) pointer).* = cast,no_check(s64) value;
-        case;   return false, low, high;
-    }
-    return true, low, high;
 }
 
 #scope_module

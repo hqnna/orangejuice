@@ -7,6 +7,7 @@
 
 #import "Basic";
 #import "POSIX";
+#import "String";
 
 File :: struct {
     handle: s32 = -1;

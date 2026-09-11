@@ -227,9 +227,8 @@ table_hash :: (table: *Table($K, $V), key: K) -> u64 {
 table_keys_match :: (table: *Table($K, $V), a: K, b: K) -> bool {
     #if table.given_compare {
         return table.given_compare(a, b);
-    } else #if K == string {
-        return equal(a, b);
     } else {
+        // A string compares by its bytes; everything else by value.
         return a == b;
     }
 }

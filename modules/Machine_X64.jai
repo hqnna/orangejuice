@@ -7,6 +7,7 @@
 //
 
 #import "Basic";
+#import "String";
 
 // How many bits are set. `popcnt` is SSE4.2; every x86-64 worth targeting has
 // had it since 2008.

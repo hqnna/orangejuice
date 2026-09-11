@@ -101,7 +101,7 @@ deinit :: (async: *File_Async) {
     if async.threads.data  free(async.threads.data, async.allocator);
     async.threads.count = 0;
 
-    for * async.requests  free_string(*it.data, async.allocator);
+    for * async.requests { free(it.data.data, async.allocator); it.data = ""; }
     array_free(*async.requests);
     array_free(*async.queue);
 
@@ -152,8 +152,8 @@ wait :: (async: *File_Async, handle: Request_Handle, allocator := context.alloca
 
         // The slot is free now, and its generation moves on so the handle
         // cannot be used again.
-        free_string(*request.data, async.allocator);
-        free_string(*request.path, async.allocator);
+        free(request.data.data, async.allocator); request.data = "";
+        free(request.path.data, async.allocator); request.path = "";
         request.in_use = false;
         request.generation += 1;
         request.status = .UNKNOWN;
@@ -259,14 +259,14 @@ worker :: (thread: *Thread) -> s64 {
         request := *async.requests[index];
         if request.in_use && request.generation == generation {
             if kind == .READ {
-                free_string(*request.data, async.allocator);
+                free(request.data.data, async.allocator); request.data = "";
                 request.data = data;
             } else if data.count {
-                free_string(*data, async.allocator);
+                free(data.data, async.allocator); data = "";
             }
             request.status = ifx ok then Request_Status.COMPLETE else .FAILED;
         } else if data.count {
-            free_string(*data, async.allocator);
+            free(data.data, async.allocator); data = "";
         }
         unlock(*async.mutex);
 

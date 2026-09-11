@@ -105,7 +105,7 @@ process_changes :: (watcher: *File_Watcher) -> [] Change {
             if !found  continue;
 
             change: Change;
-            change.path = ifx name.count then path_join(directory, name, allocator = temp) else directory;
+            change.path = ifx name.count then tprint("%/%", directory, name) else directory;
             change.kind = from_inotify_mask(event.mask);
             array_add(*changes, change);
         }

@@ -22,6 +22,7 @@
 
 #import "Basic";
 #import "Reflection";
+#import "String";
 
 // A parallel struct with one `bool` per member of `T`, generated from `T`'s
 // own type info: `is_set.threads` answers for `args.threads`.
@@ -186,7 +187,10 @@ show_help :: ($T: Type, flags := Default_Argument_Flags, help_triggers: [] strin
     if help_triggers.count {
         // A deliberately blank line before the help trigger itself.
         array_add(*lines, "");
-        array_add(*lines, tprint("-%: Show the list of commands.", join(..help_triggers, ", -", allocator = temp)));
+        {
+            push_allocator(temp);
+            array_add(*lines, tprint("-%: Show the list of commands.", join(..help_triggers, ", -")));
+        }
     }
 
     if lines.count == 0 {
@@ -279,17 +283,19 @@ take_value :: (slot: *u8, info: *Type_Info, name: string, args: [] string, curso
 
         case .ENUM;
             enum_info := cast(*Type_Info_Enum) info;
-            number, number_ok := enum_value(enum_info, value);
+            number: s64;
+            number_ok := false;
+            for enum_info.names {
+                if it != value  continue;
+                number = enum_info.values[it_index];
+                number_ok = true;
+                break;
+            }
             if !number_ok {
                 log_error("Value of argument '%' was not one of %'s names (it was '%').\n", name, enum_info.name, value);
                 return false;
             }
-            if enum_info.internal_type {
-                fits := range_check_and_store(number, enum_info.internal_type, slot);
-                if !fits  return false;
-                return true;
-            }
-            (cast(*s64) slot).* = number;
+            set_enum_value(slot, enum_info, number);
             return true;
 
         case;

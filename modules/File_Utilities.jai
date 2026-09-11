@@ -73,7 +73,7 @@ walk_directory :: (directory: string, user_data: $T, proc: (info: *File_Visit_In
         name := to_string(entry.d_name.data);
         if name == "." || name == ".."  continue;
 
-        full := path_join(directory, name, allocator = temp);
+        full := tprint("%/%", directory, name);
 
         info: File_Visit_Info;
         info.short_name = name;
@@ -148,7 +148,7 @@ delete_directory_recursively :: (directory: string) -> bool {
         name := to_string(entry.d_name.data);
         if name == "." || name == ".."  continue;
 
-        full := path_join(directory, name, allocator = temp);
+        full := tprint("%/%", directory, name);
         if is_directory(full) {
             if !delete_directory_recursively(full)  ok = false;
         } else {
