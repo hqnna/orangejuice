@@ -12,9 +12,9 @@ use crate::constants::{Const, RunBytes, Value};
 
 impl Checker<'_> {
   /// The type of an expression, with its constant value when it has one
-  /// (**L§5**). Anything whose answer needs a milestone the front end has not
-  /// reached — `#run`, a macro expansion, a polymorph instantiation — comes
-  /// back as [`Expr::UNKNOWN`] rather than as an error.
+  /// (**L§5**). Anything whose answer is not in yet — a `#run`, a macro
+  /// expansion, a polymorph instantiation — comes back as [`Expr::UNKNOWN`]
+  /// rather than as an error.
   pub(crate) fn expression_type(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
     if !self.enter() {
       return Expr::UNKNOWN;

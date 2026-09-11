@@ -4,8 +4,8 @@
 //! procedures, blocks and instructions that name types by [`oj_types::TypeId`]
 //! and nothing else. Lowering starts at the program's entry point and follows
 //! calls, so a procedure nothing reachable calls is never lowered — which is
-//! both the dead code elimination of **L§11.6** and what keeps the front end's
-//! unfinished milestones out of the back end.
+//! both the dead code elimination of **L§11.6** and what keeps a module's
+//! uninstantiated polymorphic procedures out of the back end.
 
 mod ir;
 mod lower;

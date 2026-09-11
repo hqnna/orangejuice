@@ -520,8 +520,8 @@ impl Checker<'_> {
 
   /// Which procedure a call names, with its arguments in parameter order
   /// (**L§7.5**). `None` when the front end cannot decide — a polymorphic
-  /// candidate, an argument of unknown type — which is what a back end reports
-  /// as work a later milestone has to do.
+  /// candidate, an argument of unknown type — which is what the back end
+  /// reports as a call it could not build.
   pub fn call_plan(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<CallPlan> {
     self.at_call_site(scope, source, node, |checker| {
       checker.call_plan_inner(scope, source, node)

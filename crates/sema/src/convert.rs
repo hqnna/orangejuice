@@ -28,7 +28,7 @@ impl Checker<'_> {
   /// (**L§5.10**). `None` means the conversion needs a cast.
   ///
   /// A type the front end could not work out converts to anything at distance
-  /// zero, so an unfinished milestone never turns into a type error.
+  /// zero, so one error never turns into a second one about a type.
   pub(crate) fn implicit_conversion(&mut self, value: &Expr, target: TypeId) -> Option<u32> {
     let from = value.type_id;
     if from == target {

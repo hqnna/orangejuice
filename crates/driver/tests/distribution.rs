@@ -56,8 +56,8 @@ fn build_and_run(body: &str) -> Option<String> {
 
 #[test]
 fn a_program_builds_and_runs_with_no_jai_distribution() {
-  // The milestone: Preload, Runtime_Support and Basic are ours, and nothing
-  // the reference ships is involved.
+  // Preload, Runtime_Support and Basic are ours, and nothing the reference
+  // ships is involved.
   let Some(output) = build_and_run(
     "#import \"Basic\";\n\
      main :: () { print(\"Hello, %!\\n\", \"world\"); }\n",

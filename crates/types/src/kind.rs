@@ -205,9 +205,9 @@ pub enum TypeKind {
   /// The type of a name that stands for several procedures at once. It is not
   /// a storable type (**L§7.5**).
   OverloadSet,
-  /// A type orangejuice cannot determine yet, because deciding it needs a
-  /// milestone the front end has not reached. It matches everything and is
-  /// never reported.
+  /// A type orangejuice could not determine — a construct the front end does
+  /// not build, or one whose answer another error already spoiled. It matches
+  /// everything and is never reported.
   Unknown,
 }
 
