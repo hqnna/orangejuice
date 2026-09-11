@@ -219,10 +219,7 @@ impl Lowering<'_, '_> {
             self.error(
               source,
               node,
-              format!(
-                "orangejuice cannot assemble the '#asm' instruction '{written}' yet \
-                 (milestone M10)."
-              ),
+              format!("orangejuice has no encoding for the '#asm' instruction '{written}'."),
             );
             return;
           }
@@ -641,7 +638,7 @@ impl Lowering<'_, '_> {
             at.source,
             at.node,
             "orangejuice keeps only a general-purpose register alive between two '#asm' \
-             blocks; this one was declared in an earlier block (milestone M10).",
+             blocks; this one was declared in an earlier block.",
           );
           return None;
         }
@@ -890,8 +887,7 @@ impl Lowering<'_, '_> {
         self.error(
           source,
           node,
-          "orangejuice does not allocate the x87 stack registers of an '#asm' block \
-           (milestone M10).",
+          "orangejuice does not allocate the x87 stack registers of an '#asm' block.",
         );
         return false;
       }
@@ -1101,9 +1097,7 @@ impl Lowering<'_, '_> {
     self.error(
       source,
       node,
-      format!(
-        "orangejuice cannot assemble the '#asm' instruction '{written}' yet (milestone M10)."
-      ),
+      format!("orangejuice has no encoding for the '#asm' instruction '{written}'."),
     );
     None
   }

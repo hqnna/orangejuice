@@ -24,7 +24,7 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
   files
 }
 
-/// **M2**: every file of the distribution parses, and the printed form
+/// Every file of the distribution parses, and the printed form
 /// of its tree parses back to the same tree (`docs/spec.md` §8).
 #[test]
 fn every_file_of_the_distribution_parses_and_round_trips() {

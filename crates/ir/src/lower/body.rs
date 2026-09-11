@@ -95,10 +95,7 @@ impl Lowering<'_, '_> {
       self.error(
         body.source,
         body.header,
-        format!(
-          "Code generation for '{name}' needs a type the front end cannot work out yet \
-           (polymorphs and macros are milestone M7)."
-        ),
+        format!("Code generation for '{name}' needs a type the front end could not work out."),
       );
       leave(self);
       return;
@@ -547,7 +544,7 @@ impl Lowering<'_, '_> {
               self.insert_controls.pop();
             }
           }
-          None => self.unsupported(source, node, "'#insert'", "M8"),
+          None => self.unsupported(source, node, "'#insert'"),
         }
       }
       // An `#asm` block places its own registers and hands the back end the
@@ -596,7 +593,7 @@ impl Lowering<'_, '_> {
     let scope = self.checker.scope_for(source, node, self.body_scope);
     let type_id = self.checker.denoted_type(scope, source, node);
     if self.checker.types().is_unknown(type_id) {
-      self.unsupported(source, node, "this union", "M7");
+      self.unsupported(source, node, "this union");
       return;
     }
     let local = self.new_local(String::from("union"), type_id);
@@ -656,7 +653,7 @@ impl Lowering<'_, '_> {
     }
     let type_id = self.checker.decl_type(decl).value;
     if self.mentions_unknown(type_id) {
-      self.unsupported(source, node, "a declaration of unknown type", "M7");
+      self.unsupported(source, node, "a declaration of unknown type");
       return;
     }
     let name = {
@@ -790,7 +787,7 @@ impl Lowering<'_, '_> {
       && operator != OperatorType::ASSIGN
     {
       let Some(binary) = compound_operator(operator) else {
-        self.unsupported(source, node, "this assignment operator", "M10");
+        self.unsupported(source, node, "this assignment operator");
         return;
       };
       for (index, target) in targets.iter().enumerate() {
@@ -916,7 +913,7 @@ impl Lowering<'_, '_> {
         None => match self.default_return(index) {
           Some(value) => value,
           None => {
-            self.unsupported(source, node, "a return that names its values", "M7");
+            self.unsupported(source, node, "a return that names its values");
             return;
           }
         },
@@ -1160,7 +1157,7 @@ impl Lowering<'_, '_> {
     for (index, case) in cases.iter().enumerate() {
       let Some(NodeData::Case(payload)) = self.checker.tree_of(source).map(|ast| ast.data(*case))
       else {
-        self.unsupported(source, *case, "a 'case' the parser did not produce", "M5");
+        self.unsupported(source, *case, "a 'case' the parser did not produce");
         continue;
       };
       let payload = payload.clone();
@@ -1419,7 +1416,7 @@ impl Lowering<'_, '_> {
     }
 
     let Some(binary) = compound_operator(operator) else {
-      self.unsupported(source, node, "this assignment operator", "M7");
+      self.unsupported(source, node, "this assignment operator");
       return;
     };
     self.read_modify_write(node, binary, (place.id, place.type_id), right);
@@ -1489,7 +1486,7 @@ impl Lowering<'_, '_> {
       OperatorType::ASSIGN => None,
       _ => {
         let Some(binary) = compound_operator(operator) else {
-          self.unsupported(source, node, "this assignment operator", "M7");
+          self.unsupported(source, node, "this assignment operator");
           return true;
         };
         let Some(current) = self.operator_call_with(
@@ -1501,7 +1498,7 @@ impl Lowering<'_, '_> {
           &[None, Some(index_value)],
           None,
         ) else {
-          self.unsupported(source, node, "'operator []'", "M7");
+          self.unsupported(source, node, "'operator []'");
           return true;
         };
         let right_scope = self.checker.scope_for(source, right, self.body_scope);
@@ -1631,7 +1628,7 @@ impl Lowering<'_, '_> {
     // (**L§6.6**); one that only a running program could answer is not
     // something the back end can lower.
     let Some((by_pointer, reverse)) = self.checker.loop_modifiers(scope, source, node) else {
-      self.unsupported(source, node, "a 'for' with computed modifiers", "M7");
+      self.unsupported(source, node, "a 'for' with computed modifiers");
       return;
     };
 
@@ -1676,7 +1673,7 @@ impl Lowering<'_, '_> {
       self.expanded_loops.pop();
     }
     if expanded.is_none() {
-      self.unsupported(source, node, "this 'for_expansion'", "M7");
+      self.unsupported(source, node, "this 'for_expansion'");
     }
   }
 
@@ -1926,12 +1923,7 @@ impl Lowering<'_, '_> {
       return;
     };
     let Some((element, kind)) = self.checker.types().array_of(subject.type_id) else {
-      self.unsupported(
-        source,
-        node,
-        "a 'for' over this type ('for_expansion')",
-        "M7",
-      );
+      self.unsupported(source, node, "a 'for' over this type ('for_expansion')");
       return;
     };
 

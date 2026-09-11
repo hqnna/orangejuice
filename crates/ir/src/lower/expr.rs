@@ -111,8 +111,7 @@ impl Lowering<'_, '_> {
       self.unsupported(
         source,
         node,
-        "an expression whose type the front end cannot work out yet",
-        "M7",
+        "an expression whose type the front end could not work out",
       );
       return None;
     }
@@ -704,7 +703,7 @@ impl Lowering<'_, '_> {
         })
       }
       NodeData::TypeQuery { .. } | NodeData::ExpressionQuery { .. } => {
-        self.unsupported(source, node, "this query", "M10");
+        self.unsupported(source, node, "this compile-time query");
         None
       }
       // `#caller_location` is the call site's, which a macro or a baked
@@ -728,12 +727,12 @@ impl Lowering<'_, '_> {
       NodeData::DirectiveLocation(_) => match self.call_sites.last().copied() {
         Some((at_source, at)) => self.source_location(at_source, at, info.type_id),
         None => {
-          self.unsupported(source, node, "'#caller_location'", "M7");
+          self.unsupported(source, node, "'#caller_location'");
           None
         }
       },
       _ => {
-        self.unsupported(source, node, "this expression", "M7");
+        self.unsupported(source, node, "this expression");
         None
       }
     }
@@ -750,7 +749,7 @@ impl Lowering<'_, '_> {
     let scope = self.checker.scope_for(source, header, scope);
     let type_id = self.checker.procedure_type_at(source, header, scope);
     if self.mentions_unknown(type_id) {
-      self.unsupported(source, header, "an anonymous procedure", "M7");
+      self.unsupported(source, header, "an anonymous procedure");
       return None;
     }
     let key = crate::lower::ProcKey::Node(source, header);
@@ -830,7 +829,7 @@ impl Lowering<'_, '_> {
       });
     }
     if !self.is_scalar(value.type_id) {
-      self.unsupported(source, node, "a truth value for this type", "M7");
+      self.unsupported(source, node, "a truth value for this type");
       return None;
     }
     let scalar = self.scalar(value);
@@ -931,7 +930,7 @@ impl Lowering<'_, '_> {
           "This name stands for more than one procedure; only a call site can choose between them.",
         );
       } else {
-        self.unsupported(source, node, "this name", "M7");
+        self.unsupported(source, node, "this name");
       }
       return None;
     };
@@ -1044,7 +1043,7 @@ impl Lowering<'_, '_> {
           if info.kind == DeclKind::Parameter {
             return self.constant_parameter_value(source, node, decl, type_id);
           }
-          self.unsupported(source, node, "this name", "M7");
+          self.unsupported(source, node, "this name");
           return None;
         }
         let id = self.global_id(decl);
@@ -1071,21 +1070,21 @@ impl Lowering<'_, '_> {
         // holds a procedure's address (**L§5.11**). It has no storage of its
         // own, so its value is built where it is used.
         let (Some(declared), Some(at)) = (info.source, info.node) else {
-          self.unsupported(source, node, "this constant", "M7");
+          self.unsupported(source, node, "this constant");
           return None;
         };
         let Some(NodeData::Declaration(declaration)) =
           self.checker.tree_of(declared).map(|ast| ast.data(at))
         else {
-          self.unsupported(source, node, "this constant", "M7");
+          self.unsupported(source, node, "this constant");
           return None;
         };
         let Some(expression) = declaration.expression else {
-          self.unsupported(source, node, "this constant", "M7");
+          self.unsupported(source, node, "this constant");
           return None;
         };
         if !self.constants.insert(decl) {
-          self.unsupported(source, node, "this constant", "M7");
+          self.unsupported(source, node, "this constant");
           return None;
         }
         // A constant written in a baked polymorphic struct's body means what
@@ -1105,7 +1104,7 @@ impl Lowering<'_, '_> {
         value
       }
       _ => {
-        self.unsupported(source, node, "this name", "M7");
+        self.unsupported(source, node, "this name");
         None
       }
     }
@@ -1150,11 +1149,11 @@ impl Lowering<'_, '_> {
       }
     };
     let Some((declared, expression, scope)) = written else {
-      self.unsupported(source, node, "this name", "M7");
+      self.unsupported(source, node, "this name");
       return None;
     };
     if !self.constants.insert(decl) {
-      self.unsupported(source, node, "this name", "M7");
+      self.unsupported(source, node, "this name");
       return None;
     }
     let scope = self.checker.scope_for(declared, expression, scope);
@@ -1239,7 +1238,7 @@ impl Lowering<'_, '_> {
       }
       LiteralValue::Struct(literal) => {
         if self.checker.types().is_unknown(type_id) {
-          self.unsupported(source, node, "an undesignated struct literal", "M7");
+          self.unsupported(source, node, "an undesignated struct literal");
           return None;
         }
         let local = self.new_local(String::from("literal"), type_id);
@@ -1254,7 +1253,7 @@ impl Lowering<'_, '_> {
         })
       }
       _ => {
-        self.unsupported(source, node, "this literal", "M6");
+        self.unsupported(source, node, "this literal");
         None
       }
     }
@@ -1484,7 +1483,7 @@ impl Lowering<'_, '_> {
       }
       OperatorType::PLUS => self.expression(scope, source, operand, Some(info.type_id)),
       _ => {
-        self.unsupported(source, node, "this operator", "M7");
+        self.unsupported(source, node, "this operator");
         None
       }
     }
@@ -1582,7 +1581,7 @@ impl Lowering<'_, '_> {
       });
     }
     let Some(binary) = binary_operator(operator) else {
-      self.unsupported(source, node, "this operator", "M7");
+      self.unsupported(source, node, "this operator");
       return None;
     };
 
@@ -1637,7 +1636,7 @@ impl Lowering<'_, '_> {
     right: Val,
   ) -> Option<Val> {
     let Some(memcmp) = self.checker.preload_procedure("memcmp") else {
-      self.unsupported(source, node, "comparing two strings", "M7");
+      self.unsupported(source, node, "comparing two strings");
       return None;
     };
     let memcmp = self.procedure_id(memcmp);
@@ -1845,7 +1844,7 @@ impl Lowering<'_, '_> {
       result
     };
     if !self.is_scalar(operand_type) {
-      self.unsupported(source, node, "an operator on this type", "M7");
+      self.unsupported(source, node, "an operator on this type");
       return None;
     }
     let left = self.convert(source, node, left, operand_type)?;
@@ -2120,7 +2119,7 @@ impl Lowering<'_, '_> {
         });
       }
     }
-    self.unsupported(source, node, "this array field", "M7");
+    self.unsupported(source, node, "this array field");
     None
   }
 
@@ -2153,7 +2152,7 @@ impl Lowering<'_, '_> {
     }
     let base = self.dereference(base);
     let Some((element, kind)) = self.checker.types().array_of(base.type_id) else {
-      self.unsupported(source, node, "'operator []'", "M7");
+      self.unsupported(source, node, "'operator []'");
       return None;
     };
     let data = match kind {
@@ -2206,7 +2205,7 @@ impl Lowering<'_, '_> {
     // afterwards.
     let type_id = self.checker.hardened(info.type_id);
     if self.checker.types().is_unknown(type_id) {
-      self.unsupported(source, node, "this 'ifx'", "M7");
+      self.unsupported(source, node, "this 'ifx'");
       return None;
     }
     // `#ifx` picks its branch at compile time, so only that one is lowered
@@ -2368,7 +2367,6 @@ impl Lowering<'_, '_> {
         source,
         node,
         "a call the front end could not resolve to one procedure",
-        "M7",
       );
       return None;
     };
@@ -2494,7 +2492,7 @@ impl Lowering<'_, '_> {
         .flags
         .intersects(ast::ProcedureFlags::MACRO | ast::ProcedureFlags::POLYMORPHIC)
     {
-      self.unsupported(source, node, "a macro or polymorphic call", "M7");
+      self.unsupported(source, node, "a macro or polymorphic call");
       return None;
     }
 
@@ -3279,7 +3277,7 @@ impl Lowering<'_, '_> {
     }
 
     if !self.is_scalar(from) || !self.is_scalar(to) {
-      self.unsupported(source, node, "this conversion", "M7");
+      self.unsupported(source, node, "this conversion");
       return None;
     }
 
@@ -3351,7 +3349,7 @@ impl Lowering<'_, '_> {
             }
           },
           _ => {
-            self.unsupported(source, node, "this conversion", "M7");
+            self.unsupported(source, node, "this conversion");
             return None;
           }
         }

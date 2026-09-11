@@ -738,7 +738,7 @@ impl Checker<'_> {
       // node.border` over a `[4] float` reads.
       TypeKind::Array { .. } => true,
       // A struct has no truth value of its own (**L§5.9**), but `operator !`
-      // may give it one, and operator overloading is M7.
+      // may give it one, so one is not reported here.
       TypeKind::Struct(_) | TypeKind::Any => true,
       // A literal, a polymorph variable or a type the front end has not worked
       // out is not something to complain about.

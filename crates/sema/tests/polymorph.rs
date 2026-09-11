@@ -153,8 +153,7 @@ fn a_type_variable_used_twice_has_to_agree() {
     |checker| {
       assert_eq!(type_of(checker, "ok"), "s64");
       // Nothing satisfies the header, so the call has no type of its own; the
-      // reference reports it, which is M7's error wording rather than a
-      // silently wrong answer.
+      // checker reports the call site rather than answering it wrongly.
       assert_eq!(type_of(checker, "bad"), "unknown");
     },
   );

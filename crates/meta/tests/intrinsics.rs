@@ -83,7 +83,7 @@ fn a_call_with_no_compilation_installed_does_nothing() {
 /// The `#compiler` procedures the distribution declares and this compiler does
 /// not answer yet. A call to one of these fails the `#run` that made it,
 /// naming the procedure, rather than being silently wrong — so the list is
-/// pinned here, and shrinking it is what finishing M8 means.
+/// pinned here, and shrinking it is what answering more of the module means.
 #[test]
 fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
   let paths = [

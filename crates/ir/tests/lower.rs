@@ -1,4 +1,4 @@
-//! **M5**: what a body lowers to.
+//! What a body lowers to.
 //!
 //! Every case builds a whole program — Preload included, because `#Context` is
 //! part of every Jai calling convention — and reads the listing back, so the
@@ -189,11 +189,11 @@ fn a_range_loop_counts_it_and_it_index() {
 }
 
 #[test]
-fn a_construct_a_later_milestone_owns_names_that_milestone() {
+fn a_construct_the_back_end_cannot_build_names_the_construct() {
   let lowered = lower("main :: () { #asm { frobnicate a:, 1; } }\n");
   assert_eq!(
     lowered.errors,
-    ["orangejuice cannot assemble the '#asm' instruction 'frobnicate' yet (milestone M10)."]
+    ["orangejuice has no encoding for the '#asm' instruction 'frobnicate'."]
   );
 }
 

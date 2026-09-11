@@ -39,7 +39,7 @@ fn rendered_errors(checker: &Checker<'_>, sources: &SourceMap) -> Vec<String> {
     .collect()
 }
 
-/// **M4**: every file of the distribution types on its own
+/// Every file of the distribution types on its own
 /// (`docs/spec.md` §8). Resolved without its imports, most of a file's names
 /// are unknown, so what this checks is that the typechecker itself never
 /// contradicts the file — a circular dependency, a struct that cannot be laid

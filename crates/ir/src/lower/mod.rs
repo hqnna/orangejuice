@@ -1385,13 +1385,14 @@ impl<'c, 'p> Lowering<'c, 'p> {
       .push(Diagnostic::error(source, span, message));
   }
 
-  /// What a construct the back end does not implement yet reports. The
-  /// milestone is named so that a failure says which one owns it.
-  fn unsupported(&mut self, source: SourceId, node: NodeId, what: &str, milestone: &str) {
+  /// What a construct the back end cannot build reports. Nothing is
+  /// mis-compiled: lowering stops at the node that stopped it and says what it
+  /// was, so a failure names the construct rather than some later symptom.
+  fn unsupported(&mut self, source: SourceId, node: NodeId, what: &str) {
     self.error(
       source,
       node,
-      format!("Code generation for {what} is not implemented yet (milestone {milestone})."),
+      format!("orangejuice could not generate code for {what}."),
     );
   }
 }

@@ -1,14 +1,14 @@
-//! A Jai program becomes an executable that runs (**M5**), and what its
-//! `#run`s left behind is part of it (**M6**).
+//! A Jai program becomes an executable that runs, and what its
+//! `#run`s left behind is part of it.
 //!
-//! These are the milestones' acceptance tests: the pipeline is driven end to
+//! These are the acceptance tests: the pipeline is driven end to
 //! end and the produced program is executed, so what is asserted is its
 //! behaviour rather than any intermediate listing.
 
 use std::process::Command;
 
 /// A program that can print without `Basic`: `print` is a polymorphic call
-/// over `Any` (M7), so the tests reach `write(2)` the way `Runtime_Support`
+/// over `Any`, so the tests reach `write(2)` the way `Runtime_Support`
 /// itself does.
 const PRELUDE: &str = "\
 libc :: #library,system \"libc\";
@@ -303,7 +303,7 @@ fn floats_convert_and_compare() {
 }
 
 #[test]
-fn a_program_that_needs_a_later_milestone_says_which_one() {
+fn a_program_the_back_end_cannot_build_names_what_stopped_it() {
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("program.jai");
   std::fs::write(&path, "main :: () { #asm { frobnicate a:, 1; } }\n")
@@ -320,7 +320,10 @@ fn a_program_that_needs_a_later_milestone_says_which_one() {
   );
   assert!(report.failed);
   let text = report.diagnostics.join("");
-  assert!(text.contains("milestone"), "{text}");
+  assert!(
+    text.contains("no encoding for the '#asm' instruction 'frobnicate'"),
+    "{text}"
+  );
 }
 
 #[test]
@@ -363,7 +366,7 @@ fn an_output_name_and_path_are_honoured() {
   assert!(out.join(".build").join("game.o").exists());
 }
 
-// --------------------------------------------------------------- M6 -------
+// ------------------------------------------- compile-time execution -------
 //
 // Compile-time execution. What is asserted is the *program's* behaviour, so a
 // `#run` that got the wrong answer, ran twice, or did not run at all shows up
@@ -592,7 +595,7 @@ fn a_run_produces_an_array_the_program_indexes() {
   );
 }
 
-// --------------------------------------------------------------- M6 -------
+// ------------------------------------------- compile-time execution -------
 //
 // The type table. `type_info(T)` is a pointer into data the compiler laid out,
 // so what is asserted is what the running program reads back out of it.
@@ -822,7 +825,7 @@ fn push_context_changes_what_the_block_and_its_callees_see() {
   );
 }
 
-// ------------------------------------------------------------------- M7 ---
+// --------------------------------------- polymorphs, macros and code ---
 
 #[test]
 fn a_polymorphic_procedure_is_instantiated_per_argument_type() {
@@ -1481,7 +1484,7 @@ fn an_inserted_string_can_stand_where_an_expression_goes() {
   );
 }
 
-// ------------------------------------------------------------------- M9 -----
+// ------------------------------------------ inline assembly and FFI -----
 
 #[test]
 fn an_asm_block_computes_with_the_registers_it_names() {

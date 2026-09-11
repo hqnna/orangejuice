@@ -1,10 +1,10 @@
-//! A metaprogram drives the build (**M8**).
+//! A metaprogram drives the build.
 //!
 //! The `Compiler` module of the distribution declares its procedures
 //! `#compiler` and the compiler answers them; these tests declare the same
 //! headers in the program itself, so that what is exercised is the compiler's
 //! half rather than the distribution's. The last one imports the real module,
-//! which reaches `Basic` and `Thread` and everything M9 assembles.
+//! which reaches `Basic` and `Thread` and every `#asm` block in them.
 
 use std::path::{Path, PathBuf};
 
@@ -614,7 +614,7 @@ fn set_build_options_dc_renames_the_output() {
 
 /// The `Compiler` module itself, rather than the headers the tests above
 /// declare: importing it reaches `Basic` and `Thread`, whose `#asm` blocks the
-/// back end assembles since M9.
+/// back end assembles itself.
 #[test]
 fn a_metaprogram_imports_the_compiler_module_of_the_distribution() {
   let fixture = Fixture::new();

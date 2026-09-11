@@ -48,7 +48,7 @@ fn detail(token: &Token, interner: &Interner) -> String {
 
 /// The cross-check form: every field of a token, encoded so that it can be
 /// compared byte for byte against the same dump taken from the reference
-/// `Jai_Lexer` over a corpus (`docs/spec.md` §9, M1).
+/// `Jai_Lexer` over a corpus (`docs/spec.md` §9).
 pub fn dump_token_stream(tokens: &[Token], interner: &Interner) -> String {
   let mut out = String::new();
   for token in tokens {

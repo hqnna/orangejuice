@@ -38,7 +38,7 @@ fn rendered_errors(program: &Program<'_>, sources: &SourceMap) -> Vec<String> {
     .collect()
 }
 
-/// **M3**: every file of the distribution resolves into a scope tree
+/// Every file of the distribution resolves into a scope tree
 /// (`docs/spec.md` §8). Each file is resolved on its own, so nothing is looked
 /// up across an import: what this checks is that the tree builds and that no
 /// file contradicts itself — a redeclaration, a doubled `#load`, an

@@ -79,7 +79,7 @@ impl Visibility {
   }
 }
 
-/// What a name stands for, to the extent M3 can tell without types.
+/// What a name stands for, to the extent the scope pass can tell without types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeclKind {
   Variable,
@@ -141,7 +141,7 @@ pub struct Decl {
   pub source: Option<SourceId>,
   pub span: Span,
   pub node: Option<NodeId>,
-  /// Declared inside a `#if` whose condition M3 could not fold, so it neither
+  /// Declared inside a `#if` whose condition the scope pass could not fold, so it neither
   /// collides with nor is collided with by its sibling branch (**L§4.2**).
   pub conditional: bool,
   /// Which branch of an undecidable `#if` it came from, when it came from one.
@@ -204,7 +204,7 @@ impl UsedValue {
 }
 
 /// A construct that may still introduce names into a scope: an unresolved
-/// `using` of a typed value, an `#insert`, or a `#if` whose condition M3 could
+/// `using` of a typed value, an `#insert`, or a `#if` whose condition the scope pass could
 /// not fold. A lookup that misses in a scope holding one of these is not an
 /// error — the reference waits for the construct instead (**L§4.3**, **C§6.1**).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

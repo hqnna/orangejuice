@@ -7,7 +7,7 @@ use oj_syntax::ast::{Ast, LiteralValue, NodeData, OperatorType};
 
 use crate::tree::{DeclId, DeclKind, Resolution, ScopeId, ScopeTree};
 
-/// The constant values M3 can produce without running code: enough to decide
+/// The constant values the scope pass can produce without running code: enough to decide
 /// the `#if` conditions of the module tree (**L§5.11**, **C§6.5**). Enum
 /// members are compared by name, which is all `OS == .LINUX` needs.
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +85,7 @@ impl<'a> Evaluator<'a> {
     self.eval_at(scope, source, node, 0)
   }
 
-  /// The value of a `#if` condition, or `None` when M3 cannot decide it.
+  /// The value of a `#if` condition, or `None` when the scope pass cannot decide it.
   pub fn condition(&self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<bool> {
     self.eval(scope, source, node)?.truth()
   }
@@ -135,7 +135,7 @@ impl<'a> Evaluator<'a> {
     depth: u32,
   ) -> Option<ConstValue> {
     // `&&` and `||` short-circuit, so a decidable left side settles the whole
-    // condition even when the right side reaches something M3 cannot fold.
+    // condition even when the right side reaches something the scope pass cannot fold.
     if operator == OperatorType::LOGICAL_AND || operator == OperatorType::LOGICAL_OR {
       let short_circuit = operator == OperatorType::LOGICAL_OR;
       let left = self.eval_at(scope, source, left, depth + 1)?.truth()?;

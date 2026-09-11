@@ -40,7 +40,7 @@ pub struct Reference {
   pub source: SourceId,
   pub span: Span,
   pub node: NodeId,
-  /// Written in a branch of a `#if` M3 could not decide, or in a module only
+  /// Written in a branch of a `#if` the scope pass could not decide, or in a module only
   /// such a branch reaches. The reference compiler never typechecks the branch
   /// it discards, so a name that misses here is not an error.
   pub speculative: bool,
@@ -449,8 +449,8 @@ pub struct Program<'a> {
   pending_usings: RefCell<Vec<PendingUsing>>,
   /// Nonzero while the branches of an undecidable `#if` are being admitted, so
   /// nothing reached from there is known to be real: its diagnostics are held
-  /// back until the condition can be decided (M6 runs the `#run`s most of them
-  /// wait on).
+  /// back until the condition can be decided, which usually means running the
+  /// `#run`s the condition waits on.
   speculative: Cell<u32>,
   /// Nonzero while declarations belong to one branch of an undecidable `#if`.
   /// Unlike `speculative` this stops at a module boundary: a module is loaded
@@ -1052,7 +1052,7 @@ impl<'a> Program<'a> {
 
   /// A module is loaded exactly once however it was reached, so its contents
   /// are not conditional even when the `#import` that pulled it in sits in a
-  /// `#if` branch M3 could not decide — and they do not belong to that branch
+  /// `#if` branch the scope pass could not decide — and they do not belong to that branch
   /// either, or a later `#import` naming the same module from outside every
   /// `#if` would reach declarations the checker then drops with the branch.
   fn load_module_files(&self, module: ScopeId, entry: &Path, origin: Option<(SourceId, Span)>) {
@@ -1739,8 +1739,8 @@ impl<'a> Program<'a> {
       ImportType::PathToFile => oj_source::resolve_file_module(&from, &name),
       ImportType::PathToDirectory => oj_source::resolve_directory_module(&from, &name),
       ImportType::FullText => {
-        // `#import,string "code"` has no file to resolve; M6 compiles the text
-        // once compile-time execution can produce it.
+        // `#import,string "code"` has no file to resolve: the text is compiled
+        // as a module of its own.
         self.tree.add_pending(scope, PendingProvider::FailedImport);
         return None;
       }
@@ -2304,7 +2304,7 @@ impl<'a> Program<'a> {
     }
   }
 
-  /// A `#if` M3 cannot decide still declares names, and the scope has to see
+  /// A `#if` the scope pass cannot decide still declares names, and the scope has to see
   /// all of them: every branch is admitted as conditional declarations, which
   /// neither collide with each other nor hide a real declaration, and the scope
   /// is marked as still able to gain names (**L§4.3**).

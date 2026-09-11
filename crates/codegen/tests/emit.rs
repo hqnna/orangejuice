@@ -1,4 +1,4 @@
-//! **M5**: what the LLVM module looks like.
+//! What the LLVM module looks like.
 //!
 //! The interesting decisions are the ones `oj-types` already made: aggregates
 //! are byte arrays with an explicit alignment, a `bool` is a byte, and the
