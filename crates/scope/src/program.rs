@@ -1750,11 +1750,19 @@ impl<'a> Program<'a> {
       },
       ImportType::PathToFile => oj_source::resolve_file_module(&from, &name),
       ImportType::PathToDirectory => oj_source::resolve_directory_module(&from, &name),
+      // `#import,string "code"` has no file to resolve (**L§11.2**): the text
+      // becomes a module of its own, under an absolute path nothing is at, so
+      // that everything downstream — the loader, a `#load` inside it, a
+      // diagnostic about it — works the way it does for any other module. Two
+      // `#import,string`s of the same text name the same path and so the same
+      // module, the way two spellings of one file do.
       ImportType::FullText => {
-        // `#import,string "code"` has no file to resolve: the text is compiled
-        // as a module of its own.
-        self.tree.add_pending(scope, PendingProvider::FailedImport);
-        return None;
+        let path = self.text_module_path(&name);
+        self
+          .provided_texts
+          .borrow_mut()
+          .insert(path.clone(), name.clone());
+        oj_source::resolve_file_module(&from, &path.display().to_string())
       }
     };
 
@@ -1796,6 +1804,15 @@ impl<'a> Program<'a> {
     self.record_module(name, resolved.entry.clone(), module, ModuleKind::File);
     self.load_module_files(module, &resolved.entry, Some((source, span)));
     Some(module)
+  }
+
+  /// Where a `#import,string` module lives: nowhere, under a name its own text
+  /// decides, so that the same text is the same module.
+  fn text_module_path(&self, text: &str) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    text.hash(&mut hasher);
+    PathBuf::from(format!("/<import-string>/{:016x}.jai", hasher.finish()))
   }
 
   /// The module an `#import` was written in, which is `""` for the main

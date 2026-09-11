@@ -850,3 +850,28 @@ fn a_declaration_may_not_take_a_primitive_type_s_name() {
     );
   });
 }
+
+#[test]
+fn an_import_of_a_string_is_a_module_of_its_own() {
+  // `#import,string "code"` has no file to resolve (**L§11.2**); the text is
+  // a module, and the same text is the same module however often it is
+  // written.
+  let fixture = Fixture::new();
+  fixture.write(
+    "main.jai",
+    "Helper :: #import,string \"help :: () -> int { return 1; }\\n\";\n\
+     Again :: #import,string \"help :: () -> int { return 1; }\\n\";\n\
+     main :: () { Helper.help(); Again.help(); }\n",
+  );
+
+  resolve(&fixture, "main.jai", |program, _| {
+    assert_eq!(errors(program), Vec::<String>::new());
+    assert_eq!(undeclared(program), Vec::<String>::new());
+    let text_modules = program
+      .modules()
+      .iter()
+      .filter(|module| module.entry.starts_with("/<import-string>/"))
+      .count();
+    assert_eq!(text_modules, 1, "the same text is one module");
+  });
+}
