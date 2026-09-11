@@ -110,6 +110,11 @@ array_reset_keeping_memory :: (array: *[..] $T) {
     array.count = 0;
 }
 
+// The same for a view: it does not own its storage, so this only empties it.
+array_reset :: (array: *[] $T) {
+    array.count = 0;
+}
+
 array_reset :: (array: *[..] $T) {
     array_free(array);
 }
@@ -243,4 +248,63 @@ memmove_bytes :: (destination: *void, source: *void, count: s64) {
         to[index] = from[index];
         index -= 1;
     }
+}
+
+#scope_export
+
+// The remove-by-index and remove-by-value pair also take a view, since a
+// caller often has one rather than the resizable array behind it. Nothing is
+// freed either way: only the count moves.
+array_ordered_remove_by_index :: inline (array_pointer: *[] $T, index: s64) {
+    if index < 0 || index >= array_pointer.count  return;
+    moving := array_pointer.count - index - 1;
+    if moving  memcpy(array_pointer.data + index, array_pointer.data + index + 1, moving * size_of(T));
+    array_pointer.count -= 1;
+}
+
+array_unordered_remove_by_index :: inline (array_pointer: *[] $T, index: s64) {
+    if index < 0 || index >= array_pointer.count  return;
+    array_pointer.data[index] = array_pointer.data[array_pointer.count - 1];
+    array_pointer.count -= 1;
+}
+
+array_ordered_remove_by_value :: inline (array_pointer: *[] $T, item: T) -> bool {
+    index := array_find_index(array_pointer.*, item);
+    if index < 0  return false;
+    array_ordered_remove_by_index(array_pointer, index);
+    return true;
+}
+
+array_unordered_remove_by_value :: inline (array_pointer: *[] $T, item: T) -> bool {
+    index := array_find_index(array_pointer.*, item);
+    if index < 0  return false;
+    array_unordered_remove_by_index(array_pointer, index);
+    return true;
+}
+
+// Reserving without knowing the element type, for code that has only the
+// untyped header — which is what `maybe_grow` works from.
+array_reserve :: inline (array: *Resizable_Array, desired_items: s64, element_size: s64) {
+    if desired_items <= array.allocated  return;
+
+    allocator := ifx array.allocator.proc then array.allocator else context.allocator;
+    old_bytes := array.allocated * element_size;
+    new_bytes := desired_items * element_size;
+
+    memory: *void;
+    if array.data  memory = realloc(array.data, new_bytes, old_bytes, allocator);
+    else           memory = alloc(new_bytes, allocator);
+    if !memory  return;
+
+    array.data = memory;
+    array.allocated = desired_items;
+    array.allocator = allocator;
+}
+
+// Doubles an untyped array when it is full, which is what an `array_add` on
+// one amounts to.
+maybe_grow :: inline (array: *Resizable_Array, element_size: s64) {
+    if array.count < array.allocated  return;
+    wanted := ifx array.allocated then array.allocated * 2 else FIRST_ALLOCATION;
+    array_reserve(array, wanted, element_size);
 }

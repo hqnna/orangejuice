@@ -110,14 +110,14 @@ is_print :: (byte: u8) -> bool {
     return byte >= #char " " && byte < 127;
 }
 
-to_lower :: (byte: u8) -> u8 {
-    if byte >= #char "A" && byte <= #char "Z"  return byte + 32;
-    return byte;
+to_lower :: (c: u8) -> u8 {
+    if c >= #char "A" && c <= #char "Z"  return c + 32;
+    return c;
 }
 
-to_upper :: (byte: u8) -> u8 {
-    if byte >= #char "a" && byte <= #char "z"  return byte - 32;
-    return byte;
+to_upper :: (c: u8) -> u8 {
+    if c >= #char "a" && c <= #char "z"  return c - 32;
+    return c;
 }
 
 // ------------------------------------------------------------- to numbers ---

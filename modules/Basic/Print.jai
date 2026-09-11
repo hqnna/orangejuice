@@ -212,7 +212,7 @@ to_string :: (value: Any, allocator := context.allocator) -> string {
 // than the struct's own members.
 
 // a member and without them when it is the whole argument.
-print_item_to_builder :: (builder: *String_Builder, item: Any, inside_struct_or_array := false, may_be_uninitialized := false) {
+print_item_to_builder :: (builder: *String_Builder, item: Any, inside_struct_or_array := true, may_be_uninitialized := false) {
     append_any(builder, item, inside_struct_or_array);
 }
 
@@ -221,6 +221,42 @@ print_type_to_builder :: (builder: *String_Builder, info: *Type_Info) {
     append_type(builder, info);
 }
 
+
+// As many spaces as the current depth calls for.
+append_indentation :: (builder: *String_Builder, format: *FormatStruct) {
+    total := context.print_style.indentation_depth * format.indentation_width;
+    for 1..total  append(builder, #char " ");
+}
+
+
+// The public spelling of each, for a caller printing one thing by hand.
+print_array :: (builder: *String_Builder, any: Any, info_array: *Type_Info_Array, format: FormatArray, may_be_uninitialized := false) {
+    append_array(builder, any.value_pointer, info_array, format);
+}
+
+print_integer :: (builder: *String_Builder, format: FormatInt) {
+    copy := format;
+    append_format_int(builder, *copy);
+}
+
+print_float :: (builder: *String_Builder, format: FormatFloat) {
+    copy := format;
+    append_format_float(builder, copy.value, *copy);
+}
+
+print_bytes :: (a: *void, length: int, format_string := "% ") {
+    b := cast(*u8) a;
+    for 0..length - 1  print(format_string, formatInt(b[it], base = 16));
+    print("\n");
+}
+
+print_character :: (_c: u8) {
+    c := _c;
+    text: string;
+    text.data = *c;
+    text.count = 1;
+    write_string(text);
+}
 #scope_module
 
 // Walks the format string, taking one argument per `%`. An argument nobody
@@ -794,13 +830,6 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
     }
     append(builder, format.end_string);
 }
-
-// As many spaces as the current depth calls for.
-append_indentation :: (builder: *String_Builder, format: *FormatStruct) {
-    total := context.print_style.indentation_depth * format.indentation_width;
-    for 1..total  append(builder, #char " ");
-}
-
 // A long array is cut short rather than filling the terminal; -1 never stops.
 append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array, format: FormatArray) {
     count: s64;
@@ -838,35 +867,6 @@ append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array, 
     if limit && format.draw_separator_after_last_element  append(builder, format.separator);
     if stopped_early  append(builder, format.printing_stopped_early_string);
     append(builder, format.end_string);
-}
-
-// The public spelling of each, for a caller printing one thing by hand.
-print_array :: (builder: *String_Builder, any: Any, info_array: *Type_Info_Array, format: FormatArray, may_be_uninitialized := false) {
-    append_array(builder, any.value_pointer, info_array, format);
-}
-
-print_integer :: (builder: *String_Builder, any: Any, format: FormatInt) {
-    copy := format;
-    copy.value = any;
-    append_format_int(builder, *copy);
-}
-
-print_float :: (builder: *String_Builder, any: Any, format: FormatFloat) {
-    append_format_float(builder, any, *format);
-}
-
-print_bytes :: (a: *void, length: int, format_string := "% ") {
-    b := cast(*u8) a;
-    for 0..length - 1  print(format_string, formatInt(b[it], base = 16));
-    print("\n");
-}
-
-print_character :: (_c: u8) {
-    c := _c;
-    text: string;
-    text.data = *c;
-    text.count = 1;
-    write_string(text);
 }
 
 

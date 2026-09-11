@@ -157,6 +157,11 @@ temp :: Allocator.{temporary_allocator_proc, null};
 // name one thing, so a module written against any of them works.
 temporary_allocator :: temp;
 __temporary_allocator :: temporary_allocator_proc;
+// The bytes freed storage is stamped with when a program asks for it, so that
+// reading through a stale temporary pointer goes wrong loudly.
+RESET_STORAGE_STAMP    :: 0xdb;
+FREE_PAGE_STAMP        :: 0xdc;
+SET_STORAGE_MARK_STAMP :: 0xda;
 
 // Gives the arena back all at once. Anything `temp` handed out before this is
 // no longer valid (**L§10.4**).
@@ -164,14 +169,7 @@ reset_temporary_storage :: () {
     ts := context.temporary_storage;
     if !ts  return;
 
-    page := ts.overflow_pages;
-    while page {
-        next := page.next;
-        allocator := page.allocator;
-        free(page, allocator);
-        page = next;
-    }
-    ts.overflow_pages = null;
+    free_pages_down_to(ts, null);
 
     ts.data = ts.original_data;
     ts.size = ts.original_size;
@@ -179,9 +177,115 @@ reset_temporary_storage :: () {
     ts.total_bytes_occupied = 0;
 }
 
+// Where temporary storage had got to, so that everything taken after this
+// point can be given back without disturbing what was there before.
+Temporary_Storage_State :: struct {
+    top_overflow_page: *Temporary_Storage.Overflow_Page;
+    current_page_bytes_occupied: s64;
+    total_bytes_occupied: s64;
+}
+
+get_temporary_storage_mark :: inline () -> Temporary_Storage_State {
+    empty: Temporary_Storage_State;
+    ts := context.temporary_storage;
+    if !ts  return empty;
+
+    state: Temporary_Storage_State;
+    state.current_page_bytes_occupied = ts.current_page_bytes_occupied;
+    state.total_bytes_occupied        = ts.total_bytes_occupied;
+    state.top_overflow_page           = ts.overflow_pages;
+    return state;
+}
+
+// The usual shape is
+//
+//     mark := get_temporary_storage_mark();
+//     defer set_temporary_storage_mark(mark);
+//
+// or the `auto_release_temp` macro, which is those two lines.
+set_temporary_storage_mark :: inline (state: Temporary_Storage_State, loc := #caller_location) {
+    ts := context.temporary_storage;
+    if !ts  return;
+
+    free_pages_down_to(ts, state.top_overflow_page);
+    ts.last_set_mark_location = loc;
+
+    if state.top_overflow_page {
+        page := state.top_overflow_page;
+        ts.data = cast(*u8) page + size_of(Temporary_Storage.Overflow_Page);
+        ts.size = page.size;
+    } else {
+        ts.data = ts.original_data;
+        ts.size = ts.original_size;
+    }
+
+    ts.current_page_bytes_occupied = state.current_page_bytes_occupied;
+    ts.total_bytes_occupied        = state.total_bytes_occupied;
+}
+
+auto_release_temp :: (loc := #caller_location) #expand {
+    __mark := get_temporary_storage_mark();
+    `defer set_temporary_storage_mark(__mark, loc);
+}
+
 talloc :: (size: s64) -> *void {
     return alloc(size, temp);
 }
+
+// ------------------------------------------------------------ allocators ---
+
+// A heap of its own from an allocator that can make one. An allocator that
+// cannot hands back itself, which is the answer that keeps a caller working.
+create_heap :: (a: Allocator) -> Allocator {
+    if !a.proc  return a;
+    data := a.proc(.CREATE_HEAP, 0, 0, null, a.data);
+    if !data  return a;
+    result: Allocator;
+    result.proc = a.proc;
+    result.data = data;
+    return result;
+}
+
+destroy_heap :: (b: Allocator) {
+    if !b.proc  return;
+    b.proc(.DESTROY_HEAP, 0, 0, null, b.data);
+}
+
+// What an allocator says it can do, and what it calls itself. An allocator
+// that does not answer the question is treated as having no special powers.
+get_capabilities :: (b: Allocator) -> (caps: Allocator_Caps, name: string) {
+    if !b.proc  return 0, "";
+    answer := b.proc(.CAPS, 0, 0, null, b.data);
+    return cast,no_check(Allocator_Caps) answer, "";
+}
+
+// Stores the context's allocator in a data structure that will outlive the
+// call that made it, so that it can free what it allocated without the caller
+// having to push the same allocator again. `[..]` arrays, Hash_Table and
+// Bucket_Array all do this.
+remember_allocators :: (data: *$T) {
+    if context.allocator.proc  data.allocator = context.allocator;
+}
+
+// A program with no memory debugger has nothing to tell it, so these are the
+// no-ops that let code annotate itself either way.
+Memory_Debugger_Interface :: struct {
+    report_allocation:   (memory: *void, size: s64) -> ();
+    report_deallocation: (memory: *void) -> ();
+}
+
+this_allocation_is_not_a_leak :: (memory: *void) {
+}
+
+this_allocation_leaks_todo :: (memory: *void) {
+}
+
+this_allocation_does_not_propagate_leak_ownership :: (memory: *void) {
+}
+
+memory_visualizer_per_frame_update :: () {
+}
+
 
 // Makes `allocator` the one the rest of this block allocates from, putting
 // back whatever was there when the block ends. It is a macro rather than a
@@ -204,10 +308,7 @@ push_allocator :: (proc: Allocator_Proc, data: *void) #expand {
     `defer context.allocator = old_allocator;
 }
 
-#scope_module
-
-TEMPORARY_ALIGNMENT :: 8;
-
+// Bytes straight from the arena, without going through an `Allocator`.
 temporary_alloc :: (requested_size: s64) -> *void {
     if requested_size <= 0  return null;
     ts := context.temporary_storage;
@@ -224,6 +325,10 @@ temporary_alloc :: (requested_size: s64) -> *void {
     if ts.total_bytes_occupied > ts.high_water_mark  ts.high_water_mark = ts.total_bytes_occupied;
     return memory;
 }
+
+#scope_module
+
+TEMPORARY_ALIGNMENT :: 8;
 
 TEMPORARY_PAGE_SIZE :: 65536;
 
@@ -467,4 +572,185 @@ assert :: (condition: bool, format := "", args: ..Any, loc := #caller_location) 
 
 exit :: (status: s32) {
     Linux.exit(status);
+}
+
+// Frees every overflow page above `page`, leaving `page` itself in place.
+// Passing null frees them all.
+free_pages_down_to :: (ts: *Temporary_Storage, page: *Temporary_Storage.Overflow_Page) {
+    current := ts.overflow_pages;
+    while current != page {
+        if !current  break;
+        next := current.next;
+        allocator := current.allocator;
+        free(current, allocator);
+        current = next;
+    }
+    ts.overflow_pages = page;
+}
+
+#scope_export
+
+// -------------------------------------------------------- stack traces ---
+//
+// Each of these walks the chain `context.stack_trace` heads, innermost first.
+// A node whose `info` is null belongs to a procedure the build did not keep
+// information for, and is skipped rather than printed as a blank.
+
+print_stack_trace :: (node: *Stack_Trace_Node, prefix: string = "", to_standard_error := true) {
+    walk := node;
+    while walk {
+        if walk.info {
+            if prefix.count  write_string(prefix, to_standard_error);
+            write_string("'", to_standard_error);
+            if walk.info.name  write_string(walk.info.name, to_standard_error);
+            write_string("' at ", to_standard_error);
+            if walk.info.location.fully_pathed_filename  write_string(walk.info.location.fully_pathed_filename, to_standard_error);
+            write_string(":", to_standard_error);
+            write_string(tprint("%", walk.line_number), to_standard_error);
+            write_string("\n", to_standard_error);
+        }
+        walk = walk.next;
+    }
+}
+
+log_stack_trace :: (node: *Stack_Trace_Node, log_flags := Log_Flags.ERROR, prefix := "") {
+    walk := node;
+    while walk {
+        if walk.info {
+            log("%'%' at %:%\n", prefix, walk.info.name, walk.info.location.fully_pathed_filename, walk.line_number, flags = log_flags);
+        }
+        walk = walk.next;
+    }
+}
+
+get_stack_trace_string :: (node: *Stack_Trace_Node) -> string {
+    if !node  return "";
+
+    builder: String_Builder;
+    walk := node;
+    while walk {
+        if walk.info {
+            print_to_builder(*builder, "'%' at %:%\n", walk.info.name, walk.info.location.fully_pathed_filename, walk.line_number);
+        }
+        walk = walk.next;
+    }
+    return builder_to_string(*builder);
+}
+
+// The chain flattened into an array, with the `next` pointers rewired to point
+// along it — so the copy outlives the frames the original nodes lived in.
+pack_stack_trace :: () -> [] Stack_Trace_Node {
+    return pack_stack_trace(context.stack_trace);
+}
+
+pack_stack_trace :: (node: *Stack_Trace_Node) -> [] Stack_Trace_Node {
+    result: [..] Stack_Trace_Node;
+    walk := node;
+    while walk {
+        array_add(*result, walk.*);
+        walk = walk.next;
+    }
+
+    for * result {
+        // The last one was already null and stays null.
+        if it.next  it.next = it + 1;
+    }
+    return result;
+}
+
+// --------------------------------------------------------- the odds and ends ---
+
+// `T`'s own initializer where it has one, and zeroes otherwise — which is what
+// a declaration without a value does (**L§4.6**).
+Initialize :: (memory: *$T) {
+    ini :: initializer_of(T);
+    #if ini  inline ini(memory);
+    else     memset(memory, 0, size_of(T));
+}
+
+// Whether a type is one `min`, `max` and `clamp` can compare, which is what
+// their `#modify` blocks ask.
+IsScalar :: (T: Type) -> bool {
+    info := cast(*Type_Info) T;
+    return info.type == .INTEGER || info.type == .FLOAT;
+}
+
+swap :: inline (a: $T, b: T) -> (T #must, T #must) #deprecated "Just use a1, b1 := b0, a0;" {
+    return b, a;
+}
+
+array_swap :: (array_a: *[..] $T, array_b: *[..] T) #deprecated "Use Swap() instead." {
+    Swap(array_a, array_b);
+}
+
+// The assertion machinery `assert` expands into, which a program can call to
+// report a failure the same way without writing the condition out.
+assert_helper :: (message := "", args: .. Any, loc := #caller_location) -> bool {
+    if context.handling_assertion_failure  return false;
+    context.handling_assertion_failure = true;
+
+    text := ifx args.count then tprint(message, ..args) else message;
+    Runtime_Support.assertion_failed(loc, text);
+
+    context.handling_assertion_failure = false;
+    return true;
+}
+
+sleep_milliseconds :: (milliseconds: s32) {
+    if milliseconds <= 0  return;
+    request: timespec;
+    request.tv_sec = milliseconds / 1000;
+    request.tv_nsec = (cast(s64) milliseconds % 1000) * 1_000_000;
+    remaining: timespec;
+    // A signal can cut the sleep short, and then what is left is slept again.
+    while nanosleep(*request, *remaining) != 0 {
+        if errno() != EINTR  break;
+        request = remaining;
+    }
+}
+
+// Where the process is running, or "" when it could not be found out.
+get_working_directory :: () -> (result: string) {
+    buffer: [4096] u8;
+    if !getcwd(buffer.data, cast(u64) buffer.count)  return "";
+    return copy_string(to_string(buffer.data));
+}
+
+set_working_directory :: (s: string) -> bool {
+    return chdir(to_c_string(s, temp)) == 0;
+}
+
+// Leading spaces off the front, for a caller walking a line by hand.
+eat_spaces :: (_s: string) -> string {
+    result := _s;
+    while result.count && (result[0] == #char " " || result[0] == #char "\t") {
+        result.data += 1;
+        result.count -= 1;
+    }
+    return result;
+}
+
+my_is_digit :: (c: u8) -> bool {
+    return c >= #char "0" && c <= #char "9";
+}
+
+// The digits starting at `cursor`, and where they stopped.
+parse_number :: (s: string, cursor: s64) -> (end_cursor: s64, sum: s64) {
+    at := cursor;
+    sum := 0;
+    while at < s.count && my_is_digit(s[at]) {
+        sum = sum * 10 + cast(s64) (s[at] - #char "0");
+        at += 1;
+    }
+    return at, sum;
+}
+
+// Takes `length` bytes off the front of `input` into `s`, when there are that
+// many. The mirror of appending a length-prefixed run.
+consume_u8_and_length :: (input: *string, s: *u8, length: s64) -> bool {
+    if input.count < length  return false;
+    if length  memcpy(s, input.data, length);
+    input.data += length;
+    input.count -= length;
+    return true;
 }
