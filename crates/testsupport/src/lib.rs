@@ -15,9 +15,10 @@ pub const MODULES_ENV: &str = "OJ_MODULES";
 /// The root of the cargo workspace this crate is built from, which is also the
 /// root of the distribution it ships.
 ///
-/// Canonical, because a module is identified by the path it was loaded from: a
-/// Preload reached as `crates/testsupport/../../modules` and one reached as
-/// `modules` would otherwise be two modules whose types do not match.
+/// Canonical so that a path printed in a diagnostic is readable rather than
+/// `crates/testsupport/../../modules/...`. The compiler does not need the help:
+/// `module_identity` in `oj-scope` is what makes two spellings of one file one
+/// module, and `a_module_reached_two_ways_is_one_module` holds it to that.
 pub fn workspace_root() -> &'static Path {
   static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
     let relative = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));

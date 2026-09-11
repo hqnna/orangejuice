@@ -269,3 +269,52 @@ fn a_crash_names_itself_and_walks_the_stack() {
     "the stack should be walked, but stderr was:\n{errors}"
   );
 }
+
+/// Running the compiler from the directory its own `modules/` sits in is the
+/// shape the portable tarball unpacks into, and it used to fail: the import
+/// path holds `<dir of the first file>/modules` and `<distribution>/modules`,
+/// which are then the same directory spelled relatively and absolutely. The
+/// compiler imports `Runtime_Support` on the program's behalf under one
+/// spelling and the program imports it under the other, and two copies of one
+/// module declare two nominal types of the same name — which surfaces far from
+/// the cause, as `Type wanted: *Temporary_Storage; type given:
+/// *Temporary_Storage`.
+#[test]
+fn a_module_reached_two_ways_is_one_module() {
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  // A distribution laid out the way the release tarball is: `modules/` beside
+  // the program being compiled.
+  let modules = directory.path().join("modules");
+  std::os::unix::fs::symlink(oj_testsupport::modules(), &modules)
+    .expect("the modules link should be creatable");
+  let path = directory.path().join("main.jai");
+  std::fs::write(
+    &path,
+    "#import \"Basic\";\nmain :: () { print(\"one module\\n\"); }\n",
+  )
+  .expect("the input should be writable");
+
+  // SAFETY: cargo runs each integration test binary in its own process, and
+  // nothing else in this one reads it.
+  unsafe { std::env::set_var(oj_testsupport::MODULES_ENV, &modules) };
+
+  let options = oj_driver::BuildOptions {
+    output_path: Some(directory.path().to_path_buf()),
+    ..oj_driver::BuildOptions::new()
+  };
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "one module\n");
+}

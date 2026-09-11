@@ -356,6 +356,19 @@ struct ModuleKey {
   instance: u32,
 }
 
+/// What identifies a module file, whatever it was reached as.
+///
+/// Two spellings of one file are one module: a short name resolved against the
+/// import path, the absolute path a metaprogram provided, and the relative one
+/// that comes of running the compiler from the directory its modules sit in
+/// all name the same module (**C§3.3**). Getting this wrong does not fail
+/// where the file is read — it fails later, as `Type wanted:
+/// *Temporary_Storage; type given: *Temporary_Storage`, because the two copies
+/// declare two nominal types of the same name.
+fn module_identity(entry: &Path) -> PathBuf {
+  entry.canonicalize().unwrap_or_else(|_| entry.to_path_buf())
+}
+
 pub struct Program<'a> {
   sources: &'a SourceMap,
   interner: &'a Interner,
@@ -841,7 +854,7 @@ impl<'a> Program<'a> {
       return;
     };
     let key = ModuleKey {
-      entry: resolved.entry.clone(),
+      entry: module_identity(&resolved.entry),
       parameters: String::new(),
       instance: 0,
     };
@@ -1742,14 +1755,7 @@ impl<'a> Program<'a> {
     } else {
       0
     };
-    // Two spellings of one file are one module: a short name resolved against
-    // the import path and the absolute path a metaprogram provided for the
-    // same file name the same module, which is what makes `Replace3.procedure
-    // == Flathead.procedure` (**C§3.3**).
-    let entry = resolved
-      .entry
-      .canonicalize()
-      .unwrap_or_else(|_| resolved.entry.clone());
+    let entry = module_identity(&resolved.entry);
     let key = ModuleKey {
       entry: entry.clone(),
       parameters: self.parameter_text(parsed, &import, source),
