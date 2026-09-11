@@ -18,7 +18,7 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 - The native x64 backend (`backend = .X64` is accepted and mapped to LLVM with a warning).
 - A bytecode interpreter; compile-time execution uses ORC JIT (see §6.5 for the consequences).
 - The interactive bytecode debugger (`-debugger` prints a stack trace and exits).
-- CodeView debug info; `use_visual_studio_message_format`/`natvis` are accepted no-ops.
+- CodeView debug info; `natvis` is an accepted no-op. `use_visual_studio_message_format` does switch the diagnostic layout (**C§12**); what is *not* implemented is ANSI colour, so `-no_color` is a no-op because nothing is coloured to begin with.
 - `#dynamic_specialize`, `#cpp_method`/`#cpp_return_type_is_non_pod` beyond Itanium-ABI passthrough, relative pointers (removed from the language anyway).
 - Performance parity with the reference compiler in the first releases (correctness first; architecture must not preclude it).
 
@@ -153,10 +153,10 @@ Effects name `Build_Options` fields (**C§4**) on the target workspace unless st
 | `-no_split` | — | `llvm_options.enable_split_modules = false` |
 | `-output_ir` | — | `llvm_options.output_llvm_ir` and `output_llvm_ir_before_optimizations` |
 | `-debug_for` | — | `debug_for_expansions = true` |
-| `-msvc_format` | — | `use_visual_studio_message_format = true` |
+| `-msvc_format` | — | `use_visual_studio_message_format = true`: `path(line,col): severity: message` (**C§12**) |
 | `-natvis` | — | `use_natvis_compatible_types = true` (accepted no-op, §2) |
 | `-no_backtrace_on_crash` | — | `backtrace_on_crash = .OFF` |
-| `-no_color` | — | `use_ansi_color = false` |
+| `-no_color` | — | `use_ansi_color = false`; nothing is coloured to begin with (§2) |
 | `-verbose` | — | the metaprogram logs what it is doing |
 | `-version` | — | print `compiler_get_version_info`; exits 0 when no input follows |
 | `-help`, `-?` | — | print the metaprogram's `HELP_STRING`, which lives in `modules/Default_Metaprogram.jai` |

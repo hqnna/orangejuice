@@ -300,6 +300,11 @@ fn run_workspace_once(
     },
     ..Report::default()
   };
+  // `-msvc_format` is what an editor that parses MSVC output reads (**C§4**).
+  let style = match options.visual_studio_format {
+    true => oj_diag::Style::VisualStudio,
+    false => oj_diag::Style::Plain,
+  };
   let render = |diagnostics: &[oj_diag::Diagnostic], report: &mut Report| {
     for diagnostic in diagnostics {
       report.errors += usize::from(diagnostic.is_error());
@@ -310,7 +315,9 @@ fn run_workspace_once(
         continue;
       }
       let file = sources.file(diagnostic.source);
-      report.diagnostics.push(oj_diag::render(diagnostic, &file));
+      report
+        .diagnostics
+        .push(oj_diag::render_with(diagnostic, &file, style));
     }
   };
   render(&program.diagnostics(), &mut report);
