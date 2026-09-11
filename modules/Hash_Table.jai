@@ -236,7 +236,8 @@ table_keys_match :: (table: *Table($K, $V), a: K, b: K) -> bool {
 table_allocate :: (table: *Table($K, $V), size: s64) {
     allocator := table_allocator(table);
     bytes := size * size_of(type_of(table.entries[0]));
-    memory := alloc_zeroed(bytes, allocator);
+    memory := alloc(bytes, allocator);
+    if memory  memset(memory, 0, bytes);
     if !memory  return;
 
     table.entries.data = cast(*type_of(table.entries[0])) memory;

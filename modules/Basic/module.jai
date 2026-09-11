@@ -13,6 +13,7 @@
 #load "Array.jai";
 #load "Simple_String.jai";
 #load "String_Builder.jai";
+#load "Int128.jai";
 #load "Apollo_Time.jai";
 
 #module_parameters (ENABLE_ASSERT := true);
@@ -20,6 +21,9 @@
 #scope_module
 
 Linux :: #import "Linux";
+
+// `timespec`, `tm` and the clock and calendar calls Apollo_Time is built on.
+#import "POSIX";
 
 // `debug_break` and the check-failure procedures live there; **L§17** puts
 // them in Runtime_Support rather than here.
@@ -36,13 +40,18 @@ alloc :: (size: s64, allocator := context.allocator) -> *void {
     return proc(.ALLOCATE, size, 0, null, data);
 }
 
+#scope_module
+
 // Zeroed storage, which is what a declaration without a value gets
-// (**L§4.6**) and what most callers want.
+// (**L§4.6**) and what most callers want. The reference has no such name, so
+// it stays inside Basic; callers outside use `New` and `NewArray`.
 alloc_zeroed :: (size: s64, allocator := context.allocator) -> *void {
     memory := alloc(size, allocator);
     if memory  memset(memory, 0, size);
     return memory;
 }
+
+#scope_export
 
 realloc :: (memory: *void, new_size: s64, old_size: s64, allocator := context.allocator) -> *void {
     proc := ifx allocator.proc then allocator.proc else context.allocator.proc;
@@ -263,6 +272,156 @@ enum_values_as_s64 :: ($T: Type) -> [] s64 {
 
 min :: (a: $T, b: T) -> T { return ifx a < b then a else b; }
 max :: (a: $T, b: T) -> T { return ifx a > b then a else b; }
+
+// The capitalised spellings the reference also uses.
+Min :: min;
+Max :: max;
+
+// `x` brought inside `a`..`b`.
+clamp :: (x: $T, a: T, b: T) -> T {
+    if x < a  return a;
+    if x > b  return b;
+    return x;
+}
+
+// Rounds up to the next multiple of `alignment`, which is what placing a value
+// after another one in a buffer needs.
+align_forward :: (orig_size: s64, alignment: s64) -> s64 {
+    if alignment <= 1  return orig_size;
+    return (orig_size + alignment - 1) & ~(alignment - 1);
+}
+
+// --------------------------------------------------------- about integers ---
+
+// Whether `T` is an integer at all, and if so whether it is signed and how
+// wide — which is what a generic routine deciding how to read a value wants.
+is_integer_type :: ($T: Type) -> (is_integer: bool, is_signed: bool, bits: u8) {
+    info := type_info(T);
+    if info.type != .INTEGER  return false, false, 0;
+    integer := cast(*Type_Info_Integer) info;
+    return true, integer.signed, cast(u8) (integer.runtime_size * 8);
+}
+
+// The lowest and highest value `T` holds, in `T` itself.
+get_integer_range :: ($T: Type) -> (low: T, high: T) {
+    info := cast(*Type_Info_Integer) type_info(T);
+    bits := info.runtime_size * 8;
+    #if T == u64 {
+        return 0, 0xffff_ffff_ffff_ffff;
+    } else {
+        if info.signed {
+            high := (cast(s64) 1 << (bits - 1)) - 1;
+            return cast,no_check(T) ~high, cast,no_check(T) high;
+        }
+        return 0, cast,no_check(T) ((cast(u64) 1 << bits) - 1);
+    }
+}
+
+// `value` brought inside whatever `TargetType` can hold, rather than wrapped.
+clamp_to_another_integer_type :: (value: $SourceType, $TargetType: Type) -> TargetType {
+    low, high := get_integer_range(TargetType);
+    wide := cast,no_check(s64) value;
+    if wide < cast,no_check(s64) low   return low;
+    if wide > cast,no_check(s64) high  return high;
+    return cast,no_check(TargetType) value;
+}
+
+// Reads an integer of `size_in_bytes` through a pointer, widened to 64 bits.
+// The signed form sign-extends; the unsigned one does not.
+get_s64_from_void_pointer :: (pointer: *void, size_in_bytes: int) -> s64 {
+    if size_in_bytes == {
+        case 1; return (cast(*s8)  pointer).*;
+        case 2; return (cast(*s16) pointer).*;
+        case 4; return (cast(*s32) pointer).*;
+        case;   return (cast(*s64) pointer).*;
+    }
+}
+
+get_u64_from_void_pointer :: (pointer: *void, size_in_bytes: int) -> u64 {
+    if size_in_bytes == {
+        case 1; return (cast(*u8)  pointer).*;
+        case 2; return (cast(*u16) pointer).*;
+        case 4; return (cast(*u32) pointer).*;
+        case;   return (cast(*u64) pointer).*;
+    }
+}
+
+// ------------------------------------------------------------ about enums ---
+
+enum_range_given_info :: (info: *Type_Info_Enum) -> (low: s64, high: s64) {
+    if !info.values.count  return 0, 0;
+    low := info.values[0];
+    high := info.values[0];
+    for info.values {
+        if it < low   low = it;
+        if it > high  high = it;
+    }
+    return low, high;
+}
+
+enum_range :: ($t: Type) -> (low: s64, high: s64) {
+    return enum_range_given_info(cast(*Type_Info_Enum) type_info(t));
+}
+
+enum_highest_value :: ($t: Type) -> s64 {
+    low, high := enum_range(t);
+    return high;
+}
+
+// The members as values of the enum itself rather than as numbers, which is
+// what a `for` over an enum's members wants.
+enum_values_as_enum :: ($T: Type) -> [] T {
+    info := cast(*Type_Info_Enum) type_info(T);
+    result := NewArray(info.values.count, T, allocator = temp);
+    for info.values  result[it_index] = cast,no_check(T) it;
+    return result;
+}
+
+// ---------------------------------------------------------- about structs ---
+
+// The member with that name and where it sits. Only the struct's own members
+// are searched, so a name brought in by `using` is found through the member it
+// came through.
+get_field :: (info: *Type_Info_Struct, name: string) -> (member: *Type_Info_Struct_Member, offset_in_bytes: s64) {
+    if !info || info.type != .STRUCT  return null, 0;
+    for * member: info.members {
+        if member.name == name  return member, member.offset_in_bytes;
+    }
+    return null, 0;
+}
+
+// A type's name the way `print("%", T)` writes it, in temporary storage.
+type_to_string :: (info: *Type_Info) -> string {
+    builder: String_Builder;
+    init_string_builder(*builder, temp);
+    append_type(*builder, info);
+    return builder_to_string(*builder, temp);
+}
+
+// ----------------------------------------------------------- about arrays ---
+
+// The last element, without removing it. The caller is responsible for there
+// being one.
+peek :: inline (array: [] $T) -> T {
+    return array[array.count - 1];
+}
+
+peek_pointer :: inline (array: [] $T) -> *T {
+    return *array[array.count - 1];
+}
+
+// A view turned into a resizable array over the same elements. Nothing is
+// copied, so the result must not outlive what it was made from, and it must
+// not be grown unless `set_allocators` gave it one to grow with.
+resizable :: (a: [] $T, set_allocators := true) -> [..] T {
+    result: [..] T;
+    result.data = a.data;
+    result.count = a.count;
+    result.allocated = a.count;
+    if set_allocators  result.allocator = context.allocator;
+    return result;
+}
+
 
 Swap :: (a: *$T, b: *T) {
     temporary := a.*;

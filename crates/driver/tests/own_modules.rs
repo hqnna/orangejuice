@@ -123,7 +123,7 @@ fn a_context_member_a_module_added_keeps_the_default_it_declared() {
   ) else {
     return;
   };
-  assert_eq!(output, "6\n0.500000\n");
+  assert_eq!(output, "6\n0.5\n");
 }
 
 #[test]

@@ -126,7 +126,9 @@ first_free_slot :: (array: *Bucket_Array($T, $N)) -> Bucket_Locator {
 
 add_bucket :: (array: *Bucket_Array($T, $N)) -> bool {
     allocator := bucket_allocator(array);
-    memory := alloc_zeroed(size_of(Bucket_Array(T, N).Bucket), allocator);
+    bucket_bytes := size_of(Bucket_Array(T, N).Bucket);
+    memory := alloc(bucket_bytes, allocator);
+    if memory  memset(memory, 0, bucket_bytes);
     if !memory  return false;
     array.buckets.allocator = allocator;
     array_add(*array.buckets, cast(*Bucket_Array(T, N).Bucket) memory);

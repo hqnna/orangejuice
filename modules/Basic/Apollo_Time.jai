@@ -8,104 +8,169 @@
 //
 // Femtoseconds in 128 bits covers roughly ±5.4 million years at a resolution
 // finer than any clock reports, which is why the type never has to be widened
-// or the unit renegotiated. The epoch is not Unix's:
-// `APOLLO_TIME_FOR_JAN_1_1970` is the conversion.
+// or the unit renegotiated. It is `S128` under another name, so all the
+// arithmetic comes from there.
+//
+// The epoch is not Unix's: `APOLLO_TIME_FOR_JAN_1_1970` is the conversion.
 //
 
-Apollo_Time :: struct {
-    low:  u64;
-    high: s64;
-}
+Apollo_Time :: #type,isa S128;
 
-FEMTOSECONDS :: 1_000_000_000_000_000;
+// A value no real time can take, for a slot that has not been filled in.
+APOLLO_TIME_INVALID :: Apollo_Time.{0, 0x8000_0000_0000_0000};
 
 APOLLO_TIME_FOR_JAN_1_1970 :: Apollo_Time.{low = 0xdbd87f0edb7c8000, high = 0x300};
 
-// ------------------------------------------------------------- arithmetic ---
+FEMTOSECONDS :: 1_000_000_000_000_000;
 
-operator + :: (a: Apollo_Time, b: Apollo_Time) -> Apollo_Time {
-    result: Apollo_Time;
-    result.low = a.low + b.low;
-    result.high = a.high + b.high;
-    // The carry out of the low half is exactly the case where the sum wrapped.
-    if result.low < a.low  result.high += 1;
-    return result;
+Time_Zone :: enum u32 {
+    UTC   :: 0;
+    LOCAL :: 1;  // Whatever the system's local time zone is.
 }
 
-operator - :: (a: Apollo_Time, b: Apollo_Time) -> Apollo_Time {
-    result: Apollo_Time;
-    result.low = a.low - b.low;
-    result.high = a.high - b.high;
-    if a.low < b.low  result.high -= 1;
-    return result;
-}
+// The members say where they start counting because the answer differs between
+// systems, and a name that does not say invites the off-by-one.
+Calendar_Time :: struct {
+    year:                      s32;
+    month_starting_at_0:       s8;  // 0-11, so it indexes a month-name array.
+    day_of_month_starting_at_0: s8; // 0-30.
+    day_of_week_starting_at_0: s8;  // Sunday first.
+    hour:                      s8;
+    minute:                    s8;
+    second:                    s8;
+    millisecond:               s16;
 
-operator - :: (a: Apollo_Time) -> Apollo_Time {
-    zero: Apollo_Time;
-    return zero - a;
-}
-
-operator == :: (a: Apollo_Time, b: Apollo_Time) -> bool {
-    return a.low == b.low && a.high == b.high;
-}
-
-operator < :: (a: Apollo_Time, b: Apollo_Time) -> bool {
-    if a.high != b.high  return a.high < b.high;
-    return a.low < b.low;
-}
-
-operator > :: (a: Apollo_Time, b: Apollo_Time) -> bool {
-    if a.high != b.high  return a.high > b.high;
-    return a.low > b.low;
+    time_zone: Time_Zone;
 }
 
 // ------------------------------------------------------------ conversions ---
 
-seconds_to_apollo :: (seconds: s64) -> Apollo_Time {
-    return scale_to_apollo(seconds, FEMTOSECONDS);
+ConvertToApollo :: (m: s64, FACTOR: s64) #expand {
+    `return to_s128(m) * to_s128(FACTOR);
 }
 
-milliseconds_to_apollo :: (milliseconds: s64) -> Apollo_Time {
-    return scale_to_apollo(milliseconds, 1_000_000_000_000);
+seconds_to_apollo :: (m: s64) -> Apollo_Time {
+    ConvertToApollo(m, FEMTOSECONDS);
 }
 
-microseconds_to_apollo :: (microseconds: s64) -> Apollo_Time {
-    return scale_to_apollo(microseconds, 1_000_000_000);
+milliseconds_to_apollo :: (m: s64) -> Apollo_Time {
+    ConvertToApollo(m, 1_000_000_000_000);
 }
 
-nanoseconds_to_apollo :: (nanoseconds: s64) -> Apollo_Time {
-    return scale_to_apollo(nanoseconds, 1_000_000);
+microseconds_to_apollo :: (m: s64) -> Apollo_Time {
+    ConvertToApollo(m, 1_000_000_000);
 }
 
-// A fractional number of seconds. Only about 15 significant digits survive a
-// `float64`, so this is for durations rather than for timestamps.
+nanoseconds_to_apollo :: (m: s64) -> Apollo_Time {
+    ConvertToApollo(m, 1_000_000);
+}
+
+// How many whole `divisor`-sized units the time is. `success` is false when
+// the answer does not fit in an `s64` — for nanoseconds that means a span
+// longer than about 292 years.
+//
+// Without rounding this truncates toward zero, the way integer division does;
+// with it, a remainder past half the divisor moves the result away from zero.
+ConvertFromApollo :: inline (t: Apollo_Time, divisor: u64, $DO_ROUNDING: bool) -> (result: s64, success: bool) {
+    quotient, remainder, overflow := signed_divide_with_remainder(t, S128.{divisor, 0});
+
+    // A quotient that fits in an `s64` has a top half of all zeroes or all
+    // ones; anything else has spilled into the high bits.
+    failed := overflow || !(quotient.high == 0 || quotient.high == -1);
+
+    result := cast,no_check(s64) quotient.low;
+
+    #if DO_ROUNDING {
+        // The remainder is below the divisor, so its own high half is zero.
+        half := divisor / 2;
+        if t.high >= 0 {
+            if remainder.low > half || (divisor % 2 == 0 && remainder.low == half)  result += 1;
+        } else {
+            if remainder.low > half  result -= 1;
+        }
+    }
+
+    // The divisor is unsigned, so a good result has the same sign as `t`; a
+    // disagreement means the value overflowed on the way.
+    failed = failed || (result != 0 && ((t.high < 0) != (result < 0)));
+    return result, !failed;
+}
+
+to_seconds :: (t: Apollo_Time, $DO_ROUNDING := false) -> (result: s64, success: bool) {
+    return ConvertFromApollo(t, FEMTOSECONDS, DO_ROUNDING);
+}
+
+to_milliseconds :: (t: Apollo_Time, $DO_ROUNDING := false) -> (result: s64, success: bool) {
+    return ConvertFromApollo(t, 1_000_000_000_000, DO_ROUNDING);
+}
+
+to_microseconds :: (t: Apollo_Time, $DO_ROUNDING := false) -> (result: s64, success: bool) {
+    return ConvertFromApollo(t, 1_000_000_000, DO_ROUNDING);
+}
+
+to_nanoseconds :: (t: Apollo_Time, $DO_ROUNDING := false) -> (result: s64, success: bool) {
+    return ConvertFromApollo(t, 1_000_000, DO_ROUNDING);
+}
+
+// Seconds and the fraction of one, as a `float64`. Only about 15 significant
+// digits survive, so this is for durations rather than for timestamps.
+to_float64_seconds :: (input: Apollo_Time) -> (result: float64, success: bool) {
+    a := input;
+    if input.high < 0  a = -a;
+
+    seconds, ok := to_seconds(a);
+    if !ok  return 0, false;
+
+    // What is left after the whole seconds is below one second, so it fits in
+    // the low half on its own.
+    femto := a - seconds_to_apollo(seconds);
+    result := cast(float64) seconds + cast(float64) femto.low / cast(float64) FEMTOSECONDS;
+
+    if input.high < 0  result = -result;
+    return result, true;
+}
+
+// A fractional number of seconds, taken apart into its mantissa and exponent
+// so that the femtosecond count is exact rather than rounded through another
+// float.
 to_apollo :: (seconds: float64) -> Apollo_Time {
-    whole := cast(s64) seconds;
-    remainder := seconds - cast(float64) whole;
-    result := seconds_to_apollo(whole);
-    return result + Apollo_Time.{low = cast(u64) (remainder * cast(float64) FEMTOSECONDS), high = 0};
+    MANTISSA_BITS :: 52;
+    EXPONENT_MASK :: 0x7ff0_0000_0000_0000;
+
+    bits := (cast(*u64) *seconds).*;
+    exponent := cast(s16) ((bits & EXPONENT_MASK) >> MANTISSA_BITS);
+    exponent -= 1023;
+    // The mantissa is read as a whole number rather than a fraction, so the
+    // exponent shifts by its width too.
+    exponent -= MANTISSA_BITS;
+
+    MANTISSA_HIGH_BIT :: 1 << MANTISSA_BITS;
+    mantissa := (bits & (MANTISSA_HIGH_BIT - 1)) | MANTISSA_HIGH_BIT;
+
+    zero: Apollo_Time;
+    if !mantissa  return zero;
+
+    a := seconds_to_apollo(cast,no_check(s64) mantissa);
+
+    shift := exponent;
+    if shift < 0 {
+        shift = -shift;
+        if shift > 255  return zero;
+        a = a >> cast(u8) shift;
+    } else if shift {
+        if shift > 255  return zero;
+        a = a << cast(u8) shift;
+    }
+
+    if seconds < 0  a = -a;
+    return a;
 }
 
-// `success` is false when the answer does not fit in an `s64` — which for
-// nanoseconds means a span longer than about 292 years.
-to_nanoseconds :: (t: Apollo_Time) -> (result: s64, success: bool) {
-    return scale_from_apollo(t, 1_000_000);
-}
-
-to_microseconds :: (t: Apollo_Time) -> (result: s64, success: bool) {
-    return scale_from_apollo(t, 1_000_000_000);
-}
-
-to_milliseconds :: (t: Apollo_Time) -> (result: s64, success: bool) {
-    return scale_from_apollo(t, 1_000_000_000_000);
-}
-
-to_seconds :: (t: Apollo_Time) -> float64 {
-    nanoseconds, ok := to_nanoseconds(t);
-    if ok  return cast(float64) nanoseconds * 1.0e-9;
-    // Too large for nanoseconds; seconds still fit comfortably.
-    seconds, seconds_ok := scale_from_apollo(t, FEMTOSECONDS);
-    return cast(float64) seconds;
+// -1, 0 or 1, for handing to a sort that wants a three-way comparison.
+compare_apollo_times :: (a: Apollo_Time, b: Apollo_Time) -> s32 {
+    if a < b   return -1;
+    if a == b  return 0;
+    return 1;
 }
 
 // -------------------------------------------------------------- the clocks ---
@@ -113,113 +178,150 @@ to_seconds :: (t: Apollo_Time) -> float64 {
 // The wall clock, which is what a timestamp written down and read back later
 // must come from. It can step backwards when the machine's time is corrected.
 current_time_consensus :: () -> Apollo_Time {
-    seconds, nanoseconds := clock_reading(CLOCK_REALTIME);
-    return APOLLO_TIME_FOR_JAN_1_1970 + seconds_to_apollo(seconds) + nanoseconds_to_apollo(nanoseconds);
+    ts: timespec;
+    clock_gettime(CLOCK_REALTIME, *ts);
+    return timespec_to_apollo(ts);
 }
 
 // A reading from an arbitrary origin that only ever goes forward, which is the
 // one to measure an elapsed span with.
 current_time_monotonic :: () -> Apollo_Time {
-    seconds, nanoseconds := clock_reading(CLOCK_MONOTONIC);
-    return seconds_to_apollo(seconds) + nanoseconds_to_apollo(nanoseconds);
+    ts: timespec;
+    clock_gettime(CLOCK_MONOTONIC_RAW, *ts);
+    return timespec_to_apollo(ts);
+}
+
+// How long the program has been running, in seconds.
+seconds_since_init :: () -> float64 {
+    now := current_time_monotonic();
+    elapsed, ok := to_float64_seconds(now - program_start_time);
+    if !ok  return 0;
+    return elapsed;
+}
+
+timespec_to_apollo :: (ts: timespec) -> Apollo_Time {
+    return seconds_to_apollo(ts.tv_sec) + nanoseconds_to_apollo(ts.tv_nsec) + APOLLO_TIME_FOR_JAN_1_1970;
+}
+
+// The reverse. A `timespec` cannot go negative, so a time before 1970 comes
+// back with `success` false.
+to_timespec :: (at: Apollo_Time) -> (ts: timespec, success: bool) {
+    empty: timespec;
+    a := at - APOLLO_TIME_FOR_JAN_1_1970;
+
+    divided := a / FEMTOSECONDS;
+    seconds: s64;
+    if divided.high == 0 {
+        // 63 bits rather than 64: the top one is the sign.
+        if divided.low & 0x8000_0000_0000_0000  return empty, false;
+        seconds = cast(s64) divided.low;
+    } else if divided.high == -1 {
+        seconds = cast,no_check(s64) divided.low;
+    } else {
+        return empty, false;
+    }
+
+    femto := a - seconds_to_apollo(seconds);
+    nanoseconds := (cast(s64) femto.low + 500_000) / 1_000_000;
+
+    ts: timespec;
+    ts.tv_sec = seconds;
+    ts.tv_nsec = nanoseconds;
+    if seconds < 0  return ts, false;
+    return ts, true;
+}
+
+// ------------------------------------------------------------- the calendar ---
+
+to_calendar :: (at: Apollo_Time, time_zone := Time_Zone.UTC) -> Calendar_Time {
+    empty: Calendar_Time;
+    ts, ok := to_timespec(at);
+    if !ok {
+        log("Error: Input Apollo_Time was out of range when calling to_calendar(). We are not putting failure into the API though, because long-term in an OS-independent scenario we should not have this kind of failure case, maybe.\n");
+        return empty;
+    }
+
+    NANO_PER_MILLI :: 1_000_000;
+    milliseconds := cast,trunc(s16) ((ts.tv_nsec + NANO_PER_MILLI / 2) / NANO_PER_MILLI);
+    if milliseconds >= 1000 {
+        // Rounding can reach a full second, and carrying that here — before
+        // the seconds are broken down — saves carrying it through minutes,
+        // hours and days afterwards.
+        milliseconds = 0;
+        ts.tv_sec += 1;
+    }
+
+    parts: tm;
+    seconds := ts.tv_sec;
+    if time_zone == .LOCAL  localtime_r(*seconds, *parts);
+    else                    gmtime_r(*seconds, *parts);
+
+    result: Calendar_Time;
+    result.year = parts.tm_year + 1900;
+    result.month_starting_at_0 = cast,trunc(s8) parts.tm_mon;
+    result.day_of_month_starting_at_0 = cast,trunc(s8) max(0, parts.tm_mday - 1);
+    result.day_of_week_starting_at_0 = cast,trunc(s8) parts.tm_wday;
+    result.hour = cast,trunc(s8) parts.tm_hour;
+    result.minute = cast,trunc(s8) parts.tm_min;
+    result.second = cast,trunc(s8) parts.tm_sec;
+    result.millisecond = milliseconds;
+    result.time_zone = time_zone;
+    return result;
+}
+
+calendar_to_apollo :: (ct: Calendar_Time) -> Apollo_Time {
+    empty: Apollo_Time;
+
+    parts: tm;
+    parts.tm_year = ct.year - 1900;
+    parts.tm_mon = ct.month_starting_at_0;
+    parts.tm_mday = ct.day_of_month_starting_at_0 + 1;
+    parts.tm_hour = ct.hour;
+    parts.tm_min = ct.minute;
+    parts.tm_sec = ct.second;
+    // Let the C library work out whether daylight saving was in effect.
+    parts.tm_isdst = -1;
+
+    seconds: time_t;
+    if ct.time_zone == .LOCAL  seconds = timelocal(*parts);
+    else                       seconds = timegm(*parts);
+    if seconds == -1  return empty;
+
+    return seconds_to_apollo(seconds) + milliseconds_to_apollo(ct.millisecond) + APOLLO_TIME_FOR_JAN_1_1970;
+}
+
+// "20 July 1969, 20:17:39", in temporary storage. English only for now.
+calendar_to_string :: (ct: Calendar_Time) -> string {
+    MONTH_NAMES :: string.["January", "February", "March", "April", "May", "June",
+                           "July", "August", "September", "October", "November", "December"];
+
+    month := clamp(cast(s64) ct.month_starting_at_0, 0, 11);
+    two :: (x: Any) -> FormatInt { return formatInt(x, minimum_digits = 2); }
+
+    return tprint("% % %, %:%:%", ct.day_of_month_starting_at_0 + 1, MONTH_NAMES[month], ct.year,
+                  two(ct.hour), two(ct.minute), two(ct.second));
+}
+
+// "1969-07-20T20:17:39.000Z", in temporary storage.
+calendar_to_iso_string :: (ct: Calendar_Time) -> string {
+    two   :: (x: Any) -> FormatInt { return formatInt(x, minimum_digits = 2); }
+    three :: (x: Any) -> FormatInt { return formatInt(x, minimum_digits = 3); }
+
+    zone := ifx ct.time_zone == .UTC then "Z" else "";
+
+    builder: String_Builder;
+    init_string_builder(*builder, temp);
+    print_to_builder(*builder, "%-%-%T%:%:%.%", ct.year, two(ct.month_starting_at_0 + 1),
+                     two(ct.day_of_month_starting_at_0 + 1), two(ct.hour), two(ct.minute),
+                     two(ct.second), three(ct.millisecond));
+    append(*builder, zone);
+    return builder_to_string(*builder, temp);
 }
 
 #scope_module
 
-CLOCK_REALTIME  :: 0;
-CLOCK_MONOTONIC :: 1;
+// What `seconds_since_init` measures from. A global rather than something the
+// runtime fills in, so that a program which never asks does not pay for it.
+program_start_time := #run current_time_monotonic();
 
-Apollo_Timespec :: struct {
-    tv_sec:  s64;
-    tv_nsec: s64;
-}
-
-clock_gettime :: (clock: s32, spec: *Apollo_Timespec) -> s32 #foreign libc_apollo;
-
-libc_apollo :: #system_library "c";
-
-clock_reading :: (clock: s32) -> (seconds: s64, nanoseconds: s64) {
-    now: Apollo_Timespec;
-    if clock_gettime(clock, *now) != 0  return 0, 0;
-    return now.tv_sec, now.tv_nsec;
-}
-
-// `count` units of `femtoseconds_per_unit` each, as a 128-bit product.
-scale_to_apollo :: (count: s64, femtoseconds_per_unit: s64) -> Apollo_Time {
-    negative := count < 0;
-    magnitude: u64 = ifx negative then (~cast(u64) count) + 1 else cast(u64) count;
-
-    result := multiply_64(magnitude, cast(u64) femtoseconds_per_unit);
-    if negative  return -result;
-    return result;
-}
-
-// The reverse: how many whole units the time is, truncated toward zero.
-scale_from_apollo :: (t: Apollo_Time, femtoseconds_per_unit: s64) -> (result: s64, success: bool) {
-    negative := t.high < 0;
-    magnitude := ifx negative then -t else t;
-
-    quotient := divide_128(magnitude, cast(u64) femtoseconds_per_unit);
-    // Anything with a high half set, or a low half past the signed maximum,
-    // cannot be said in an s64.
-    if quotient.high != 0  return 0, false;
-    if quotient.low > 0x7fff_ffff_ffff_ffff  return 0, false;
-
-    value := cast(s64) quotient.low;
-    if negative  value = -value;
-    return value, true;
-}
-
-// 64 × 64 → 128, done in 32-bit halves so nothing overflows on the way.
-multiply_64 :: (a: u64, b: u64) -> Apollo_Time {
-    a_low  := a & 0xffff_ffff;
-    a_high := a >> 32;
-    b_low  := b & 0xffff_ffff;
-    b_high := b >> 32;
-
-    low_low   := a_low * b_low;
-    low_high  := a_low * b_high;
-    high_low  := a_high * b_low;
-    high_high := a_high * b_high;
-
-    // The two middle products each straddle the 32-bit boundary; their low
-    // halves join the bottom word and their high halves the top.
-    middle := (low_low >> 32) + (low_high & 0xffff_ffff) + (high_low & 0xffff_ffff);
-
-    result: Apollo_Time;
-    result.low = (low_low & 0xffff_ffff) | (middle << 32);
-    result.high = cast(s64) (high_high + (low_high >> 32) + (high_low >> 32) + (middle >> 32));
-    return result;
-}
-
-// Shift-and-subtract long division of a non-negative 128-bit value. One pass
-// over 128 bits: not the fastest way, but the one that is obviously right, and
-// a time conversion is not on anyone's inner loop.
-divide_128 :: (value: Apollo_Time, divisor: u64) -> Apollo_Time {
-    quotient: Apollo_Time;
-    if divisor == 0  return quotient;
-
-    remainder: u64 = 0;
-    bit := 127;
-    while bit >= 0 {
-        // The remainder cannot reach the top bit, because it is always less
-        // than the divisor before the shift.
-        remainder = (remainder << 1) | bit_at(value, bit);
-        if remainder >= divisor {
-            remainder -= divisor;
-            set_bit(*quotient, bit);
-        }
-        bit -= 1;
-    }
-    return quotient;
-}
-
-bit_at :: (value: Apollo_Time, bit: s64) -> u64 {
-    if bit >= 64  return (cast(u64) value.high >> cast(u64) (bit - 64)) & 1;
-    return (value.low >> cast(u64) bit) & 1;
-}
-
-set_bit :: (value: *Apollo_Time, bit: s64) {
-    if bit >= 64  value.high |= cast(s64) (cast(u64) 1 << cast(u64) (bit - 64));
-    else          value.low  |= cast(u64) 1 << cast(u64) bit;
-}
+#scope_export

@@ -75,11 +75,6 @@ array_unordered_remove_by_value :: (array: *[..] $T, value: T) -> bool {
     return true;
 }
 
-array_find_index :: (array: [] $T, value: T) -> s64 {
-    for array  if it == value  return it_index;
-    return -1;
-}
-
 // Whether it is there, and where. The index is -1 when it is not, so a caller
 // wanting only the answer can ignore the second value.
 array_find :: (array: [] $T, value: T) -> (found: bool, index: s64) {
@@ -192,6 +187,13 @@ array_copy :: (dest: *[..] $T, source: [] T) {
 }
 
 #scope_module
+
+// Where `value` sits, or -1. The reference has no such name, so it stays
+// inside Basic; `array_find` is the one callers reach for.
+array_find_index :: (array: [] $T, value: T) -> s64 {
+    for array  if it == value  return it_index;
+    return -1;
+}
 
 array_allocator :: (array: *[..] $T) -> Allocator {
     if array.allocator.proc  return array.allocator;

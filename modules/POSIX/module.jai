@@ -200,8 +200,39 @@ timespec :: struct {
     tv_nsec: s64;
 }
 
+CLOCK_MONOTONIC_RAW :: 4;
+
+time_t :: s64;
+
+// C's broken-down time. The members are C's, oddities included: the year
+// counts from 1900 and the month from zero.
+tm :: struct {
+    tm_sec:    s32;
+    tm_min:    s32;
+    tm_hour:   s32;
+    tm_mday:   s32;
+    tm_mon:    s32;
+    tm_year:   s32;
+    tm_wday:   s32;
+    tm_yday:   s32;
+    tm_isdst:  s32;
+    _pad:      s32;
+    tm_gmtoff: s64;
+    tm_zone:   *u8;
+}
+
 clock_gettime :: (clock: s32, result: *timespec) -> s32 #foreign libc;
 nanosleep     :: (request: *timespec, remaining: *timespec) -> s32 #foreign libc;
+
+// The `_r` forms write into storage the caller owns, which is what makes them
+// safe to call from more than one thread.
+gmtime_r    :: (t: *time_t, result: *tm) -> *tm #foreign libc;
+localtime_r :: (t: *time_t, result: *tm) -> *tm #foreign libc;
+
+// The reverse: broken-down time back to a count of seconds, read as UTC by
+// `timegm` and as local time by `timelocal`.
+timegm    :: (parts: *tm) -> time_t #foreign libc;
+timelocal :: (parts: *tm) -> time_t #foreign libc;
 
 // ---------------------------------------------------------------- memory ---
 

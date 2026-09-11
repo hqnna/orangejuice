@@ -370,68 +370,73 @@ append_pointer :: (builder: *String_Builder, pointer: *void) {
 // that reads back as the same float. Printing a float and parsing it again
 // does not always give what you started with; Ryū is the intended replacement
 // and is why `float_to_string` is its own file in the reference.
+// A float is written in plain positional notation, never an exponent, to
+// `context.print_style.default_float_digits` decimal places — and then the
+// trailing zeros come off, so `7.25` prints as `7.25` rather than `7.250000`
+// and `100.0` as `100`.
+//
+// The expansion is exact. A `float64` is a whole number of halves, so its
+// decimal form always terminates; `Decimal` below gets there by doubling or
+// halving a digit array, which is what lets `1e300` print all three hundred of
+// its digits rather than an approximation of them.
 append_float :: (builder: *String_Builder, data: *void, info: *Type_Info) {
-    value: float64;
-    if info.runtime_size == 4  value = cast(float64) (cast(*float32) data).*;
-    else                       value = (cast(*float64) data).*;
+    bits: u64;
+    if info.runtime_size == 4 {
+        // The single is widened first; its exact value is a double too, so
+        // nothing is lost and one path serves both.
+        wide := cast(float64) (cast(*float32) data).*;
+        bits = (cast(*u64) *wide).*;
+    } else {
+        bits = (cast(*u64) data).*;
+    }
 
-    if value != value {
-        append(builder, "NaN");
+    SIGN_BIT      :: 0x8000_0000_0000_0000;
+    EXPONENT_MASK :: 0x7ff0_0000_0000_0000;
+    MANTISSA_MASK :: 0x000f_ffff_ffff_ffff;
+    MANTISSA_BITS :: 52;
+
+    negative := (bits & SIGN_BIT) != 0;
+    exponent := cast(s64) ((bits & EXPONENT_MASK) >> MANTISSA_BITS);
+    mantissa := bits & MANTISSA_MASK;
+
+    // The sign is printed for a NaN too, which is what the reference does.
+    if negative  append(builder, #char "-");
+
+    if exponent == 0x7ff {
+        append(builder, ifx mantissa then "NaN" else "Inf");
         return;
     }
 
-    if value < 0 {
-        append(builder, #char "-");
-        value = -value;
+    if exponent == 0 {
+        // Subnormal, or zero: no implicit leading one, and the exponent is one
+        // above what the stored zero suggests.
+        if !mantissa {
+            append(builder, "0");
+            return;
+        }
+        exponent = 1;
+    } else {
+        mantissa |= cast(u64) 1 << MANTISSA_BITS;
+    }
+    // value == mantissa * 2^power
+    power := exponent - 1023 - MANTISSA_BITS;
+
+    decimal: Decimal;
+    decimal_set(*decimal, mantissa);
+    if power > 0 {
+        for 1..power  decimal_double(*decimal);
+    } else {
+        for 1..-power  decimal_halve(*decimal);
     }
 
-    INFINITY :: 0h7FF0000000000000;
-    if value == INFINITY {
-        append(builder, "Infinity");
-        return;
-    }
-
-    digits := context.print_style.default_float_digits;
-    if digits < 0  digits = 0;
-    if digits > 17 digits = 17;
-
-    scale: float64 = 1;
-    count := 0;
-    while count < digits {
-        scale *= 10;
-        count += 1;
-    }
-
-    // Round half away from zero at the last digit kept.
-    scaled := value * scale + 0.5;
-    // Anything past what a u64 holds is printed in whole units only.
-    if scaled >= 18_446_744_073_709_551_000.0 {
-        append_u64(builder, cast(u64) value);
-        return;
-    }
-
-    whole := cast(u64) scaled;
-    integral := whole;
-    fraction := cast(u64) 0;
-    divisor := cast(u64) scale;
-    if divisor > 0 {
-        integral = whole / divisor;
-        fraction = whole % divisor;
-    }
-
-    append_u64(builder, integral);
-    if digits <= 0  return;
-
-    append(builder, #char ".");
-    // Leading zeroes of the fraction are significant, so they are written out
-    // rather than lost by printing the number alone.
-    place := divisor / 10;
-    while place > 0 {
-        digit := (fraction / place) % 10;
-        append(builder, cast(u8) (#char "0" + digit));
-        place /= 10;
-    }
+    places := context.print_style.default_float_digits;
+    if places < 0   places = 0;
+    if places > 17  places = 17;
+    decimal_round(*decimal, places);
+    decimal_trim(*decimal);
+    decimal_append(builder, *decimal);
 }
+
 
 append_type :: (builder: *String_Builder, info: *Type_Info) {
     if !info {
@@ -569,4 +574,137 @@ append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array) 
         index += 1;
     }
     append(builder, "]");
+}
+
+// ------------------------------------------------------- exact decimals ---
+//
+// A digit array with a decimal point in it, and the three operations that turn
+// a binary float into its exact decimal form: set it to a whole number, double
+// it, halve it. Doubling never adds a fraction digit and halving adds at most
+// one, so the buffer bounds are known: a `float64`'s exponent reaches 971 up
+// and 1074 down, which is 309 integer digits and 1074 fraction digits at worst.
+
+DECIMAL_INTEGER_MAX  :: 320;
+DECIMAL_FRACTION_MAX :: 1080;
+
+Decimal :: struct {
+    // Most significant first. `count` digits in all, the last `fraction` of
+    // them after the point.
+    digits:   [DECIMAL_INTEGER_MAX + DECIMAL_FRACTION_MAX] u8;
+    count:    s64;
+    fraction: s64;
+}
+
+decimal_set :: (d: *Decimal, value: u64) {
+    d.count = 0;
+    d.fraction = 0;
+    if value == 0 {
+        d.digits[0] = 0;
+        d.count = 1;
+        return;
+    }
+
+    // Written most significant first, so the digits come out backwards and are
+    // reversed into place.
+    scratch: [20] u8;
+    n := 0;
+    remaining := value;
+    while remaining > 0 {
+        scratch[n] = cast(u8) (remaining % 10);
+        remaining /= 10;
+        n += 1;
+    }
+    for 0..n - 1  d.digits[it] = scratch[n - 1 - it];
+    d.count = n;
+}
+
+decimal_double :: (d: *Decimal) {
+    carry: u8 = 0;
+    at := d.count - 1;
+    while at >= 0 {
+        sum := d.digits[at] * 2 + carry;
+        d.digits[at] = sum % 10;
+        carry = sum / 10;
+        at -= 1;
+    }
+    if !carry  return;
+
+    // The carry needs a new digit at the front, so everything shifts along.
+    if d.count >= d.digits.count  return;
+    at = d.count;
+    while at > 0 {
+        d.digits[at] = d.digits[at - 1];
+        at -= 1;
+    }
+    d.digits[0] = carry;
+    d.count += 1;
+}
+
+decimal_halve :: (d: *Decimal) {
+    remainder: u8 = 0;
+    for 0..d.count - 1 {
+        current := remainder * 10 + d.digits[it];
+        d.digits[it] = current / 2;
+        remainder = current % 2;
+    }
+    // A remainder of one is exactly half, which is one more fraction digit.
+    if !remainder  return;
+    if d.count >= d.digits.count  return;
+    d.digits[d.count] = 5;
+    d.count += 1;
+    d.fraction += 1;
+}
+
+// Keeps `places` fraction digits, rounding half away from zero.
+decimal_round :: (d: *Decimal, places: s64) {
+    if d.fraction <= places  return;
+
+    keep := d.count - d.fraction + places;
+    round_up := d.digits[keep] >= 5;
+    d.count = keep;
+    d.fraction = places;
+
+    if !round_up  return;
+    at := d.count - 1;
+    while at >= 0 {
+        if d.digits[at] < 9 {
+            d.digits[at] += 1;
+            return;
+        }
+        d.digits[at] = 0;
+        at -= 1;
+    }
+    // Every digit carried, so the number grew a place: 9.99 -> 10.00.
+    if d.count >= d.digits.count  return;
+    at = d.count;
+    while at > 0 {
+        d.digits[at] = d.digits[at - 1];
+        at -= 1;
+    }
+    d.digits[0] = 1;
+    d.count += 1;
+}
+
+// Trailing zeros after the point carry no information, and neither does a
+// point with nothing after it.
+decimal_trim :: (d: *Decimal) {
+    while d.fraction > 0 && d.digits[d.count - 1] == 0 {
+        d.count -= 1;
+        d.fraction -= 1;
+    }
+}
+
+decimal_append :: (builder: *String_Builder, d: *Decimal) {
+    integer := d.count - d.fraction;
+
+    // Leading zeros are dropped, but a number below one keeps the single zero
+    // in front of its point.
+    start := 0;
+    while start < integer - 1 && d.digits[start] == 0  start += 1;
+
+    for start..integer - 1  append(builder, cast(u8) (#char "0" + d.digits[it]));
+    if !d.fraction  return;
+
+    append(builder, #char ".");
+    for integer..d.count - 1  append(builder, cast(u8) (#char "0" + d.digits[it]));
 }
