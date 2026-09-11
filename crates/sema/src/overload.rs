@@ -92,6 +92,10 @@ impl Checker<'_> {
     let candidates = self.live_candidates(candidates);
     let mut scored: Vec<(u32, Signature)> = Vec::new();
     let mut any_signature = false;
+    // A candidate one of whose own types is not worked out yet cannot be said
+    // to have refused these arguments: what it would have accepted is not
+    // known either. It is what a file resolved without its imports is full of.
+    let mut any_unknown = false;
     for candidate in &candidates {
       let signature = match self.signature_of(*candidate) {
         Some(signature) => signature,
@@ -112,6 +116,7 @@ impl Checker<'_> {
               return Resolved::Ambiguous;
             };
             any_signature = true;
+            any_unknown |= self.signature_mentions_unknown(&signature);
             if let Some(scored_candidate) = self.score_candidate(signature, arguments) {
               scored.push(scored_candidate);
             }
@@ -120,6 +125,7 @@ impl Checker<'_> {
         }
       };
       any_signature = true;
+      any_unknown |= self.signature_mentions_unknown(&signature);
       if let Some(scored_candidate) = self.score_candidate(signature, arguments) {
         scored.push(scored_candidate);
       }
@@ -129,7 +135,10 @@ impl Checker<'_> {
     }
 
     let Some(best) = scored.iter().map(|(distance, _)| *distance).min() else {
-      return Resolved::None;
+      return match any_unknown {
+        true => Resolved::Ambiguous,
+        false => Resolved::None,
+      };
     };
     let winners: Vec<Signature> = scored
       .into_iter()
@@ -158,6 +167,17 @@ impl Checker<'_> {
       return Resolved::Ambiguous;
     }
     Resolved::One(winners.into_iter().next().expect("checked above"))
+  }
+
+  /// Whether a candidate's own parameters or returns mention a type the front
+  /// end has not worked out.
+  fn signature_mentions_unknown(&self, signature: &Signature) -> bool {
+    signature
+      .parameters
+      .iter()
+      .map(|parameter| parameter.type_id)
+      .chain(signature.returns.iter().copied())
+      .any(|type_id| self.mentions_unknown(type_id))
   }
 
   pub(crate) fn accepts(&mut self, signature: &Signature, arguments: &[CallArgument]) -> bool {

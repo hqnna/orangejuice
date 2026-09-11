@@ -1105,11 +1105,11 @@ IFF :: enum s32 {
 
 __cmsg_nxthdr :: (__mhdr: *msghdr, __cmsg: *cmsghdr) -> *cmsghdr #foreign libc;
 __h_errno_location :: () -> *s32 #foreign libc;
-accept :: (__fd: s32, __addr: __SOCKADDR_ARG, __addr_len: *socklen_t) -> s32 #foreign libc;
-accept4 :: (__fd: s32, __addr: __SOCKADDR_ARG, __addr_len: *socklen_t, __flags: s32) -> s32 #foreign libc;
-bind :: (__fd: s32, __addr: __CONST_SOCKADDR_ARG, __len: socklen_t) -> s32 #foreign libc;
+accept :: (__fd: s32, __addr: *sockaddr, __addr_len: *socklen_t) -> s32 #foreign libc;
+accept4 :: (__fd: s32, __addr: *sockaddr, __addr_len: *socklen_t, __flags: s32) -> s32 #foreign libc;
+bind :: (__fd: s32, __addr: *sockaddr, __len: socklen_t) -> s32 #foreign libc;
 bindresvport :: (__sockfd: s32, __sock_in: *sockaddr_in) -> s32 #foreign libc;
-connect :: (__fd: s32, __addr: __CONST_SOCKADDR_ARG, __len: socklen_t) -> s32 #foreign libc;
+connect :: (__fd: s32, __addr: *sockaddr, __len: socklen_t) -> s32 #foreign libc;
 endhostent :: () -> void #foreign libc;
 endnetent :: () -> void #foreign libc;
 endnetgrent :: () -> void #foreign libc;
@@ -1138,7 +1138,7 @@ getnetent :: () -> *netent #foreign libc;
 getnetent_r :: (__result_buf: *netent, __buf: *u8, __buflen: size_t, __result: **netent, __h_errnop: *s32) -> s32 #foreign libc;
 getnetgrent :: (__hostp: **u8, __userp: **u8, __domainp: **u8) -> s32 #foreign libc;
 getnetgrent_r :: (__hostp: **u8, __userp: **u8, __domainp: **u8, __buffer: *u8, __buflen: size_t) -> s32 #foreign libc;
-getpeername :: (__fd: s32, __addr: __SOCKADDR_ARG, __len: *socklen_t) -> s32 #foreign libc;
+getpeername :: (__fd: s32, __addr: *sockaddr, __len: *socklen_t) -> s32 #foreign libc;
 getprotobyname :: (__name: *u8) -> *protoent #foreign libc;
 getprotobyname_r :: (__name: *u8, __result_buf: *protoent, __buf: *u8, __buflen: size_t, __result: **protoent) -> s32 #foreign libc;
 getprotobynumber :: (__proto: s32) -> *protoent #foreign libc;
@@ -1151,7 +1151,7 @@ getservbyport :: (__port: s32, __proto: *u8) -> *servent #foreign libc;
 getservbyport_r :: (__port: s32, __proto: *u8, __result_buf: *servent, __buf: *u8, __buflen: size_t, __result: **servent) -> s32 #foreign libc;
 getservent :: () -> *servent #foreign libc;
 getservent_r :: (__result_buf: *servent, __buf: *u8, __buflen: size_t, __result: **servent) -> s32 #foreign libc;
-getsockname :: (__fd: s32, __addr: __SOCKADDR_ARG, __len: *socklen_t) -> s32 #foreign libc;
+getsockname :: (__fd: s32, __addr: *sockaddr, __len: *socklen_t) -> s32 #foreign libc;
 getsockopt :: (__fd: s32, __level: s32, __optname: s32, __optval: *void, __optlen: *socklen_t) -> s32 #foreign libc;
 getsourcefilter :: (__s: s32, __interface_addr: uint32_t, __group: *sockaddr, __grouplen: socklen_t, __fmode: *uint32_t, __numsrc: *uint32_t, __slist: *sockaddr_storage) -> s32 #foreign libc;
 herror :: (__str: *u8) -> void #foreign libc;
@@ -1202,7 +1202,7 @@ pselect :: (__nfds: s32, __readfds: *fd_set, __writefds: *fd_set, __exceptfds: *
 rcmd :: (__ahost: **u8, __rport: u16, __locuser: *u8, __remuser: *u8, __cmd: *u8, __fd2p: *s32) -> s32 #foreign libc;
 rcmd_af :: (__ahost: **u8, __rport: u16, __locuser: *u8, __remuser: *u8, __cmd: *u8, __fd2p: *s32, __af: sa_family_t) -> s32 #foreign libc;
 recv :: (__fd: s32, __buf: *void, __n: size_t, __flags: s32) -> ssize_t #foreign libc;
-recvfrom :: (__fd: s32, __buf: *void, __n: size_t, __flags: s32, __addr: __SOCKADDR_ARG, __addr_len: *socklen_t) -> ssize_t #foreign libc;
+recvfrom :: (__fd: s32, __buf: *void, __n: size_t, __flags: s32, __addr: *sockaddr, __addr_len: *socklen_t) -> ssize_t #foreign libc;
 recvmmsg :: (__fd: s32, __vmessages: *mmsghdr, __vlen: u32, __flags: s32, __tmo: *timespec) -> s32 #foreign libc;
 recvmsg :: (__fd: s32, __message: *msghdr, __flags: s32) -> ssize_t #foreign libc;
 rexec :: (__ahost: **u8, __rport: s32, __name: *u8, __pass: *u8, __cmd: *u8, __fd2p: *s32) -> s32 #foreign libc;
@@ -1215,7 +1215,7 @@ select :: (__nfds: s32, __readfds: *fd_set, __writefds: *fd_set, __exceptfds: *f
 send :: (__fd: s32, __buf: *void, __n: size_t, __flags: s32) -> ssize_t #foreign libc;
 sendmmsg :: (__fd: s32, __vmessages: *mmsghdr, __vlen: u32, __flags: s32) -> s32 #foreign libc;
 sendmsg :: (__fd: s32, __message: *msghdr, __flags: s32) -> ssize_t #foreign libc;
-sendto :: (__fd: s32, __buf: *void, __n: size_t, __flags: s32, __addr: __CONST_SOCKADDR_ARG, __addr_len: socklen_t) -> ssize_t #foreign libc;
+sendto :: (__fd: s32, __buf: *void, __n: size_t, __flags: s32, __addr: *sockaddr, __addr_len: socklen_t) -> ssize_t #foreign libc;
 sethostent :: (__stay_open: s32) -> void #foreign libc;
 setipv4sourcefilter :: (__s: s32, __interface_addr: in_addr, __group: in_addr, __fmode: uint32_t, __numsrc: uint32_t, __slist: *in_addr) -> s32 #foreign libc;
 setnetent :: (__stay_open: s32) -> void #foreign libc;
@@ -1346,15 +1346,15 @@ set_keepalive :: (s: Socket, keepalive: bool, idle_seconds_before_keepalive: s32
 
     if idle_seconds_before_keepalive {
         value := idle_seconds_before_keepalive;
-        if setsockopt(s, IPPROTO.TCP, TCP_KEEPIDLE, *value, size_of(s32)) != 0  return false;
+        if setsockopt(s, xx IPPROTO.TCP, TCP_KEEPIDLE, *value, size_of(s32)) != 0  return false;
     }
     if keepalive_interval_seconds {
         value := keepalive_interval_seconds;
-        if setsockopt(s, IPPROTO.TCP, TCP_KEEPINTVL, *value, size_of(s32)) != 0  return false;
+        if setsockopt(s, xx IPPROTO.TCP, TCP_KEEPINTVL, *value, size_of(s32)) != 0  return false;
     }
     if num_keepalive_attempts {
         value := num_keepalive_attempts;
-        if setsockopt(s, IPPROTO.TCP, TCP_KEEPCNT, *value, size_of(s32)) != 0  return false;
+        if setsockopt(s, xx IPPROTO.TCP, TCP_KEEPCNT, *value, size_of(s32)) != 0  return false;
     }
     return true;
 }

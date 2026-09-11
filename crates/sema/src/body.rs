@@ -270,7 +270,7 @@ impl Checker<'_> {
       scope,
       source,
     };
-    self.check_statement(&context, block);
+    self.while_checking_body(|checker| checker.check_statement(&context, block));
   }
 
   fn check_statement(&mut self, context: &Context, node: NodeId) {

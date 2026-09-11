@@ -281,6 +281,11 @@ pub struct Checker<'a> {
   /// to, so that its size does not depend on which modules a program imports
   /// (**L§10.1**). `-context_size` is what changes it.
   context_size_max: u64,
+  /// How deep inside `check_procedure_body` this checker is. A declaration
+  /// resolved on demand from somewhere else is read with whatever the
+  /// instantiation it belongs to has bound so far, which is not a place to
+  /// conclude that a call site is wrong; a body being checked is.
+  checking_bodies: u32,
   struct_scopes: HashMap<StructId, ScopeId>,
   /// The struct a members scope belongs to, which is what says a constant
   /// declared there is a specialization's (**L§8.5**).
@@ -479,6 +484,7 @@ impl<'a> Checker<'a> {
       argument_instances: HashMap::default(),
       units_seen: 0,
       context_size_max: crate::aggregate::DEFAULT_CONTEXT_SIZE,
+      checking_bodies: 0,
     };
     checker.refresh_units();
     checker
@@ -492,6 +498,19 @@ impl<'a> Checker<'a> {
 
   pub(crate) fn context_size_max(&self) -> u64 {
     self.context_size_max
+  }
+
+  /// Runs `body` with this checker marked as checking a procedure body, which
+  /// is where a call site's own errors belong.
+  pub(crate) fn while_checking_body<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+    self.checking_bodies += 1;
+    let value = body(self);
+    self.checking_bodies -= 1;
+    value
+  }
+
+  pub(crate) fn checking_a_body(&self) -> bool {
+    self.checking_bodies > 0
   }
 
   /// Reads the files the program has gained since this checker last looked.

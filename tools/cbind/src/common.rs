@@ -133,6 +133,11 @@ fn jai_type(text: &str) -> Option<String> {
     "float" => "float32".to_string(),
     "double" | "long double" => "float64".to_string(),
     "_Bool" => "bool".to_string(),
+    // A `__attribute__((__transparent_union__))` parameter is passed as its
+    // first member, which is all the C ABI knows about it: glibc declares the
+    // socket calls that way so that C callers may hand them any `sockaddr`
+    // pointer. Jai has no such conversion, so the binding takes the member.
+    "__SOCKADDR_ARG" | "__CONST_SOCKADDR_ARG" => "*sockaddr".to_string(),
     "" => return None,
     other if other.contains(' ') => return None,
     other => other.to_string(),

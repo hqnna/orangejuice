@@ -426,15 +426,22 @@ what it actually does.
   and orangejuice accepts it. `tools/cbind` now gives such a member the leading
   underscore the reference's own bindings give it, so nothing in `modules/`
   relies on the difference.
-- **A call with no matching overload is reported by the back end.**
-  `min(a: float, b: float)` where only vector overloads are in scope leaves the
-  expression with no type and the milestone error naming M7 comes out of code
-  generation rather than a `There is no procedure matching these arguments.`
-  from the checker.
 
-Three that were gaps and are now closed, each pinned by a test in
-`crates/driver/tests/build.rs`:
+Four that were gaps and are now closed, each pinned by a test in
+`crates/driver/tests/build.rs` or `crates/sema/tests/matching.rs`:
 
+- **A call with no matching overload** used to leave the expression with no
+  type and reach code generation, which complained about a milestone. The
+  checker reports it where it happens now — `The arguments given to 'g' did
+  not match any of its overloads. The arguments were: (s64).`, the argument
+  types printed the way **L§7.5** describes. A candidate one of whose own
+  types is not worked out yet, or an argument whose type is not, leaves the
+  answer open rather than refusing it, which is what makes a file resolved
+  without its imports quiet. Turning it on found two real ones in `modules/`:
+  `System.get_path_directories` passed an allocator to a `split` that takes
+  two arguments, and the whole `Socket` module passed pointers where glibc's
+  `__attribute__((__transparent_union__))` parameters were bound — `tools/cbind`
+  emits those as the member the C ABI actually passes now.
 - A **named `for_expansion` reached through `#bake_arguments`** — `only_set ::
   #bake_arguments only_set_or_unset(target_value = true)`, which is how
   `Bit_Array` writes it. The bake's defaults were dropped when the macro was

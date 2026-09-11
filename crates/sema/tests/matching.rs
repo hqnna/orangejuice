@@ -352,14 +352,20 @@ fn an_overload_set_is_narrowed_by_the_arguments() {
 }
 
 #[test]
-fn a_call_that_matches_nothing_has_no_type_to_report_against() {
-  // Resolution failed, so nothing downstream is judged: the reference reports
-  // the call itself, which is M5's job once every callable is known.
-  accepts(
-    "
-    g :: (a: s64, b: s64) -> s64 { return a; }
-    f :: () { x: string = g(1); }
-    ",
+fn a_call_that_matches_nothing_is_reported_against_the_call() {
+  // The call itself is what is wrong, so that is what is named, with the
+  // arguments it was given (**L§7.5**); nothing downstream of it is judged.
+  assert_eq!(
+    errors(
+      "
+      g :: (a: s64, b: s64) -> s64 { return a; }
+      f :: () { x: string = g(1); }
+      "
+    ),
+    vec![
+      "The arguments given to 'g' did not match any of its overloads. The arguments were: (s64)."
+        .to_string()
+    ]
   );
 }
 

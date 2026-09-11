@@ -18,11 +18,16 @@ get_environment_variable :: (name: string, allocator := context.allocator) -> (v
     return copy_string(to_string(raw), allocator), true;
 }
 
-// The directories `PATH` names, in order.
+// The directories `PATH` names, in order. `split` cuts views out of `value`
+// and holds them in temporary storage, so both the array and its strings are
+// copied into the allocator that was asked for.
 get_path_directories :: (allocator := context.allocator) -> [] string {
     value, found := get_environment_variable("PATH", temp);
     if !found  return .[];
-    return split(value, ":", allocator);
+    pieces := split(value, ":");
+    result := NewArray(pieces.count, string,, allocator);
+    for pieces  result[it_index] = copy_string(it, allocator);
+    return result;
 }
 
 // Where an executable named `name` would be found on `PATH`, or "".

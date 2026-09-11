@@ -116,7 +116,97 @@ impl Checker<'_> {
         }
         Some(signature)
       }
-      Resolved::Ambiguous | Resolved::None => None,
+      // Every candidate was scored and none accepted these arguments, which is
+      // the call site's error rather than something a later stage discovers
+      // (**L§7.5**).
+      Resolved::None => {
+        self.report_no_overload(source, node, &arguments);
+        None
+      }
+      // A candidate whose own type is not worked out yet leaves the answer
+      // open: there is nothing to complain about until it is.
+      Resolved::Ambiguous => None,
+    }
+  }
+
+  /// What a call no candidate accepts reports (**L§7.5**). The argument types
+  /// are printed the way the reference prints them; a call one of whose
+  /// arguments has no type yet is left alone, since the complaint would be
+  /// about the other error rather than about this call.
+  fn report_no_overload(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    arguments: &[crate::overload::CallArgument],
+  ) {
+    if !self.checking_a_body() {
+      return;
+    }
+    if arguments
+      .iter()
+      .any(|argument| self.unresolved_argument(argument.value.type_id))
+    {
+      return;
+    }
+    let Some(ast) = self.ast(source) else {
+      return;
+    };
+    let NodeData::ProcedureCall(call) = ast.data(node) else {
+      return;
+    };
+    let callee = call.procedure_expression;
+    let span = ast.node(node).span;
+    let name = self.written_name(source, callee);
+    let given: Vec<String> = arguments
+      .iter()
+      .map(|argument| {
+        let printed = self.type_name(self.harden(argument.value.type_id));
+        match argument
+          .name
+          .map(|name| self.interner().resolve_lossy(name))
+        {
+          Some(written) => format!("{written} = {printed}"),
+          None => printed,
+        }
+      })
+      .collect();
+    self.error(
+      source,
+      span,
+      format!(
+        "The arguments given to '{name}' did not match any of its overloads. \
+         The arguments were: ({}).",
+        given.join(", ")
+      ),
+    );
+  }
+
+  /// Whether an argument's type is one the front end has not worked out, in
+  /// which case nothing can be concluded about the call it was written in.
+  fn unresolved_argument(&mut self, type_id: TypeId) -> bool {
+    self.mentions_unknown(type_id) || self.mentions_polymorph(type_id)
+  }
+
+  /// The text a callee was written as, for a diagnostic that has to name it.
+  fn written_name(&mut self, source: SourceId, node: NodeId) -> String {
+    let Some(ast) = self.ast(source) else {
+      return String::from("this procedure");
+    };
+    match ast.data(node) {
+      NodeData::Ident(ident) => {
+        let name = ident.name;
+        self.interner().resolve_lossy(name).into_owned()
+      }
+      // `Simp.set_scissor(…)` is named by what follows the dot (**L§5.4**).
+      NodeData::BinaryOperator {
+        operator: oj_syntax::ast::OperatorType::DOT,
+        right,
+        ..
+      } => {
+        let right = *right;
+        self.written_name(source, right)
+      }
+      _ => String::from("this procedure"),
     }
   }
 }

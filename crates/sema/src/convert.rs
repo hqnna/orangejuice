@@ -173,6 +173,26 @@ impl Checker<'_> {
     }
   }
 
+  /// Whether a type is, or is built out of, a `$T` nothing has bound. A call
+  /// written inside a polymorphic body is checked with these in hand before
+  /// any call site has given them values, so nothing is concluded from one.
+  pub(crate) fn mentions_polymorph(&self, type_id: TypeId) -> bool {
+    match self.types().kind(type_id) {
+      TypeKind::Polymorph(_) => true,
+      TypeKind::Pointer(pointee) => self.mentions_polymorph(*pointee),
+      TypeKind::Array { element, .. } => self.mentions_polymorph(*element),
+      TypeKind::Variant(definition) => {
+        self.mentions_polymorph(self.types().variant_info(*definition).base)
+      }
+      TypeKind::Procedure(signature) => signature
+        .arguments
+        .iter()
+        .chain(&signature.returns)
+        .any(|type_id| self.mentions_polymorph(*type_id)),
+      _ => false,
+    }
+  }
+
   /// An untyped literal takes the type the context asks for, if it fits
   /// (**L§5.10** rules 1, 10 and 11).
   fn untyped_conversion(&mut self, value: &Expr, target: TypeId) -> Option<u32> {

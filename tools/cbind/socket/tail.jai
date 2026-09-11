@@ -116,15 +116,15 @@ set_keepalive :: (s: Socket, keepalive: bool, idle_seconds_before_keepalive: s32
 
     if idle_seconds_before_keepalive {
         value := idle_seconds_before_keepalive;
-        if setsockopt(s, IPPROTO.TCP, TCP_KEEPIDLE, *value, size_of(s32)) != 0  return false;
+        if setsockopt(s, xx IPPROTO.TCP, TCP_KEEPIDLE, *value, size_of(s32)) != 0  return false;
     }
     if keepalive_interval_seconds {
         value := keepalive_interval_seconds;
-        if setsockopt(s, IPPROTO.TCP, TCP_KEEPINTVL, *value, size_of(s32)) != 0  return false;
+        if setsockopt(s, xx IPPROTO.TCP, TCP_KEEPINTVL, *value, size_of(s32)) != 0  return false;
     }
     if num_keepalive_attempts {
         value := num_keepalive_attempts;
-        if setsockopt(s, IPPROTO.TCP, TCP_KEEPCNT, *value, size_of(s32)) != 0  return false;
+        if setsockopt(s, xx IPPROTO.TCP, TCP_KEEPCNT, *value, size_of(s32)) != 0  return false;
     }
     return true;
 }

@@ -47,7 +47,7 @@ listen_on_port :: (port: u16, backlog := 16) -> (listener: Socket, ok: bool) {
     address.sin_port = htons(port);
     address.sin_addr.s_addr = 0;              // INADDR_ANY
 
-    if bind(fd, *address, size_of(sockaddr_in)) != 0 {
+    if bind(fd, cast(*sockaddr) *address, size_of(sockaddr_in)) != 0 {
         close(fd);
         return result, false;
     }
@@ -68,7 +68,7 @@ accept_connection :: (listener: Socket) -> (connection: Socket, ok: bool) {
     address: sockaddr_in;
     length: u32 = size_of(sockaddr_in);
     while true {
-        fd := accept(listener, *address, *length);
+        fd := accept(listener, cast(*sockaddr) *address, *length);
         if fd >= 0 {
             result = fd;
             return result, true;
@@ -85,7 +85,7 @@ get_port :: (s: Socket) -> (port: u16, ok: bool) {
     if s < 0  return 0, false;
     address: sockaddr_in;
     length: u32 = size_of(sockaddr_in);
-    if getsockname(s, *address, *length) != 0  return 0, false;
+    if getsockname(s, cast(*sockaddr) *address, *length) != 0  return 0, false;
     return ntohs(address.sin_port), true;
 }
 
@@ -112,7 +112,7 @@ connect_to :: (address_text: string, port: u16) -> (connection: Socket, ok: bool
     target.sin_port = htons(port);
     target.sin_addr.s_addr = raw;
 
-    if connect(fd, *target, size_of(sockaddr_in)) != 0 {
+    if connect(fd, cast(*sockaddr) *target, size_of(sockaddr_in)) != 0 {
         close(fd);
         return result, false;
     }
