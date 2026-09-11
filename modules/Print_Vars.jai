@@ -6,33 +6,31 @@
 //     print_vars(x, v.y, x + 1);
 //
 //     x = 42
-//     v.y = 4.000000
+//     v.y = 4
 //     x + 1 = 43
 //
 // The name comes from the argument's own syntax tree, read at compile time —
 // which is the only place it exists, since by runtime an expression is just a
 // value. `Code` parameters are what carry it that far.
 //
-// The reference takes `$args: .. Code`. orangejuice does not support variadic
-// `Code` parameters yet (`docs/spec.md` §10.1), so this takes eight defaulted
-// ones instead; the call syntax is the same up to eight expressions.
+// The parameter is `$args: .. Code`: every argument bakes as the syntax the
+// call site wrote, and the body reads them as a `[N] Code` whose `N` is how
+// many were given (**L§7.3**).
 //
 
 #import "Basic";
 #import "Compiler";
 
-print_vars :: ($a: Code = #code,null, $b: Code = #code,null, $c: Code = #code,null, $d: Code = #code,null,
-               $e: Code = #code,null, $f: Code = #code,null, $g: Code = #code,null, $h: Code = #code,null) #expand {
+print_vars :: ($args: .. Code) #expand {
     #insert -> string {
-        return generate("print", a, b, c, d, e, f, g, h);
+        return generate("print", ..args);
     }
 }
 
 // The same, through `context.logger` rather than straight to stdout.
-log_vars :: ($a: Code = #code,null, $b: Code = #code,null, $c: Code = #code,null, $d: Code = #code,null,
-             $e: Code = #code,null, $f: Code = #code,null, $g: Code = #code,null, $h: Code = #code,null) #expand {
+log_vars :: ($args: .. Code) #expand {
     #insert -> string {
-        return generate("log", a, b, c, d, e, f, g, h);
+        return generate("log", ..args);
     }
 }
 
@@ -74,10 +72,10 @@ render_node :: (node: *Code_Node) -> string {
 
     if node.kind == cast(u8) Code_Node_Kind.LITERAL {
         literal := cast(*Code_Literal) node;
-        if literal.value_type == .STRING  return sprint("\"%\"", literal._string, allocator = temp);
+        if literal.value_type == .STRING  return tprint("\"%\"", literal._string);
         if literal.value_type == .NUMBER {
-            if literal.value_flags & .FLOAT  return sprint("%", literal._float64, allocator = temp);
-            return sprint("%", literal._s64, allocator = temp);
+            if literal.value_flags & .FLOAT  return tprint("%", literal._float64);
+            return tprint("%", literal._s64);
         }
         if literal.value_type == .BOOLEAN  return ifx literal._s64 then "true" else "false";
         return "<literal>";
@@ -85,7 +83,7 @@ render_node :: (node: *Code_Node) -> string {
 
     if node.kind == cast(u8) Code_Node_Kind.UNARY_OPERATOR {
         unary := cast(*Code_Unary_Operator) node;
-        return sprint("%1%2", operator_text(unary.operator_type), render_node(unary.subexpression), allocator = temp);
+        return tprint("%1%2", operator_text(unary.operator_type), render_node(unary.subexpression));
     }
 
     if node.kind == cast(u8) Code_Node_Kind.BINARY_OPERATOR {
@@ -95,17 +93,17 @@ render_node :: (node: *Code_Node) -> string {
 
         // A member access reads as `a.b`, without the spaces arithmetic wants.
         if binary.operator_type == cast(Operator_Type) #char "." {
-            return sprint("%.%", left, right, allocator = temp);
+            return tprint("%.%", left, right);
         }
         if binary.operator_type == .ARRAY_SUBSCRIPT {
-            return sprint("%[%]", left, right, allocator = temp);
+            return tprint("%[%]", left, right);
         }
-        return sprint("% % %", left, operator_text(binary.operator_type), right, allocator = temp);
+        return tprint("% % %", left, operator_text(binary.operator_type), right);
     }
 
     if node.kind == cast(u8) Code_Node_Kind.PROCEDURE_CALL {
         call := cast(*Code_Procedure_Call) node;
-        return sprint("%(...)", render_node(call.procedure_expression), allocator = temp);
+        return tprint("%(...)", render_node(call.procedure_expression));
     }
 
     return "<expr>";

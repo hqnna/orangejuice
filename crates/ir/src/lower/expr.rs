@@ -220,6 +220,14 @@ impl Lowering<'_, '_> {
     if let Value::Type(queried) = constant.value {
       return self.type_info_value(queried, target);
     }
+    // An array of constants is storage of its own, filled element by element
+    // (**L§7.3**): a `Code` among them is an exported node's address and a
+    // `Type` is a place in the type table image, so neither is a byte the
+    // front end could have laid down.
+    if let Value::Array(elements) = &constant.value {
+      let elements = elements.clone();
+      return self.constant_array(&elements, target);
+    }
     // A `#location` is the place it names, built into a `Source_Code_Location`
     // here rather than laid out as bytes, since the path is a string whose
     // storage only the back end has (**L§5.14**).
@@ -518,6 +526,42 @@ impl Lowering<'_, '_> {
   /// what it named is appended to them and the pointer points at that instead
   /// — which is how a `[] u8` from `add_global_data` reaches the executable
   /// (**C§3.3**).
+  /// A constant array, built into storage of its own one element at a time
+  /// (**L§7.3**). `target` may be the fixed array the constant is, or a view
+  /// of it — a `[N] Code` passed on to a `(args: .. Code)` procedure converts
+  /// the way any other fixed array does (**L§3.3**).
+  fn constant_array(&mut self, elements: &[oj_sema::Const], target: TypeId) -> Option<Val> {
+    let element = self
+      .checker
+      .types()
+      .array_of(target)
+      .map(|(element, _)| element)?;
+    let storage = self
+      .checker
+      .types_table_mut()
+      .array(element, ArrayKind::Fixed(elements.len() as u64));
+    let local = self.new_local(String::from("varargs"), storage);
+    let address = self.local_address(local);
+    self.clear(address, storage);
+    let (stride, _) = self.size_align(element);
+    for (index, constant) in elements.iter().enumerate() {
+      let Some(value) = self.constant_value(constant, element) else {
+        continue;
+      };
+      let slot = self.offset(address, index as u64 * stride, element);
+      self.store(slot, value);
+    }
+    let array = Val {
+      id: address,
+      type_id: storage,
+      indirect: true,
+    };
+    match storage == target {
+      true => Some(array),
+      false => Some(self.make_view(target, array, elements.len() as u64)),
+    }
+  }
+
   fn bytes_constant(&mut self, source: &oj_sema::RunBytes, type_id: TypeId) -> Val {
     /// A pointer's alignment on the one target orangejuice has.
     const POINTER_ALIGNMENT: usize = 8;

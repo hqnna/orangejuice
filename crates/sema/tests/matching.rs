@@ -682,18 +682,15 @@ fn a_return_forwards_every_value_the_call_it_names_produces() {
 }
 
 #[test]
-fn a_variadic_code_parameter_is_refused_where_it_is_written() {
-  // `$args: .. Code` bakes each argument's syntax into an array the body
-  // reads (**L§13.1**), which orangejuice does not build. The header is what
-  // is reported, rather than every call site that matches nothing
-  // (`docs/spec.md` §10.2).
-  assert_eq!(
-    errors("show :: ($args: ..Code) #expand { }"),
-    vec![
-      "orangejuice does not support a variadic 'Code' parameter. Declare one '$c: Code' \
-       parameter per expression instead."
-        .to_string()
-    ]
+fn a_variadic_code_parameter_bakes_to_an_array_that_long() {
+  // `$args: .. Code` bakes every argument as the syntax the call site wrote
+  // and hands the body a `[N] Code` (**L§7.3**, **L§13.1**), so how many there
+  // are is a constant of the instantiation.
+  accepts(
+    "
+    show :: ($args: ..Code) -> s64 #expand { return args.count; }
+    f :: () { x := 1; n: s64 = show(x, x + 1); }
+    ",
   );
 }
 

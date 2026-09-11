@@ -55,6 +55,7 @@ pub(crate) enum ConstKey {
   Address(crate::constants::Address),
   Location(SourceId, NodeId),
   Written(SourceId, NodeId),
+  Array(Vec<ConstKey>),
 }
 
 pub(crate) fn const_key(value: &Const) -> ConstKey {
@@ -72,6 +73,7 @@ pub(crate) fn const_key(value: &Const) -> ConstKey {
     Value::Address(address) => ConstKey::Address(address.clone()),
     Value::Location { source, node } => ConstKey::Location(*source, *node),
     Value::Written { source, node, .. } => ConstKey::Written(*source, *node),
+    Value::Array(elements) => ConstKey::Array(elements.iter().map(const_key).collect()),
   }
 }
 
@@ -986,8 +988,12 @@ impl Checker<'_> {
       }
       // A `$x` parameter is a constant of the instantiation, so the argument
       // has to be one; a `$$x` takes one when the call site has one and stays
-      // an ordinary parameter otherwise (**L§7.8**).
-      if let Some((decl, required)) = self.baked_parameter_decl(source, signature, index) {
+      // an ordinary parameter otherwise (**L§7.8**). A `$args: ..T` slot is
+      // baked as a whole below, since what it stands for is every argument
+      // that landed in it rather than any one of them (**L§7.3**).
+      if vararg_slot != Some(index)
+        && let Some((decl, required)) = self.baked_parameter_decl(source, signature, index)
+      {
         // A `$c: Code` bakes the syntax the call site wrote, not what it would
         // evaluate to: `f(2 + 3 + 4)` hands `f` the sum, which is what lets its
         // body ask `c.type` (**L§13.1**).
@@ -1041,6 +1047,40 @@ impl Checker<'_> {
         if let Some(value) = argument.value.constant.clone() {
           solution.bindings.push((decl, value));
         }
+      }
+    }
+
+    // `$args: .. T` bakes to a `[N] T` whose `N` is how many arguments landed
+    // in the slot (**L§7.3**), so the body reads them as an array of constants
+    // — which is what `print_vars :: ($args: .. Code)` needs.
+    if let Some(index) = vararg_slot
+      && let Some((decl, required)) = self.baked_parameter_decl(source, signature, index)
+    {
+      let parameter = signature.parameters.get(index)?;
+      let element = self
+        .types()
+        .array_of(parameter.type_id)
+        .map_or(parameter.type_id, |(element, _)| element);
+      let written: Vec<CallArgument> = slots
+        .iter()
+        .copied()
+        .zip(arguments)
+        .filter(|(slot, _)| *slot == index)
+        .map(|(_, argument)| argument.clone())
+        .collect();
+      match self.baked_varargs(&written, element) {
+        Some(elements) => {
+          let count = elements.len() as u64;
+          let array = self
+            .types_mut()
+            .array(element, oj_types::ArrayKind::Fixed(count));
+          solution
+            .bindings
+            .push((decl, Const::new(array, Value::Array(elements.into()))));
+          solution.overrides.push((decl, array));
+        }
+        None if required => return None,
+        None => {}
       }
     }
 
@@ -1274,6 +1314,36 @@ impl Checker<'_> {
   /// instantiation bakes rather than its type, and whether the bake is
   /// *required*: `$x` only accepts a constant, while `$$x` takes one when the
   /// call site has one and stays an ordinary parameter otherwise (**L§7.8**).
+  /// What the arguments in a `$`-marked varargs slot bake to, one constant
+  /// each (**L§7.3**). A `Code` element takes the syntax the call site wrote,
+  /// the way a single `$c: Code` parameter does; everything else has to be a
+  /// constant already, and one argument that is not means the whole slot is
+  /// not baked.
+  fn baked_varargs(&mut self, arguments: &[CallArgument], element: TypeId) -> Option<Vec<Const>> {
+    let mut elements = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+      // `..xs` hands over a whole array, whose elements are not written
+      // separately and so are not syntax any of them can be baked from.
+      if argument.spread {
+        return None;
+      }
+      let baked = match element == TypeId::CODE {
+        true => self.code_argument(&argument.value, argument.written),
+        false => argument
+          .value
+          .constant
+          .clone()
+          .or_else(|| self.named_procedure(&argument.value))
+          .or_else(|| {
+            let (source, node, scope) = argument.written?;
+            self.const_value_at(scope, source, node, element)
+          }),
+      }?;
+      elements.push(Const::new(element, baked.value));
+    }
+    Some(elements)
+  }
+
   fn baked_parameter_decl(
     &mut self,
     source: SourceId,

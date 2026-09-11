@@ -45,6 +45,13 @@ pub enum Value {
     source: oj_diag::SourceId,
     node: oj_syntax::ast::NodeId,
   },
+  /// A constant array, element by element: what a `$`-marked varargs
+  /// parameter bakes to, which is a `[N] T` whose `N` is how many arguments
+  /// the call site wrote (**L§7.3**), and what a variadic struct parameter
+  /// gathers its arguments into (**L§8.5**). The elements stay constants
+  /// rather than becoming bytes, since a `Code` or a `Type` among them is an
+  /// address only the back end has.
+  Array(Box<[Const]>),
   /// A constant the back end builds by lowering the expression it was written
   /// as: a struct literal all of whose members are constants but whose bytes
   /// the compiler cannot lay out, because a `Type` among them is an address
@@ -149,6 +156,9 @@ impl Value {
       // A location and a written aggregate are values the back end builds,
       // which have no truth of their own.
       Self::Location { .. } | Self::Written { .. } => None,
+      // An array is true when it has elements, the way any other array is
+      // (**L§5.9**).
+      Self::Array(elements) => Some(!elements.is_empty()),
     }
   }
 

@@ -5476,3 +5476,24 @@ fn a_global_a_run_reads_has_had_its_initializer_run() {
   };
   assert_eq!(built.output, "11 21 1\n");
 }
+
+#[test]
+fn a_variadic_code_parameter_bakes_every_argument_it_was_given() {
+  // `$args: .. Code` is how the reference declares `print_vars` (**L§7.3**):
+  // every argument bakes as the syntax the call site wrote, and the body reads
+  // them as a `[N] Code` — which a `#insert -> string` walks to build one
+  // `print` per expression.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Print_Vars\";\n\
+     Vector3 :: struct { x: float; y: float; z: float; }\n\
+     main :: () {\n  \
+       x := 42;\n  \
+       v := Vector3.{1, 4, 9};\n  \
+       print_vars(x, v.y, x + 1);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "x = 42\nv.y = 4\nx + 1 = 43\n");
+}

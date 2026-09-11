@@ -1160,12 +1160,15 @@ impl<'c, 'p> Lowering<'c, 'p> {
       // A `.data` or a global address is settled by the linker rather than by
       // the compiler (**L§5.11**), so the expression it came from is lowered
       // instead of the value.
+      // An array of constants is storage each element is built into, which is
+      // the instruction form rather than a value (**L§7.3**).
       Value::Type(_)
       | Value::EnumName(_)
       | Value::Code { .. }
       | Value::Procedure(_)
       | Value::Address(_)
       | Value::Location { .. }
+      | Value::Array(_)
       | Value::Written { .. } => None,
     }
   }

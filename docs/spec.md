@@ -390,17 +390,6 @@ what it actually does.
   builds its context from a declaration without a value instead, which is what
   **L§4.6** says applies defaults, and that works — but the field should be
   filled.
-- **Variadic `Code` parameters are not supported.** `print_vars :: ($args: ..
-  Code)` is how the reference declares it — each argument bakes as the syntax
-  the call site wrote, and the body reads them as an array. What is missing is
-  a compile-time array of constants to bind such a parameter to: a `Code` is
-  the address of an exported `Code_Node`, and nothing here lays a run of them
-  down as data a `#run` can iterate. The header is refused where it is
-  written, `orangejuice does not support a variadic 'Code' parameter. Declare
-  one '$c: Code' parameter per expression instead.`, rather than leaving every
-  call site to report that it matches nothing.
-  `modules/Print_Vars.jai` takes eight defaulted `$c: Code` parameters
-  instead, which keeps the call syntax for up to eight expressions.
 - **Variadic type parameters on a struct are not supported.** `Tagged_Union ::
   struct (value_types: .. Type)` is how the reference declares it, and the
   reference's own module failed under orangejuice the same way ours did.
@@ -412,10 +401,19 @@ what it actually does.
   `modules/Tagged_Union.jai` takes four defaulted parameters instead, which
   keeps the call syntax for up to four types.
 
-Seven that were gaps and are now closed, each pinned by a test in
+Eight that were gaps and are now closed, each pinned by a test in
 `crates/driver/tests/build.rs`, `crates/sema/tests/matching.rs` or
 `crates/scope/tests/scopes.rs`:
 
+- **A `$`-marked varargs parameter** now bakes to a `[N] T` whose `N` is how
+  many arguments landed in the slot (**L§7.3**), each one a constant: a `Code`
+  element takes the syntax the call site wrote, the way a single `$c: Code`
+  parameter does. That is what `print_vars :: ($args: .. Code)` needs, and
+  `modules/Print_Vars.jai` is written the way the reference writes it now. The
+  constant is `Value::Array`, whose elements stay constants rather than
+  becoming bytes — a `Code` is an exported node's address and a `Type` is a
+  place in the type table image, so the back end builds the array into storage
+  of its own one element at a time.
 - **A wide literal in a shift** had no width to take. A shift's result is its
   left operand's type (**L§5.10**), and one written as a literal used to
   default to `s64` on the spot, so `m: u64 = 0xffff_ffff_ffff_ffff << n` was a
