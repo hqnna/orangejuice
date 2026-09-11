@@ -264,7 +264,7 @@ raise       :: (sig: s32) -> s32 #foreign libc;
 backtrace            :: (buffer: **void, size: s32) -> s32 #foreign libc;
 backtrace_symbols_fd :: (buffer: **void, size: s32, fd: s32) #foreign libc;
 
-libc :: #system_library "c";
+libc :: #library,system "libc";
 
 // glibc folded the backtrace routines into libc; the name is kept because a
 // program written against the reference may say it.

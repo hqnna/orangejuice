@@ -1,0 +1,8 @@
+CLUBS is black (value 0)
+DIAMONDS is red (value 1)
+HEARTS is red (value 2)
+SPADES is black (value 3)
+READ | WRITE
+can write: true
+READ | WRITE | EXECUTE
+Suit has 4 members: ["CLUBS", "DIAMONDS", "HEARTS", "SPADES"]

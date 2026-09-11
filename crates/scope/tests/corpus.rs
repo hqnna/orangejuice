@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use oj_diag::{Severity, SourceMap};
 use oj_lexer::Interner;
 use oj_scope::{Options, Program};
-use oj_testsupport::jai_dir_or_skip;
 use walkdir::WalkDir;
 
 fn jai_files(root: &Path) -> Vec<PathBuf> {
@@ -44,12 +43,13 @@ fn rendered_errors(program: &Program<'_>, sources: &SourceMap) -> Vec<String> {
 /// file contradicts itself — a redeclaration, a doubled `#load`, an
 /// unresolvable module path.
 #[test]
-fn every_vendor_file_resolves_into_a_scope_tree() {
-  let jai_dir = jai_dir_or_skip!();
-  let files = jai_files(&jai_dir);
+fn every_file_of_the_distribution_resolves_into_a_scope_tree() {
+  let mut files = jai_files(&oj_testsupport::modules());
+  files.extend(jai_files(&oj_testsupport::examples()));
+  files.sort();
   assert!(
-    files.len() > 500,
-    "expected the vendor distribution's .jai corpus, found {} files",
+    files.len() > 70,
+    "expected the distribution's own .jai corpus, found {} files",
     files.len()
   );
 
@@ -91,19 +91,18 @@ fn every_vendor_file_resolves_into_a_scope_tree() {
   );
 }
 
-/// The `how_to` suite is the acceptance suite (`docs/spec.md` §8): each of its
-/// top-level programs is resolved as a whole — its `#load`s, its modules and
-/// Preload — and every identifier in it has to resolve.
+/// The `examples` suite is the acceptance suite (`docs/spec.md` §8): each of
+/// its programs is resolved as a whole — its `#load`s, its modules and Preload —
+/// and every identifier in it has to resolve.
 #[test]
-fn every_how_to_program_resolves_every_identifier() {
-  let jai_dir = jai_dir_or_skip!();
-  let how_to = jai_dir.join("how_to");
-  let mut roots: Vec<PathBuf> = jai_files(&how_to)
+fn every_example_program_resolves_every_identifier() {
+  let examples = oj_testsupport::examples();
+  let mut roots: Vec<PathBuf> = jai_files(&examples)
     .into_iter()
-    .filter(|path| path.parent() == Some(how_to.as_path()))
+    .filter(|path| path.parent() == Some(examples.as_path()))
     .collect();
   roots.sort();
-  assert!(roots.len() > 40, "expected the how_to suite");
+  assert!(roots.len() > 10, "expected the examples suite");
 
   let mut failures = Vec::new();
   for path in &roots {
@@ -114,7 +113,7 @@ fn every_how_to_program_resolves_every_identifier() {
       &interner,
       path,
       Options {
-        jai_dir: Some(jai_dir.clone()),
+        distribution: Some(oj_testsupport::distribution().to_path_buf()),
         ..Options::default()
       },
     );
@@ -137,7 +136,7 @@ fn every_how_to_program_resolves_every_identifier() {
 
   assert!(
     failures.is_empty(),
-    "{} of {} how_to programs did not resolve:\n{}",
+    "{} of {} example programs did not resolve:\n{}",
     failures.len(),
     roots.len(),
     failures.join("\n\n")

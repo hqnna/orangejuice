@@ -7,18 +7,11 @@
 use oj_diag::SourceMap;
 use oj_lexer::Interner;
 
-fn llvm_ir(source: &str) -> Option<String> {
+fn llvm_ir(source: &str) -> String {
   llvm_ir_with(source, &oj_codegen::Options::default())
 }
 
-fn llvm_ir_with(source: &str, options: &oj_codegen::Options) -> Option<String> {
-  let jai_dir = match oj_testsupport::jai_dir() {
-    Some(dir) => dir,
-    None => {
-      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-      return None;
-    }
-  };
+fn llvm_ir_with(source: &str, options: &oj_codegen::Options) -> String {
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("input.jai");
   std::fs::write(&path, source).expect("the input should be writable");
@@ -26,7 +19,7 @@ fn llvm_ir_with(source: &str, options: &oj_codegen::Options) -> Option<String> {
   let sources = SourceMap::new();
   let interner = Interner::new();
   let scope_options = oj_scope::Options {
-    jai_dir: Some(jai_dir),
+    distribution: oj_testsupport::distribution().to_path_buf().into(),
     ..oj_scope::Options::default()
   };
   let program = oj_scope::Program::build(&sources, &interner, &path, scope_options);
@@ -45,17 +38,13 @@ fn llvm_ir_with(source: &str, options: &oj_codegen::Options) -> Option<String> {
       .collect::<Vec<_>>()
   );
 
-  Some(
-    oj_codegen::compile(&lowered.program, options, oj_codegen::Output::LlvmIr)
-      .expect("the module should be valid"),
-  )
+  oj_codegen::compile(&lowered.program, options, oj_codegen::Output::LlvmIr)
+    .expect("the module should be valid")
 }
 
 #[test]
 fn the_module_targets_linux_x86_64() {
-  let Some(module) = llvm_ir("main :: () {}\n") else {
-    return;
-  };
+  let module = llvm_ir("main :: () {}\n");
   assert!(
     module.contains(&format!(
       "target triple = \"{}\"",
@@ -68,9 +57,7 @@ fn the_module_targets_linux_x86_64() {
 
 #[test]
 fn the_c_runtime_calls_a_generated_main_that_hands_over_a_context() {
-  let Some(module) = llvm_ir("main :: () {}\n") else {
-    return;
-  };
+  let module = llvm_ir("main :: () {}\n");
   assert!(
     module.contains("define i32 @main(i32 %0, ptr %1)"),
     "{module}"
@@ -89,27 +76,19 @@ fn the_c_runtime_calls_a_generated_main_that_hands_over_a_context() {
 
 #[test]
 fn an_aggregate_is_storage_of_its_own_size_and_alignment() {
-  let Some(module) =
-    llvm_ir("Point :: struct { x: float64; y: float64; }\nmain :: () { p: Point; }\n")
-  else {
-    return;
-  };
+  let module = llvm_ir("Point :: struct { x: float64; y: float64; }\nmain :: () { p: Point; }\n");
   assert!(module.contains("alloca [16 x i8], align 8"), "{module}");
 }
 
 #[test]
 fn a_scalar_load_takes_the_alignment_of_its_type() {
-  let Some(module) = llvm_ir("main :: () { n := 1; m := n; }\n") else {
-    return;
-  };
+  let module = llvm_ir("main :: () { n := 1; m := n; }\n");
   assert!(module.contains("store i64 1, ptr %n, align 8"), "{module}");
 }
 
 #[test]
 fn a_string_literal_is_read_only_data_and_the_two_words_of_a_view() {
-  let Some(module) = llvm_ir("main :: () { greeting := \"hi\"; }\n") else {
-    return;
-  };
+  let module = llvm_ir("main :: () { greeting := \"hi\"; }\n");
   assert!(module.contains("private"), "{module}");
   // The bytes carry a trailing zero the count does not include, so a literal
   // handed to a C procedure is the string it expects (**L§3.4**).
@@ -120,9 +99,7 @@ fn a_string_literal_is_read_only_data_and_the_two_words_of_a_view() {
 #[test]
 fn a_comparison_produces_a_bit_and_stores_a_byte() {
   // A comparison of two literals folds, so the operands have to be storage.
-  let Some(module) = llvm_ir("main :: () { a := 1; b := 2; flag := a < b; }\n") else {
-    return;
-  };
+  let module = llvm_ir("main :: () { a := 1; b := 2; flag := a < b; }\n");
   assert!(module.contains("icmp slt i64"), "{module}");
   assert!(module.contains("zext i1"), "{module}");
   assert!(module.contains("i8"), "{module}");
@@ -130,22 +107,16 @@ fn a_comparison_produces_a_bit_and_stores_a_byte() {
 
 #[test]
 fn a_foreign_procedure_is_only_declared() {
-  let Some(module) = llvm_ir(
+  let module = llvm_ir(
     "libc :: #library,system \"libc\";\n\
      puts :: (text: *u8) -> s32 #foreign libc;\n\
      main :: () { puts(null); }\n",
-  ) else {
-    return;
-  };
+  );
   assert!(module.contains("declare i32 @puts(ptr)"), "{module}");
 }
 
 #[test]
 fn assembly_can_be_produced_for_the_same_program() {
-  let Some(_) = llvm_ir("main :: () {}\n") else {
-    return;
-  };
-  let jai_dir = oj_testsupport::jai_dir().expect("checked above");
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("input.jai");
   std::fs::write(&path, "main :: () {}\n").expect("the input should be writable");
@@ -157,7 +128,7 @@ fn assembly_can_be_produced_for_the_same_program() {
     &interner,
     &path,
     oj_scope::Options {
-      jai_dir: Some(jai_dir),
+      distribution: oj_testsupport::distribution().to_path_buf().into(),
       ..oj_scope::Options::default()
     },
   );
@@ -175,10 +146,6 @@ fn assembly_can_be_produced_for_the_same_program() {
 
 #[test]
 fn an_object_file_is_written_where_it_was_asked_for() {
-  let Some(_) = llvm_ir("main :: () {}\n") else {
-    return;
-  };
-  let jai_dir = oj_testsupport::jai_dir().expect("checked above");
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("input.jai");
   std::fs::write(&path, "main :: () {}\n").expect("the input should be writable");
@@ -191,7 +158,7 @@ fn an_object_file_is_written_where_it_was_asked_for() {
     &interner,
     &path,
     oj_scope::Options {
-      jai_dir: Some(jai_dir),
+      distribution: oj_testsupport::distribution().to_path_buf().into(),
       ..oj_scope::Options::default()
     },
   );
@@ -213,9 +180,7 @@ fn the_module_describes_the_program_to_a_debugger() {
   // `Build_Options.emit_debug_info` is `.DEFAULT`, which is DWARF on Linux
   // (**C§4**): a compile unit, a subprogram per procedure, a line per
   // instruction and a variable per local.
-  let Some(module) = llvm_ir("main :: () { n := 1 + 2; }\n") else {
-    return;
-  };
+  let module = llvm_ir("main :: () { n := 1 + 2; }\n");
   assert!(
     module.contains("!llvm.dbg.cu"),
     "the module should carry a compile unit:\n{module}"
@@ -244,9 +209,7 @@ fn a_program_built_without_debug_info_carries_none() {
     debug_info: false,
     ..oj_codegen::Options::default()
   };
-  let Some(module) = llvm_ir_with("main :: () { n := 1 + 2; }\n", &options) else {
-    return;
-  };
+  let module = llvm_ir_with("main :: () { n := 1 + 2; }\n", &options);
   assert!(
     !module.contains("!llvm.dbg.cu"),
     "nothing should describe the program:\n{module}"
@@ -257,11 +220,8 @@ fn a_program_built_without_debug_info_carries_none() {
 fn a_struct_is_described_member_by_member() {
   // The debug types come out of `oj-types`, not out of the byte arrays the
   // module stores an aggregate in (`docs/spec.md` §10).
-  let Some(module) =
-    llvm_ir("Point :: struct { x: float64; y: s32; }\nmain :: () { p: Point; p.y = 1; }\n")
-  else {
-    return;
-  };
+  let module =
+    llvm_ir("Point :: struct { x: float64; y: s32; }\nmain :: () { p: Point; p.y = 1; }\n");
   assert!(
     module.contains("!DICompositeType(tag: DW_TAG_structure_type, name: \"Point\""),
     "the struct should be described:\n{module}"
@@ -278,9 +238,7 @@ fn an_optimized_build_runs_the_pass_pipeline() {
   // `O2` (**C§4**), which is a pipeline over the module rather than a target
   // machine setting.
   let source = "add :: (a: int, b: int) -> int { return a + b; }\nmain :: () { n := add(1, 2); }\n";
-  let Some(debug) = llvm_ir(source) else {
-    return;
-  };
+  let debug = llvm_ir(source);
   let optimized = llvm_ir_with(
     source,
     &oj_codegen::Options {
@@ -288,8 +246,7 @@ fn an_optimized_build_runs_the_pass_pipeline() {
       optimization: 2,
       ..oj_codegen::Options::default()
     },
-  )
-  .expect("the distribution was there for the first build");
+  );
   let allocas = |module: &str| module.matches(" = alloca ").count();
   assert!(
     allocas(&optimized) < allocas(&debug),
@@ -315,13 +272,11 @@ fn a_split_program_hides_what_it_does_not_export() {
     debug_info: false,
     ..oj_codegen::Options::default()
   };
-  let Some(text) = llvm_ir_with(
+  let text = llvm_ir_with(
     "helper :: (x: int) -> int { return x * 2; }\n\
      main :: () { n := helper(21); }\n",
     &options,
-  ) else {
-    return;
-  };
+  );
   // The entry point belongs to the primary unit and to nothing else.
   assert!(!text.contains("define i32 @main("), "{text}");
   // Whatever this unit defines is either something the program exports on
@@ -346,12 +301,10 @@ fn a_split_program_hides_what_it_does_not_export() {
 /// procedure nobody exports keeps internal linkage.
 #[test]
 fn one_unit_keeps_internal_linkage() {
-  let Some(text) = llvm_ir(
+  let text = llvm_ir(
     "helper :: (x: int) -> int { return x * 2; }\n\
      main :: () { n := helper(21); }\n",
-  ) else {
-    return;
-  };
+  );
   assert!(text.contains("define internal"), "{text}");
   assert!(text.contains("define i32 @main("), "{text}");
 }

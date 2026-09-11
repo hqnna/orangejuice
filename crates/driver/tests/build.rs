@@ -53,13 +53,6 @@ struct Built {
 }
 
 fn build_and_run(body: &str) -> Option<Built> {
-  let jai_dir = match oj_testsupport::jai_dir() {
-    Some(dir) => dir,
-    None => {
-      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-      return None;
-    }
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return None;
@@ -73,7 +66,7 @@ fn build_and_run(body: &str) -> Option<Built> {
   // SAFETY: the tests in this file are the only ones that read it, and cargo
   // runs each integration test binary in its own process.
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
   let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
   assert!(
@@ -311,16 +304,12 @@ fn floats_convert_and_compare() {
 
 #[test]
 fn a_program_that_needs_a_later_milestone_says_which_one() {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("program.jai");
   std::fs::write(&path, "main :: () { #asm { frobnicate a:, 1; } }\n")
     .expect("the input should be writable");
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
 
   let report = oj_driver::run(
@@ -344,10 +333,6 @@ fn the_object_lands_in_a_build_directory_beside_the_output() {
 
 #[test]
 fn an_output_name_and_path_are_honoured() {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return;
@@ -358,7 +343,7 @@ fn an_output_name_and_path_are_honoured() {
   let out = directory.path().join("out");
   std::fs::create_dir(&out).expect("the output directory should be creatable");
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
 
   let parsed = oj_driver::parse(&[
@@ -387,18 +372,11 @@ fn an_output_name_and_path_are_honoured() {
 /// Builds a program and returns its diagnostics rather than running it, for
 /// the cases where the point is that the build fails.
 fn diagnostics_of(body: &str) -> Option<String> {
-  let jai_dir = match oj_testsupport::jai_dir() {
-    Some(dir) => dir,
-    None => {
-      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-      return None;
-    }
-  };
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("program.jai");
   std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
   let report = oj_driver::run(
     &path,
@@ -513,6 +491,29 @@ fn a_static_if_decides_on_the_result_of_a_run() {
      }\n",
     "yes\n",
   );
+}
+
+#[test]
+fn ordering_two_strings_says_which_operators_strings_have() {
+  // A string is a count and a pointer, so `<` has nothing to mean. The
+  // wording is the reference's, measured by putting the same program through
+  // it (**C§12**).
+  let Some(text) = diagnostics_of("main :: () { a := \"x\"; b := \"y\"; c := a > b; }\n") else {
+    return;
+  };
+  assert!(
+    text.contains(
+      "Error: Operator '>' does not work on strings. \
+       (Only == and != can be used on strings.)"
+    ),
+    "{text}"
+  );
+
+  // Equality is what strings do have, and it compares their bytes.
+  let Some(text) = diagnostics_of("main :: () { a := \"x\"; b := \"y\"; c := a == b; }\n") else {
+    return;
+  };
+  assert!(!text.contains("does not work on strings"), "{text}");
 }
 
 #[test]
@@ -1605,13 +1606,6 @@ fn a_compound_declaration_spreads_its_values_across_its_names() {
 /// what the classification produces is checked against what a C compiler
 /// expects rather than against itself (**L§7.11**).
 fn with_c_library(source: &str, body: &str) -> Option<Built> {
-  let jai_dir = match oj_testsupport::jai_dir() {
-    Some(dir) => dir,
-    None => {
-      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-      return None;
-    }
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return None;
@@ -1639,7 +1633,7 @@ fn with_c_library(source: &str, body: &str) -> Option<Built> {
   std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
   // SAFETY: as in `build_and_run`.
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
   let report = oj_driver::run(
     &path,
@@ -1974,13 +1968,6 @@ fn add_data_segment_reports_that_no_segment_of_its_own_is_made() {
 
 /// The same, with one more file beside the program for it to `#load`.
 fn assert_output_with_file(name: &str, contents: &str, body: &str, expected: &str) {
-  let jai_dir = match oj_testsupport::jai_dir() {
-    Some(dir) => dir,
-    None => {
-      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-      return;
-    }
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return;
@@ -1991,7 +1978,7 @@ fn assert_output_with_file(name: &str, contents: &str, body: &str, expected: &st
   std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
   // SAFETY: as `build_and_run`.
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
   let options = oj_driver::BuildOptions::new();
   let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
@@ -3526,6 +3513,27 @@ fn a_fixed_array_parameter_binds_its_dimension() {
 }
 
 #[test]
+fn an_array_parameter_binds_its_dimension_and_its_element_type_together() {
+  // `[$N] $T` writes two variables at once. The length has to be bound before
+  // the parameter is an array type at all — the header could not fold `N` —
+  // and `$T` is bound by unifying what that produced against the argument, so
+  // the order the two are solved in is what makes this work (**L§7.8**).
+  assert_output(
+    "#import \"Basic\";\n\
+     first :: (a: [$N] $T) -> T { return a[0]; }\n\
+     shape :: (a: [$N] $T) { print(\"% % %\\n\", N, T, a); }\n\
+     main :: () {\n  \
+       xs: [3] int;\n  \
+       xs[0] = 7;\n  \
+       print(\"%\\n\", first(xs));\n  \
+       shape(xs);\n  \
+       shape(float.[1.5, 2.5]);\n\
+     }\n",
+    "7\n3 s64 [7, 0, 0]\n2 float32 [1.5, 2.5]\n",
+  );
+}
+
+#[test]
 fn a_constant_array_of_procedures_is_data_the_back_end_fills_in() {
   // A procedure name is a constant, so a literal made of them is data whose
   // addresses the module that generates them writes (**L§5.11**).
@@ -3864,10 +3872,6 @@ fn a_break_inside_a_case_leaves_the_loop_around_the_switch() {
 /// Builds a program that imports a module written beside it, which is what a
 /// `#module_parameters` test needs: the arguments live at the `#import`.
 fn assert_output_with_module(module: &str, body: &str, expected: &str) {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return;
@@ -3882,7 +3886,7 @@ fn assert_output_with_module(module: &str, body: &str, expected: &str) {
   let mut options = oj_driver::BuildOptions::new();
   options.import_dirs = vec![directory.path().join("modules")];
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
   let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
   assert!(
@@ -4806,18 +4810,67 @@ fn a_sixteen_bit_byte_swap_is_a_rotate() {
 #[test]
 fn a_library_is_found_from_the_file_the_foreign_header_was_written_in() {
   // A binding written before a `#scope_file` belongs to the module, while the
-  // `#library` it names is written after it (**L§11.1**, **L§12.2**).
-  let Some(built) = build_and_run(
-    "#import \"Basic\";\n\
-     stb :: #import \"stb_image_write\";\n\
-     main :: () {\n  \
-       write := stb.stbi_write_png;\n  \
-       print(\"%\\n\", write != null);\n\
-     }\n",
-  ) else {
+  // `#library` it names is written after it (**L§11.1**, **L§12.2**). Its path
+  // is relative, and what it is relative *to* is the file it was written in —
+  // `../../native` from inside the module reaches the library beside the
+  // program. Resolving it against the program instead would climb out of the
+  // temporary directory entirely.
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
     return;
-  };
-  assert_eq!(built.output, "true\n");
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let module = directory.path().join("modules").join("Native");
+  std::fs::create_dir_all(&module).expect("the module directory should be creatable");
+
+  let c_path = module.join("native.c");
+  std::fs::write(&c_path, "int answer(void) { return 42; }\n").expect("the C source is writable");
+  let compiled = Command::new(oj_link::driver())
+    .arg("-shared")
+    .arg("-fPIC")
+    .arg("-o")
+    .arg(directory.path().join("native.so"))
+    .arg(&c_path)
+    .status();
+  if !compiled.is_ok_and(|status| status.success()) {
+    eprintln!("skipping: the C driver could not build the test library");
+    return;
+  }
+
+  // The header is the module's, exported to whoever imports it; the
+  // `#library` that binds it is written after a `#scope_file`, so the name
+  // `native` never leaves this file.
+  std::fs::write(
+    module.join("module.jai"),
+    "answer :: () -> s32 #foreign native;\n#scope_file\nnative :: #library \"../../native\";\n",
+  )
+  .expect("the module is writable");
+
+  let path = directory.path().join("program.jai");
+  std::fs::write(
+    &path,
+    format!(
+      "{PRELUDE}\nNative :: #import \"Native\";\nmain :: () {{ put_number(Native.answer()); }}\n"
+    ),
+  )
+  .expect("the input should be writable");
+
+  let mut options = oj_driver::BuildOptions::new();
+  options.import_dirs = vec![directory.path().join("modules")];
+  unsafe {
+    oj_testsupport::use_own_modules();
+  }
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "42\n");
 }
 
 #[test]

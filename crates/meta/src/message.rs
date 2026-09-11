@@ -9,7 +9,7 @@ use crate::abi::{Slice, Str};
 
 /// `Message.kind` (**C§3.2**).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
+#[repr(u32)]
 pub enum Kind {
   Uninitialized = 0,
   File = 1,
@@ -25,7 +25,7 @@ pub enum Kind {
 
 /// `Message_Import.module_type` (**C§3.2**).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
+#[repr(u32)]
 pub enum ModuleType {
   Uninitialized = 0,
   Preload = 1,
@@ -82,7 +82,7 @@ pub struct MessageImport {
 
 /// `Message_Failed_Import.status` (**C§3.2**).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
+#[repr(u32)]
 pub enum ImportStatus {
   Uninitialized = 0,
   Blocked = 1,

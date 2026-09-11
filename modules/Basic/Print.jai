@@ -263,8 +263,16 @@ print_character :: (_c: u8) {
 // asked for is appended at the end, and a `%` with nothing left prints as
 // itself — neither is an error, since a diagnostic here would fire while the
 // program is trying to report something else.
+//
+// `%` followed by digits names an argument by position, counting from one:
+// `print("%2 %1", a, b)` writes them the other way round, and the same
+// argument may be named twice. A positional also moves the cursor the bare
+// `%`s share, so `print("% %2 %", a, b, c)` writes all three in order.
 format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) -> bool {
     next := 0;
+    // How far into the arguments the format string has reached, which is not
+    // the cursor: a positional may name one the cursor has already passed.
+    used := 0;
     at := 0;
     while at < format.count {
         c := format[at];
@@ -284,9 +292,22 @@ format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) ->
             at += 1;
             continue;
         }
-        if next < args.count {
-            append_any(builder, args[next]);
-            next += 1;
+
+        wanted := next;
+        if at < format.count && is_digit(format[at]) {
+            position := 0;
+            while at < format.count && is_digit(format[at]) {
+                position = position * 10 + (format[at] - #char "0");
+                at += 1;
+            }
+            // Written from one, and a `%0` names nothing.
+            wanted = position - 1;
+        }
+
+        if wanted >= 0 && wanted < args.count {
+            append_any(builder, args[wanted]);
+            next = wanted + 1;
+            if next > used  used = next;
         } else {
             append(builder, #char "%");
         }
@@ -294,9 +315,9 @@ format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) ->
 
     // Arguments past the last `%` still get printed, which is what makes
     // `print("x")` with a stray argument visible rather than silent.
-    while next < args.count {
-        append_any(builder, args[next]);
-        next += 1;
+    while used < args.count {
+        append_any(builder, args[used]);
+        used += 1;
     }
     return true;
 }
@@ -412,27 +433,14 @@ append_formatter :: (builder: *String_Builder, data: *void, info: *Type_Info_Str
 
 // ------------------------------------------------------------- the leaves ---
 
+// An integer with no formatter around it still takes the context's default
+// one, which is what makes `context.print_style.default_format_int.base = 16`
+// reach a plain `print("%", n)`.
 append_integer :: (builder: *String_Builder, data: *void, info: *Type_Info_Integer) {
-    size := info.runtime_size;
-    if info.signed {
-        value: s64;
-        if size == {
-            case 1; value = (cast(*s8)  data).*;
-            case 2; value = (cast(*s16) data).*;
-            case 4; value = (cast(*s32) data).*;
-            case;   value = (cast(*s64) data).*;
-        }
-        append_s64(builder, value);
-    } else {
-        value: u64;
-        if size == {
-            case 1; value = (cast(*u8)  data).*;
-            case 2; value = (cast(*u16) data).*;
-            case 4; value = (cast(*u32) data).*;
-            case;   value = (cast(*u64) data).*;
-        }
-        append_u64(builder, value);
-    }
+    format := context.print_style.default_format_int;
+    format.value.type = info;
+    format.value.value_pointer = data;
+    append_format_int(builder, *format);
 }
 
 append_s64 :: (builder: *String_Builder, value: s64) {
@@ -701,33 +709,94 @@ append_padded :: (builder: *String_Builder, inner: *String_Builder, width: s64) 
 }
 
 
+// The name of a type, written the way the language writes it: `*float32`,
+// `[..] Point`, `procedure (s64) -> (s64, bool)`. A composite is spelled out of
+// the types it is built from rather than named after its kind, so what comes
+// out is text that could be written back into a program.
 append_type :: (builder: *String_Builder, info: *Type_Info) {
     if !info {
         append(builder, "(null type)");
         return;
     }
     if info.type == {
-        case .STRUCT; append(builder, (cast(*Type_Info_Struct) info).name);
-        case .ENUM;   append(builder, (cast(*Type_Info_Enum) info).name);
-        case;         append(builder, type_tag_name(info.type));
+        case .INTEGER;
+            integer := cast(*Type_Info_Integer) info;
+            append(builder, ifx integer.signed then "s" else "u");
+            append_s64(builder, integer.runtime_size * 8);
+        case .FLOAT;
+            append(builder, "float");
+            append_s64(builder, info.runtime_size * 8);
+        case .BOOL;      append(builder, "bool");
+        case .STRING;    append(builder, "string");
+        case .VOID;      append(builder, "void");
+        case .TYPE;      append(builder, "Type");
+        case .ANY;       append(builder, "Any");
+        case .CODE;      append(builder, "Code");
+        case .POINTER;
+            append(builder, "*");
+            append_type(builder, (cast(*Type_Info_Pointer) info).pointer_to);
+        case .ARRAY;
+            array := cast(*Type_Info_Array) info;
+            append(builder, "[");
+            if array.array_type == {
+                case .FIXED;     append_s64(builder, array.array_count);
+                case .RESIZABLE; append(builder, "..");
+                case .VIEW;      // `[]`, with nothing between the brackets.
+            }
+            append(builder, "] ");
+            append_type(builder, array.element_type);
+        case .PROCEDURE;
+            append_procedure_type(builder, cast(*Type_Info_Procedure) info);
+        case .STRUCT;
+            append_struct_type_name(builder, cast(*Type_Info_Struct) info);
+        case .ENUM;      append(builder, (cast(*Type_Info_Enum) info).name);
+        case .VARIANT;   append(builder, (cast(*Type_Info_Variant) info).name);
+        case .POLYMORPHIC_VARIABLE;
+            append(builder, "$T");
+        case .OVERLOAD_SET;
+            append(builder, "(overload set)");
+        case;            append(builder, "(unknown type)");
     }
 }
 
-type_tag_name :: (tag: Type_Info_Tag) -> string {
-    if tag == {
-        case .INTEGER;   return "integer";
-        case .FLOAT;     return "float";
-        case .BOOL;      return "bool";
-        case .STRING;    return "string";
-        case .POINTER;   return "pointer";
-        case .PROCEDURE; return "procedure";
-        case .VOID;      return "void";
-        case .ARRAY;     return "array";
-        case .ANY;       return "Any";
-        case .TYPE;      return "Type";
-        case .CODE;      return "Code";
-        case;            return "type";
+// A struct baked from a family carries the arguments it was baked with, and
+// those are what tell one specialization from another: `Pair(T=s64)`.
+append_struct_type_name :: (builder: *String_Builder, info: *Type_Info_Struct) {
+    append(builder, info.name);
+    if !info.specified_parameters.count  return;
+
+    append(builder, "(");
+    for info.specified_parameters {
+        if it_index  append(builder, ", ");
+        append(builder, it.name);
+        append(builder, "=");
+        if it.offset_into_constant_storage >= 0 {
+            append_value(builder, info.constant_storage.data + it.offset_into_constant_storage, it.type);
+        } else {
+            append_type(builder, it.type);
+        }
     }
+    append(builder, ")");
+}
+
+append_procedure_type :: (builder: *String_Builder, info: *Type_Info_Procedure) {
+    append(builder, "procedure (");
+    for info.argument_types {
+        if it_index  append(builder, ", ");
+        append_type(builder, it);
+    }
+    append(builder, ")");
+
+    // Nothing at all for a procedure that returns nothing, one type bare, and
+    // several in parentheses — which is how they are written.
+    if info.return_types.count == 0  return;
+    append(builder, " -> ");
+    if info.return_types.count > 1  append(builder, "(");
+    for info.return_types {
+        if it_index  append(builder, ", ");
+        append_type(builder, it);
+    }
+    if info.return_types.count > 1  append(builder, ")");
 }
 
 // ---------------------------------------------------------- the composites ---

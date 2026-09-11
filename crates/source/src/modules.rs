@@ -18,11 +18,11 @@ impl ImportPath {
   }
 
   /// The default search path for a build whose first source file is
-  /// `first_file` and whose distribution lives in `jai_dir`.
-  pub fn default_for(first_file: &Path, jai_dir: &Path) -> Self {
+  /// `first_file` and whose distribution root is `distribution`.
+  pub fn default_for(first_file: &Path, distribution: &Path) -> Self {
     Self::new([
       directory_of(first_file).join("modules"),
-      jai_dir.join("modules"),
+      distribution.join("modules"),
     ])
   }
 

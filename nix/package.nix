@@ -59,6 +59,7 @@ craneLib.buildPackage (commonArgs // {
     description = "A cleanroom implementation of the Jai programming language";
     license = pkgs.lib.licenses.mit;
     mainProgram = "oj";
+    maintainers = [ "Hanna Rose <me@hanna.lol>" ];
     platforms = [ "x86_64-linux" ];
   };
 })

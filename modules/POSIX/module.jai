@@ -242,7 +242,7 @@ munmap :: (address: *void, length: u64) -> s32 #foreign libc;
 
 #scope_module
 
-libc :: #system_library "c";
+libc :: #library,system "libc";
 
 #scope_export
 
@@ -297,7 +297,7 @@ MAP_SHARED :: 0x01;
 #scope_module
 
 // glibc folded librt into libc; naming libc works on a modern system.
-librt :: #system_library "c";
+librt :: #library,system "libc";
 
 #scope_export
 
@@ -336,4 +336,4 @@ sysconf :: (name: _SC_definitions) -> s64 #foreign libc;
 
 // glibc folded libpthread into libc itself in 2.34; naming libc for both is
 // what works on a modern system and does no harm on an older one.
-pthread :: #system_library "c";
+pthread :: #library,system "libc";

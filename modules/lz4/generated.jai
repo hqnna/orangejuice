@@ -11,7 +11,7 @@
 
 // The reference vendors liblz4; we bind the system one instead, so nothing
 // binary lives in the tree.
-lz4lib :: #system_library "lz4";
+lz4lib :: #library,system "liblz4";
 
 #scope_export
 

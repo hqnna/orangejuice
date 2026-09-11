@@ -1,0 +1,6 @@
+[0, 1, 4, 9] (32 bytes)
+sum = 14
+middle two: [1, 4] (5)
+3 items: ["first", "second", "third"]
+after removing the first: ["third", "second"]
+5 primes, largest 11

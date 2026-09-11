@@ -1,23 +1,13 @@
-//! orangejuice's own modules (`modules/`).
+//! The distribution orangejuice ships (`modules/`).
 //!
-//! These compile against the distribution orangejuice ships rather than the
-//! vendored reference one, which is what a checkout with no Jai distribution
-//! behind it does. Nothing here reads `OJ_JAI_DIR`: the point is that the
-//! compiler works when there is no reference distribution to point it at.
+//! `oj` is a Jai distribution of its own: `modules/` sits at the root of this
+//! repository, and the compiler finds it from its own binary rather than from
+//! anything a caller has to set. What is asserted here is that the modules a
+//! program cannot do without — Preload, Basic, Runtime_Support — hold up under
+//! a real build.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-
-/// The distribution this repository ships, which is the repository itself:
-/// `modules/` sits at its root the way it does in a Jai distribution.
-fn own_distribution() -> PathBuf {
-  let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  manifest
-    .ancestors()
-    .find(|directory| directory.join("modules").join("Preload.jai").is_file())
-    .expect("orangejuice ships its own modules")
-    .to_path_buf()
-}
 
 fn linker_is_available() -> bool {
   let driver = oj_link::driver();
@@ -38,11 +28,10 @@ fn build_and_run(body: &str) -> Option<String> {
   let path = directory.path().join("program.jai");
   std::fs::write(&path, body).expect("the input should be writable");
 
-  // Point the compiler at *our* distribution rather than the vendored one.
   // SAFETY: cargo runs each integration test binary in its own process, and
   // nothing else in this one reads it.
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, own_distribution());
+    oj_testsupport::use_own_modules();
   }
 
   let options = oj_driver::BuildOptions::new();
@@ -169,10 +158,10 @@ fn temporary_storage_is_reset_in_one_go() {
 }
 
 #[test]
-fn our_own_distribution_is_found_without_being_pointed_at() {
+fn the_distribution_is_found_without_being_pointed_at() {
   // What makes `oj` usable on its own: the modules are found from the
   // executable rather than from an environment variable.
-  let found = oj_driver::own_distribution();
+  let found = oj_driver::distribution();
   assert!(
     found.is_some_and(|directory| directory.join("modules").join("Preload.jai").is_file()),
     "orangejuice should find the modules it ships"
@@ -184,7 +173,7 @@ fn our_own_distribution_is_found_without_being_pointed_at() {
 /// loudly rather than as a mystery somewhere in the type table.
 #[test]
 fn preload_declares_what_the_compiler_looks_up() {
-  let preload = own_distribution().join("modules").join("Preload.jai");
+  let preload = oj_testsupport::modules().join("Preload.jai");
   let text = std::fs::read_to_string(&preload).expect("Preload should be readable");
   for name in [
     "Allocator",
@@ -246,7 +235,7 @@ fn a_crash_names_itself_and_walks_the_stack() {
   // SAFETY: cargo runs each integration test binary in its own process, and
   // nothing else in this one reads it.
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, own_distribution());
+    oj_testsupport::use_own_modules();
   }
 
   let options = oj_driver::BuildOptions::new();

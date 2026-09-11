@@ -1,0 +1,7 @@
+at depth 0
+  at depth 1
+    at depth 2
+      at depth 3
+5
+allocations through ours: true
+and the context is back: true

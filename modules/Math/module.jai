@@ -15,7 +15,7 @@
 
 #scope_module
 
-libm :: #system_library "m";
+libm :: #library,system "libm";
 
 // For Swap and the printers.
 Basic :: #import "Basic";
@@ -53,19 +53,24 @@ FLOAT32_NAN      :: 0h7FC00000;
 FLOAT64_INFINITY :: 0h7FF0000000000000;
 FLOAT64_NAN      :: 0h7FF8000000000000;
 
-S8_MIN  :: -128;
-S8_MAX  ::  127;
-S16_MIN :: -32768;
-S16_MAX ::  32767;
-S32_MIN :: -2147483648;
-S32_MAX ::  2147483647;
-S64_MIN :: -9223372036854775808;
-S64_MAX ::  9223372036854775807;
+// Each one carries the type it is the limit of, so that arithmetic mixing it
+// with an untyped constant comes out in that type rather than in `int`. The
+// signed minimums are written in hex: their magnitude is one past the
+// corresponding maximum, so the decimal form would overflow the very type it
+// is the limit of before the minus sign could be applied.
+S8_MIN  :s8:  0x80;
+S8_MAX  :s8:  0x7f;
+S16_MIN :s16: 0x8000;
+S16_MAX :s16: 0x7fff;
+S32_MIN :s32: 0x8000_0000;
+S32_MAX :s32: 0x7fff_ffff;
+S64_MIN :s64: 0x8000_0000_0000_0000;
+S64_MAX :s64: 0x7fff_ffff_ffff_ffff;
 
-U8_MAX  :: 255;
-U16_MAX :: 65535;
-U32_MAX :: 4294967295;
-U64_MAX :: 18446744073709551615;
+U8_MAX  :u8:  0xff;
+U16_MAX :u16: 0xffff;
+U32_MAX :u32: 0xffff_ffff;
+U64_MAX :u64: 0xffff_ffff_ffff_ffff;
 
 // ---------------------------------------------------- the transcendentals ---
 

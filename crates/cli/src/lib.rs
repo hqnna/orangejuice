@@ -26,11 +26,16 @@ use std::process::ExitCode;
 use oj_diag::SourceMap;
 use oj_lexer::Interner;
 
-pub const VERSION_LINE: &str = concat!(
-  "orangejuice ",
-  env!("CARGO_PKG_VERSION"),
-  " (jai beta 0.2.009 compatible, LLVM 19)"
-);
+/// What `oj version` prints. The Jai release named here is
+/// `oj_driver::JAI_VERSION` rather than a second copy of it, so the compiler
+/// cannot claim one version to a person and another to a metaprogram.
+pub fn version_line() -> String {
+  format!(
+    "orangejuice {} (jai {} compatible, LLVM 19)",
+    env!("CARGO_PKG_VERSION"),
+    oj_driver::JAI_VERSION
+  )
+}
 
 pub const EXIT_SUCCESS: u8 = 0;
 pub const EXIT_FAILURE: u8 = 1;
@@ -264,7 +269,7 @@ fn execute(invocation: &Invocation) -> u8 {
     return EXIT_SUCCESS;
   }
   if compiler.version {
-    println!("{VERSION_LINE}");
+    println!("{}", version_line());
     return EXIT_SUCCESS;
   }
 
@@ -368,7 +373,7 @@ fn dump_scopes(path: &Path, file_only: bool) -> u8 {
     oj_scope::Options::single_file()
   } else {
     oj_scope::Options {
-      jai_dir: jai_dir(),
+      distribution: oj_driver::distribution(),
       ..oj_scope::Options::default()
     }
   };
@@ -414,7 +419,7 @@ fn dump_types(path: &Path, file_only: bool) -> u8 {
     oj_scope::Options::single_file()
   } else {
     oj_scope::Options {
-      jai_dir: jai_dir(),
+      distribution: oj_driver::distribution(),
       ..oj_scope::Options::default()
     }
   };
@@ -436,10 +441,6 @@ fn dump_types(path: &Path, file_only: bool) -> u8 {
   } else {
     EXIT_SUCCESS
   }
-}
-
-fn jai_dir() -> Option<PathBuf> {
-  oj_driver::jai_dir()
 }
 
 /// `oj dump ir` and `oj dump asm`: the whole pipeline, stopped one stage early
@@ -470,7 +471,7 @@ fn build(invocation: &Invocation) -> u8 {
   };
   // `-version` prints and stops, whether or not there was anything to build.
   if parsed.options.print_version {
-    println!("{VERSION_LINE}");
+    println!("{}", version_line());
     return EXIT_SUCCESS;
   }
   for deferred in &parsed.deferred {
@@ -577,9 +578,10 @@ mod tests {
   }
 
   #[test]
-  fn version_line_names_the_reference_compiler_and_backend() {
-    assert!(VERSION_LINE.contains("jai beta 0.2.009"), "{VERSION_LINE}");
-    assert!(VERSION_LINE.contains("LLVM 19"), "{VERSION_LINE}");
+  fn version_line_names_the_jai_release_and_the_backend() {
+    let line = version_line();
+    assert!(line.contains(oj_driver::JAI_VERSION), "{line}");
+    assert!(line.contains("LLVM 19"), "{line}");
   }
 
   #[test]

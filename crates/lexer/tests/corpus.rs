@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use oj_diag::{Severity, SourceMap};
 use oj_lexer::{Interner, TokenKind};
-use oj_testsupport::jai_dir_or_skip;
 use walkdir::WalkDir;
 
 /// Set to a directory to write one cross-check dump per corpus file, for
@@ -27,17 +26,18 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn every_vendor_file_lexes_without_an_error() {
-  let jai_dir = jai_dir_or_skip!();
+fn every_file_of_the_distribution_lexes_without_an_error() {
   let stream_dir = std::env::var_os(STREAM_DIR_ENV).map(PathBuf::from);
   if let Some(dir) = &stream_dir {
     std::fs::create_dir_all(dir).expect("the stream directory should be creatable");
   }
 
-  let files = jai_files(&jai_dir);
+  let mut files = jai_files(&oj_testsupport::modules());
+  files.extend(jai_files(&oj_testsupport::examples()));
+  files.sort();
   assert!(
-    files.len() > 500,
-    "expected the vendor distribution's .jai corpus, found {} files",
+    files.len() > 70,
+    "expected the distribution's own .jai corpus, found {} files",
     files.len()
   );
 
@@ -64,7 +64,9 @@ fn every_vendor_file_lexes_without_an_error() {
     }
 
     if let Some(dir) = &stream_dir {
-      let relative = path.strip_prefix(&jai_dir).unwrap_or(path);
+      let relative = path
+        .strip_prefix(oj_testsupport::distribution())
+        .unwrap_or(path);
       let name = relative.to_string_lossy().replace('/', "%");
       std::fs::write(
         dir.join(format!("{name}.tokens")),

@@ -752,7 +752,7 @@ scan2 :: (text: string, format: string, args: .. Any) -> bool {
 
 #scope_module
 
-crt_string :: #system_library "c";
+crt_string :: #library,system "libc";
 
 // The tail of `s` from `index` on, which several things here want and which
 // `slice` would need a count for.

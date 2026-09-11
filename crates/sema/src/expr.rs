@@ -1120,6 +1120,33 @@ impl Checker<'_> {
     ) {
       return result;
     }
+    // A string is a count and a pointer, so ordering one against another is
+    // not a comparison the language defines — and it is a common enough thing
+    // to reach for that the reference says so by name rather than leaving it
+    // to a type error (**C§12**).
+    if matches!(
+      operator,
+      OperatorType::LESS
+        | OperatorType::LESS_OR_EQUAL
+        | OperatorType::GREATER
+        | OperatorType::GREATER_OR_EQUAL
+    ) && [&left_type, &right_type]
+      .iter()
+      .any(|operand| self.types().underlying(operand.type_id) == TypeId::STRING)
+    {
+      let span = self
+        .ast(source)
+        .map_or(oj_diag::Span::at(0), |ast| ast.node(node).span);
+      self.error(
+        source,
+        span,
+        format!(
+          "Operator '{}' does not work on strings. (Only == and != can be used on strings.)",
+          operator.text()
+        ),
+      );
+      return Expr::value(TypeId::BOOL);
+    }
     if matches!(
       operator,
       OperatorType::IS_EQUAL

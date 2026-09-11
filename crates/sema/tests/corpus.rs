@@ -4,7 +4,6 @@ use oj_diag::{Severity, SourceMap};
 use oj_lexer::Interner;
 use oj_scope::{Options, Program};
 use oj_sema::Checker;
-use oj_testsupport::jai_dir_or_skip;
 use walkdir::WalkDir;
 
 fn jai_files(root: &Path) -> Vec<PathBuf> {
@@ -45,12 +44,13 @@ fn rendered_errors(checker: &Checker<'_>, sources: &SourceMap) -> Vec<String> {
 /// contradicts the file — a circular dependency, a struct that cannot be laid
 /// out, a runaway resolution.
 #[test]
-fn every_vendor_file_typechecks_on_its_own() {
-  let jai_dir = jai_dir_or_skip!();
-  let files = jai_files(&jai_dir);
+fn every_file_of_the_distribution_typechecks_on_its_own() {
+  let mut files = jai_files(&oj_testsupport::modules());
+  files.extend(jai_files(&oj_testsupport::examples()));
+  files.sort();
   assert!(
-    files.len() > 500,
-    "expected the vendor distribution's .jai corpus, found {} files",
+    files.len() > 70,
+    "expected the distribution's own .jai corpus, found {} files",
     files.len()
   );
 
@@ -82,19 +82,18 @@ fn every_vendor_file_typechecks_on_its_own() {
   assert!(types > files.len() * 25, "{types} types looks too small");
 }
 
-/// The `how_to` suite is the acceptance suite (`docs/spec.md` §8): each of its
-/// top-level programs is typed as a whole — its `#load`s, its modules and
-/// Preload — and the typechecker has nothing to complain about.
+/// The `examples` suite is the acceptance suite (`docs/spec.md` §8): each of
+/// its programs is typed as a whole — its `#load`s, its modules and Preload —
+/// and the typechecker has nothing to complain about.
 #[test]
-fn every_how_to_program_typechecks() {
-  let jai_dir = jai_dir_or_skip!();
-  let how_to = jai_dir.join("how_to");
-  let mut roots: Vec<PathBuf> = jai_files(&how_to)
+fn every_example_program_typechecks() {
+  let examples = oj_testsupport::examples();
+  let mut roots: Vec<PathBuf> = jai_files(&examples)
     .into_iter()
-    .filter(|path| path.parent() == Some(how_to.as_path()))
+    .filter(|path| path.parent() == Some(examples.as_path()))
     .collect();
   roots.sort();
-  assert!(roots.len() > 40, "expected the how_to suite");
+  assert!(roots.len() > 10, "expected the examples suite");
 
   let mut failures = Vec::new();
   for path in &roots {
@@ -105,7 +104,7 @@ fn every_how_to_program_typechecks() {
       &interner,
       path,
       Options {
-        jai_dir: Some(jai_dir.clone()),
+        distribution: Some(oj_testsupport::distribution().to_path_buf()),
         ..Options::default()
       },
     );
@@ -120,25 +119,22 @@ fn every_how_to_program_typechecks() {
 
   assert!(
     failures.is_empty(),
-    "{} of {} how_to programs did not typecheck:\n{}",
+    "{} of {} example programs did not typecheck:\n{}",
     failures.len(),
     roots.len(),
     failures.join("\n\n")
   );
 }
 
-/// The struct layouts of the standard modules, measured with the reference
-/// compiler (`size_of(T)` in a program that imports the module). These are the
-/// shapes the whole runtime ABI is built on, so they are pinned here rather
-/// than left to the how_to suite to notice.
+/// The struct layouts the runtime ABI is built on, each one measured against
+/// the reference compiler (`size_of(T)` in a program that imports the module)
+/// while one was still on hand. They are pinned here rather than left to the
+/// acceptance suite to notice, because a program whose `Context` is the wrong
+/// size fails somewhere else entirely.
 #[test]
-fn the_standard_module_layouts_match_the_reference_compiler() {
-  let jai_dir = jai_dir_or_skip!();
-  let root = jai_dir.join("how_to").join("001_first.jai");
-  if !root.is_file() {
-    eprintln!("skipping: {} is missing", root.display());
-    return;
-  }
+fn the_standard_module_layouts_are_the_sizes_they_were_measured_at() {
+  let root = oj_testsupport::examples().join("010_hello.jai");
+  assert!(root.is_file(), "{} should be there", root.display());
 
   let sources = SourceMap::new();
   let interner = Interner::new();
@@ -147,7 +143,7 @@ fn the_standard_module_layouts_match_the_reference_compiler() {
     &interner,
     &root,
     Options {
-      jai_dir: Some(jai_dir.clone()),
+      distribution: Some(oj_testsupport::distribution().to_path_buf()),
       ..Options::default()
     },
   );

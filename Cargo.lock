@@ -397,9 +397,6 @@ dependencies = [
 [[package]]
 name = "oj-testsupport"
 version = "0.1.0"
-dependencies = [
- "tempfile",
-]
 
 [[package]]
 name = "oj-types"

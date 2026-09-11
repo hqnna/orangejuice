@@ -289,7 +289,7 @@ read_special_file :: (path: string) -> (contents: string, ok: bool) {
 
 #scope_module
 
-libc_nprocs :: #system_library "c";
+libc_nprocs :: #library,system "libc";
 
 get_nprocs :: () -> s32 #foreign libc_nprocs;
 strerror_r :: (errnum: s32, buffer: *u8, length: s32) -> *u8 #foreign libc_nprocs;

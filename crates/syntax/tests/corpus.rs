@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use oj_diag::{Severity, SourceMap};
 use oj_lexer::Interner;
-use oj_testsupport::jai_dir_or_skip;
 use walkdir::WalkDir;
 
 fn jai_files(root: &Path) -> Vec<PathBuf> {
@@ -27,12 +26,13 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
 /// **M2**: every file of the vendor distribution parses, and the printed form
 /// of its tree parses back to the same tree (`docs/spec.md` §8).
 #[test]
-fn every_vendor_file_parses_and_round_trips() {
-  let jai_dir = jai_dir_or_skip!();
-  let files = jai_files(&jai_dir);
+fn every_file_of_the_distribution_parses_and_round_trips() {
+  let mut files = jai_files(&oj_testsupport::modules());
+  files.extend(jai_files(&oj_testsupport::examples()));
+  files.sort();
   assert!(
-    files.len() > 500,
-    "expected the vendor distribution's .jai corpus, found {} files",
+    files.len() > 70,
+    "expected the distribution's own .jai corpus, found {} files",
     files.len()
   );
 

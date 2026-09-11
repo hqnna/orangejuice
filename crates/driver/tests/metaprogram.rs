@@ -80,13 +80,6 @@ impl Fixture {
 
 /// Builds `main.jai`, with the `Compiler` declarations in front of `body`.
 fn build(fixture: &Fixture, body: &str) -> Option<oj_driver::Report> {
-  let jai_dir = match oj_testsupport::jai_dir() {
-    Some(dir) => dir,
-    None => {
-      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-      return None;
-    }
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return None;
@@ -101,7 +94,7 @@ fn build(fixture: &Fixture, body: &str) -> Option<oj_driver::Report> {
   // SAFETY: cargo runs each integration test binary in its own process, and
   // nothing else in this one reads it.
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
   let options = oj_driver::BuildOptions::new();
   Some(oj_driver::run(
@@ -682,13 +675,6 @@ fn the_options_of_the_programs_own_workspace_are_the_defaults() {
 /// `Build_Options.compile_time_command_line` (**C§2.1**).
 #[test]
 fn the_compile_time_command_line_reaches_a_metaprogram() {
-  let jai_dir = match oj_testsupport::jai_dir() {
-    Some(dir) => dir,
-    None => {
-      eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-      return;
-    }
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return;
@@ -708,7 +694,7 @@ fn the_compile_time_command_line_reaches_a_metaprogram() {
   );
   // SAFETY: as in `build`.
   unsafe {
-    std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir);
+    oj_testsupport::use_own_modules();
   }
   let mut options = oj_driver::BuildOptions::new();
   options.compile_time_command_line = vec![String::from("debug"), String::from("release")];
@@ -870,23 +856,15 @@ fn a_watching_metaprogram_is_sent_the_declarations_that_typechecked() {
 
 #[test]
 fn the_distributions_default_metaprogram_drives_the_build() {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return;
   }
-  let Some(metaprogram) = ({
-    // SAFETY: cargo runs each integration test binary in its own process, and
-    // nothing else in this one reads it.
-    unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
-    oj_driver::default_metaprogram()
-  }) else {
-    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
-    return;
-  };
+  // SAFETY: cargo runs each integration test binary in its own process, and
+  // nothing else in this one reads it.
+  unsafe { oj_testsupport::use_own_modules() };
+  let metaprogram =
+    oj_driver::default_metaprogram().expect("the distribution ships a Default_Metaprogram");
 
   let fixture = Fixture::new();
   fixture.write(
@@ -916,20 +894,14 @@ fn the_distributions_default_metaprogram_drives_the_build() {
 
 #[test]
 fn a_program_the_default_metaprogram_cannot_compile_fails_the_build() {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return;
   }
   // SAFETY: as above.
-  unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
-  let Some(metaprogram) = oj_driver::default_metaprogram() else {
-    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
-    return;
-  };
+  unsafe { oj_testsupport::use_own_modules() };
+  let metaprogram =
+    oj_driver::default_metaprogram().expect("the distribution ships a Default_Metaprogram");
 
   let fixture = Fixture::new();
   fixture.write("wrong.jai", "main :: () { x: int = \"no\"; }\n");
@@ -953,11 +925,10 @@ fn a_program_the_default_metaprogram_cannot_compile_fails_the_build() {
 
 /// Lowers a library and hands back its IR listing, so that what it exports can
 /// be read off the symbols.
-fn library_listing(source: &str, runtime_support: oj_driver::RuntimeSupport) -> Option<String> {
-  let jai_dir = oj_testsupport::jai_dir()?;
+fn library_listing(source: &str, runtime_support: oj_driver::RuntimeSupport) -> String {
   // SAFETY: cargo runs each integration test binary in its own process, and
   // nothing else in this one reads it.
-  unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
+  unsafe { oj_testsupport::use_own_modules() };
   let fixture = Fixture::new();
   fixture.write("library.jai", source);
   let options = oj_driver::BuildOptions {
@@ -976,16 +947,13 @@ fn library_listing(source: &str, runtime_support: oj_driver::RuntimeSupport) -> 
     "the library should lower, but:\n{}",
     report.diagnostics.join("")
   );
-  Some(report.output)
+  report.output
 }
 
 #[test]
 fn a_library_takes_the_runtime_init_its_build_options_ask_for() {
   const SOURCE: &str = "#program_export\ngreet :: () { }\n";
-  let Some(listing) = library_listing(SOURCE, oj_driver::RuntimeSupport::OnlyInit) else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
+  let listing = library_listing(SOURCE, oj_driver::RuntimeSupport::OnlyInit);
   assert!(
     listing.contains("procedure __jai_runtime_init"),
     "a library that takes Runtime_Support's init exports it under its own name"
@@ -996,10 +964,7 @@ fn a_library_takes_the_runtime_init_its_build_options_ask_for() {
 #[test]
 fn a_library_that_omits_runtime_support_defines_no_init() {
   const SOURCE: &str = "#program_export\ngreet :: () { }\n";
-  let Some(listing) = library_listing(SOURCE, oj_driver::RuntimeSupport::Omit) else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
+  let listing = library_listing(SOURCE, oj_driver::RuntimeSupport::Omit);
   assert!(
     !listing.contains("procedure __jai_runtime_init"),
     "OMIT means neither the entry point nor the runtime's init is defined"
@@ -1513,22 +1478,14 @@ fn the_check_plugin_reports_a_format_string_that_does_not_match_its_arguments() 
   // `Default_Metaprogram` loads `modules/Check` unless `-no_check`, and Check
   // is what turns a call's `Code_*` tree into this diagnostic. The wording is
   // the reference compiler's, measured by running the same program through it.
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return;
   }
-  let Some(metaprogram) = ({
-    // SAFETY: as the test above.
-    unsafe { std::env::set_var(oj_testsupport::JAI_DIR_ENV, &jai_dir) };
-    oj_driver::default_metaprogram()
-  }) else {
-    eprintln!("skipping: the distribution has no Default_Metaprogram.jai");
-    return;
-  };
+  // SAFETY: as the test above.
+  unsafe { oj_testsupport::use_own_modules() };
+  let metaprogram =
+    oj_driver::default_metaprogram().expect("the distribution ships a Default_Metaprogram");
 
   let fixture = Fixture::new();
   fixture.write(

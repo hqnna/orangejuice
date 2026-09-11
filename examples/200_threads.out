@@ -1,0 +1,6 @@
+shared total: 500500
+expected:     500500
+worker 0 summed 1..250: 31375
+worker 1 summed 251..500: 93875
+worker 2 summed 501..750: 156375
+worker 3 summed 751..1000: 218875

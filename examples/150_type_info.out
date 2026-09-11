@@ -1,0 +1,9 @@
+STRUCT (32 bytes)
+  name : STRING at offset 0
+  retries : INTEGER at offset 16
+  verbose : BOOL at offset 24
+INTEGER (8 bytes)
+LOW = 0
+MEDIUM = 1
+HIGH = 2
+1 two 3 

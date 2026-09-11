@@ -8,7 +8,7 @@
 
 #scope_module
 
-libc :: #system_library "c";
+libc :: #library,system "libc";
 
 #scope_export
 

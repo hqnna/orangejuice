@@ -49,11 +49,11 @@ pub struct Reference {
 #[derive(Clone, Debug)]
 pub struct Options {
   /// The distribution whose `modules/` holds Preload and the standard modules.
-  pub jai_dir: Option<PathBuf>,
+  pub distribution: Option<PathBuf>,
   /// `-import_dir` directories, in command-line order.
   pub import_dirs: Vec<PathBuf>,
   /// Follow `#load` and `#import`. Turning this off checks one file on its own,
-  /// which is what the corpus test does for all 702 vendor files.
+  /// which is what the corpus test does for every file of the distribution.
   pub follow_imports: bool,
   /// Parse the distribution's `Preload.jai` into the root scope (**L§11.4**).
   pub load_preload: bool,
@@ -178,7 +178,7 @@ impl ImportRemap {
 impl Default for Options {
   fn default() -> Self {
     Self {
-      jai_dir: None,
+      distribution: None,
       import_dirs: Vec::new(),
       follow_imports: true,
       load_preload: true,
@@ -526,8 +526,8 @@ impl<'a> Program<'a> {
       .cloned()
       .or_else(|| strings.first().map(|(path, _)| path.clone()))
       .unwrap_or_default();
-    let jai_dir = options.jai_dir.clone().unwrap_or_default();
-    let mut import_path = ImportPath::default_for(&anchor, &jai_dir);
+    let distribution = options.distribution.clone().unwrap_or_default();
+    let mut import_path = ImportPath::default_for(&anchor, &distribution);
     for directory in options.import_dirs.iter().rev() {
       import_path.prepend(directory.clone());
     }
@@ -813,10 +813,10 @@ impl<'a> Program<'a> {
   }
 
   fn load_preload(&self) {
-    let Some(jai_dir) = self.options.jai_dir.clone() else {
+    let Some(distribution) = self.options.distribution.clone() else {
       return;
     };
-    let preload = jai_dir.join("modules").join("Preload.jai");
+    let preload = distribution.join("modules").join("Preload.jai");
     if preload.is_file() {
       let scope = self.preload;
       self.record_module(

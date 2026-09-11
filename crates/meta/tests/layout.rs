@@ -2,9 +2,9 @@
 //! structs and reads them with the distribution's own declarations, so every
 //! mirror has to match `Compiler.jai` byte for byte (`docs/spec.md` §6).
 //!
-//! The measurement is the compiler's own front end reading the vendored
-//! module, which is the only source that cannot drift from what a metaprogram
-//! will actually see.
+//! The measurement is the compiler's own front end reading the distribution's
+//! own `Compiler` module, which is the only source that cannot drift from what
+//! a metaprogram will actually see.
 
 use std::mem::{offset_of, size_of};
 
@@ -69,14 +69,32 @@ impl Layout {
 const FIXTURE: &str = "\
 #import \"Compiler\";
 Typechecked_Probe :: struct { using entry: Typechecked(Code_Node); }
+Enum_Probe :: struct {
+    kind:        Message_Kind;
+    module_type: Module_Type;
+    status:      Import_Status;
+    phase:       Phase;
+    error_code:  Error_Code;
+}
 main :: () {}
 ";
 
+/// The Rust mirror of `Enum_Probe`. A field's *offset* is what the width of the
+/// field before it comes to, so this is how an enum's width is measured: an
+/// enum's own size is invisible to a struct whose next member is wider, which
+/// is exactly how a `#[repr(u8)]` mirror of an `enum u32` went unnoticed —
+/// `Message.workspace` sat at the right offset either way, and a metaprogram
+/// read three bytes of padding as part of `kind`.
+#[repr(C)]
+struct EnumProbe {
+  kind: oj_meta::Kind,
+  module_type: oj_meta::ModuleType,
+  status: oj_meta::ImportStatus,
+  phase: oj_meta::Phase,
+  error_code: oj_meta::ErrorCode,
+}
+
 fn measure(names: &[&str], check: impl FnOnce(&[Layout])) {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   let directory = tempfile::tempdir().expect("a temporary directory");
   let root = directory.path().join("main.jai");
   std::fs::write(&root, FIXTURE).expect("the fixture is writable");
@@ -88,7 +106,7 @@ fn measure(names: &[&str], check: impl FnOnce(&[Layout])) {
     &interner,
     &root,
     Options {
-      jai_dir: Some(jai_dir),
+      distribution: Some(oj_testsupport::distribution().to_path_buf()),
       ..Options::default()
     },
   );
@@ -575,5 +593,18 @@ fn a_typechecked_entry_is_an_expression_and_its_subexpressions() {
     layouts[0].assert_size(size_of::<Typechecked>());
     layouts[0].assert_offset("expression", offset_of!(Typechecked, expression));
     layouts[0].assert_offset("subexpressions", offset_of!(Typechecked, subexpressions));
+  });
+}
+
+#[test]
+fn every_enum_a_message_carries_is_as_wide_as_the_module_declares() {
+  measure(&["Enum_Probe"], |layouts| {
+    let probe = &layouts[0];
+    probe.assert_size(size_of::<EnumProbe>());
+    probe.assert_offset("kind", offset_of!(EnumProbe, kind));
+    probe.assert_offset("module_type", offset_of!(EnumProbe, module_type));
+    probe.assert_offset("status", offset_of!(EnumProbe, status));
+    probe.assert_offset("phase", offset_of!(EnumProbe, phase));
+    probe.assert_offset("error_code", offset_of!(EnumProbe, error_code));
   });
 }

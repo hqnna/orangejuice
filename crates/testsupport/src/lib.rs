@@ -1,45 +1,57 @@
-use std::ffi::OsStr;
+//! Where the tests find the distribution orangejuice ships.
+//!
+//! orangejuice *is* a Jai distribution: `modules/` sits at the root of this
+//! repository the way it does in any other, and `examples/` beside it is the
+//! acceptance suite (`docs/spec.md` §8). Nothing here looks for a reference
+//! compiler — there is none to look for.
+
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
-pub const JAI_DIR_ENV: &str = "OJ_JAI_DIR";
+/// The modules directory a compilation reads, overriding the one the compiler
+/// would find beside its own binary.
+pub const MODULES_ENV: &str = "OJ_MODULES";
 
-pub const MISSING_JAI_DIR_MESSAGE: &str = concat!(
-  "skipping: no jai distribution found. ",
-  "Set OJ_JAI_DIR to a directory containing modules/, ",
-  "or unpack the beta 0.2.009 distribution into vendor/jai."
-);
-
-/// The root of the cargo workspace this crate is built from.
+/// The root of the cargo workspace this crate is built from, which is also the
+/// root of the distribution it ships.
+///
+/// Canonical, because a module is identified by the path it was loaded from: a
+/// Preload reached as `crates/testsupport/../../modules` and one reached as
+/// `modules` would otherwise be two modules whose types do not match.
 pub fn workspace_root() -> &'static Path {
-  Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+  static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
+    let relative = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    std::fs::canonicalize(relative).unwrap_or_else(|_| relative.to_path_buf())
+  });
+  &ROOT
 }
 
-/// The jai distribution to test against, or `None` when it is not installed.
-pub fn jai_dir() -> Option<PathBuf> {
-  resolve_jai_dir(std::env::var_os(JAI_DIR_ENV).as_deref(), workspace_root())
+/// The distribution under test: `modules/` and `examples/` live here.
+pub fn distribution() -> &'static Path {
+  workspace_root()
 }
 
-pub fn resolve_jai_dir(env: Option<&OsStr>, workspace_root: &Path) -> Option<PathBuf> {
-  let candidate = match env {
-    Some(value) if !value.is_empty() => PathBuf::from(value),
-    _ => workspace_root.join("vendor").join("jai"),
-  };
-  candidate.join("modules").is_dir().then_some(candidate)
+/// The standard modules (**L§11.1**).
+pub fn modules() -> PathBuf {
+  distribution().join("modules")
 }
 
-/// Binds the jai distribution, or returns from the calling test with a message
-/// explaining why it was skipped.
-#[macro_export]
-macro_rules! jai_dir_or_skip {
-  () => {
-    match $crate::jai_dir() {
-      Some(dir) => dir,
-      None => {
-        eprintln!("{}", $crate::MISSING_JAI_DIR_MESSAGE);
-        return;
-      }
-    }
-  };
+/// The acceptance suite: whole programs with the output each must print.
+pub fn examples() -> PathBuf {
+  distribution().join("examples")
+}
+
+/// Points a compilation this process drives at the distribution under test,
+/// rather than at whatever sits beside the test binary.
+///
+/// # Safety
+///
+/// Sets a process-wide environment variable. Cargo runs each integration test
+/// binary in its own process, but the tests *within* one run on threads, so a
+/// binary that calls this must do so from every test that needs it and must
+/// not otherwise write the environment.
+pub unsafe fn use_own_modules() {
+  unsafe { std::env::set_var(MODULES_ENV, modules()) };
 }
 
 #[cfg(test)]
@@ -47,41 +59,9 @@ mod tests {
   use super::*;
 
   #[test]
-  fn the_environment_overrides_the_vendored_distribution() {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::create_dir(temp.path().join("modules")).unwrap();
-
-    let workspace = tempfile::tempdir().unwrap();
-    let resolved = resolve_jai_dir(Some(temp.path().as_os_str()), workspace.path());
-
-    assert_eq!(resolved.as_deref(), Some(temp.path()));
-  }
-
-  #[test]
-  fn a_distribution_without_modules_is_not_a_distribution() {
-    let temp = tempfile::tempdir().unwrap();
-    let workspace = tempfile::tempdir().unwrap();
-
-    assert_eq!(
-      resolve_jai_dir(Some(temp.path().as_os_str()), workspace.path()),
-      None
-    );
-    assert_eq!(resolve_jai_dir(None, workspace.path()), None);
-  }
-
-  #[test]
-  fn the_default_location_is_vendor_jai_under_the_workspace() {
-    let workspace = tempfile::tempdir().unwrap();
-    let vendored = workspace.path().join("vendor").join("jai");
-    std::fs::create_dir_all(vendored.join("modules")).unwrap();
-
-    assert_eq!(
-      resolve_jai_dir(None, workspace.path()).as_deref(),
-      Some(vendored.as_path())
-    );
-    assert_eq!(
-      resolve_jai_dir(Some(OsStr::new("")), workspace.path()).as_deref(),
-      Some(vendored.as_path())
-    );
+  fn the_repository_is_a_distribution() {
+    assert!(modules().join("Preload.jai").is_file());
+    assert!(modules().join("Basic").join("module.jai").is_file());
+    assert!(examples().is_dir());
   }
 }

@@ -60,4 +60,4 @@ munmap :: (address: *void, length: u64) -> s32 #foreign libc;
 
 #scope_module
 
-libc :: #system_library "c";
+libc :: #library,system "libc";

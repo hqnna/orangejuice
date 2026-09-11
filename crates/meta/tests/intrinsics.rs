@@ -40,17 +40,13 @@ fn declared_symbols(text: &str) -> HashSet<String> {
 
 #[test]
 fn every_symbol_the_compiler_answers_is_one_the_module_declares() {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   // Preload declares a couple of them too, `get_current_workspace` among
   // them, and so does Runtime_Support: `write_string` is the compiler's at
   // compile time and the program's own at runtime.
   let paths = [
-    jai_dir.join("modules/Compiler/Compiler.jai"),
-    jai_dir.join("modules/Preload.jai"),
-    jai_dir.join("modules/Runtime_Support.jai"),
+    oj_testsupport::modules().join("Compiler/Compiler.jai"),
+    oj_testsupport::modules().join("Preload.jai"),
+    oj_testsupport::modules().join("Runtime_Support.jai"),
   ];
   let mut declared = HashSet::new();
   for path in &paths {
@@ -90,14 +86,10 @@ fn a_call_with_no_compilation_installed_does_nothing() {
 /// pinned here, and shrinking it is what finishing M8 means.
 #[test]
 fn the_symbols_still_unanswered_are_the_ones_the_spec_names() {
-  let Some(jai_dir) = oj_testsupport::jai_dir() else {
-    eprintln!("{}", oj_testsupport::MISSING_JAI_DIR_MESSAGE);
-    return;
-  };
   let paths = [
-    jai_dir.join("modules/Compiler/Compiler.jai"),
-    jai_dir.join("modules/Preload.jai"),
-    jai_dir.join("modules/Runtime_Support.jai"),
+    oj_testsupport::modules().join("Compiler/Compiler.jai"),
+    oj_testsupport::modules().join("Preload.jai"),
+    oj_testsupport::modules().join("Runtime_Support.jai"),
   ];
   let mut declared = HashSet::new();
   for path in &paths {

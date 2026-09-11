@@ -771,6 +771,13 @@ impl Checker<'_> {
       }
     }
     let substitution = solution.substitution.clone();
+    // An override recorded while the bindings were still being collected —
+    // `[$N] $T`, whose length had to be bound before the parameter was an
+    // array at all — still names the variables it was written with. The
+    // substitution is what turns those into the types the call gave.
+    for (_, type_id) in &mut solution.overrides {
+      *type_id = self.substitute(*type_id, &substitution);
+    }
     for (index, parameter) in signature.parameters.iter().enumerate() {
       let solved = self.substitute(parameter.type_id, &substitution);
       if solved == parameter.type_id {
@@ -907,6 +914,7 @@ impl Checker<'_> {
       // value rather than a type, so unification never reaches it, and the
       // header cannot say what the parameter's type is until it is bound
       // (**L§7.8**).
+      let mut declared = parameter.type_id;
       if let Some((dimension, count, array)) =
         self.array_dimension_binding(source, signature, index, argument)
       {
@@ -924,6 +932,10 @@ impl Checker<'_> {
         {
           solution.overrides.push((decl, array));
         }
+        // `[$N] $T` writes two variables, and binding `N` is what turns the
+        // parameter into an array unification can match: a length it could not
+        // fold is not the argument's length, so `$T` would never be reached.
+        declared = array;
       }
       // An argument in the varargs slot matches the `[] T`'s element
       // (**L§7.8**): `values: ..$T` takes `T` from the first one. `..xs`
@@ -931,9 +943,9 @@ impl Checker<'_> {
       let target = match vararg_slot == Some(index) && !argument.spread {
         true => self
           .types()
-          .array_of(parameter.type_id)
-          .map_or(parameter.type_id, |(element, _)| element),
-        false => parameter.type_id,
+          .array_of(declared)
+          .map_or(declared, |(element, _)| element),
+        false => declared,
       };
       // A parameter written as an *instantiation over variables* —
       // `holder: Holder($T, $N)` — matches the arguments of whichever

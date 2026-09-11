@@ -90,8 +90,8 @@ pub fn intrinsic(symbol: &str) -> Option<usize> {
 
 /// Where the distribution whose `modules/` the compilation reads lives, which
 /// is what `compiler_get_base_path` reports (**C§3.3**).
-pub fn base_path_of(jai_dir: Option<&PathBuf>) -> String {
-  jai_dir
+pub fn base_path_of(distribution: Option<&PathBuf>) -> String {
+  distribution
     .map(|dir| dir.display().to_string())
     .unwrap_or_default()
 }

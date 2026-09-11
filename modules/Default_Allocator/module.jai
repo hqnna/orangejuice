@@ -11,7 +11,7 @@
 //
 
 #import "Basic";
-#import "POSIX";
+POSIX :: #import "POSIX";
 
 // Counting costs an atomic add per allocation, so it is off unless asked for.
 #module_parameters (TRACK_ALLOCATIONS := false);
@@ -23,6 +23,15 @@ Allocation_Stats :: struct {
     total_count:      s64;
     high_water_mark:  s64;
 }
+
+// The C heap, named through the module rather than brought in plainly. `free`
+// is the reason: Basic declares one that goes through `context.allocator`, and
+// this *is* what the context's allocator calls — a program that installs an
+// allocator of its own and lets it fall through to here would recurse until
+// the stack ran out.
+malloc  :: POSIX.malloc;
+realloc :: POSIX.realloc;
+free    :: POSIX.free;
 
 // @Volatile: `Runtime_Support` names this as the context's starting allocator,
 // so the signature is the one **L§10.4** fixes.
@@ -165,7 +174,7 @@ Heap :: struct {}
 
 malloc_usable_size :: (pointer: *void) -> u64 #foreign libc_default_allocator;
 
-libc_default_allocator :: #system_library "c";
+libc_default_allocator :: #library,system "libc";
 
 stats: Allocation_Stats;
 

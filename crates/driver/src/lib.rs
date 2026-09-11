@@ -113,7 +113,7 @@ pub fn default_metaprogram() -> Option<PathBuf> {
 /// (**C§2.1**). A module is either `modules/<Name>.jai` or
 /// `modules/<Name>/module.jai`, the same two shapes an `#import` looks for.
 pub fn named_metaprogram(name: &str) -> Option<PathBuf> {
-  let modules = jai_dir()?.join("modules");
+  let modules = distribution()?.join("modules");
   let flat = modules.join(format!("{name}.jai"));
   if flat.is_file() {
     return Some(flat);
@@ -147,7 +147,7 @@ pub fn run_through_metaprogram(
     .iter()
     .map(|file| std::fs::canonicalize(file).unwrap_or_else(|_| file.clone()))
     .collect();
-  driver.compile_time_command_line = arguments
+  let mut line: Vec<String> = arguments
     .iter()
     .map(|argument| {
       match absolute
@@ -160,6 +160,16 @@ pub fn run_through_metaprogram(
       }
     })
     .collect();
+  // A caller that passed the files separately rather than as part of the
+  // command line still has to tell the metaprogram what to compile, since the
+  // command line is all it is given.
+  for file in &absolute {
+    let named = file.display().to_string();
+    if !line.contains(&named) {
+      line.insert(0, named);
+    }
+  }
+  driver.compile_time_command_line = line;
   // The target workspace's output belongs where its own file is, not where the
   // distribution keeps its modules; the metaprogram sets that itself, so the
   // compilation it drives starts from nothing of ours.
@@ -243,7 +253,7 @@ fn run_workspace_once(
   let sources = SourceMap::new();
   let interner = Interner::new();
   let mut scope_options = oj_scope::Options {
-    jai_dir: jai_dir(),
+    distribution: distribution(),
     ..oj_scope::Options::default()
   };
   scope_options.import_dirs = options.import_dirs.clone();
@@ -569,11 +579,18 @@ fn run_workspace_once(
   }
 }
 
-/// What `compiler_get_version_info` reports: the reference distribution this
-/// compiler is compatible with, spelled the way that compiler spells it
-/// (**C§3.3**).
-pub const JAI_VERSION: &str = "beta 0.2.009, built on 6 February 2025";
-const JAI_VERSION_NUMBERS: (i32, i32, i32) = (0, 2, 9);
+/// The release of the Jai language orangejuice implements. Every other place
+/// the version is spelled — `oj version`, the README, a metaprogram's
+/// `compiler_get_version_info` — reads it from here, so there is one answer to
+/// what this compiler is compatible with.
+pub const JAI_VERSION: &str = "beta 0.2.009";
+
+/// The date that release was built on, which `compiler_get_version_info`
+/// reports beside the version (**C§3.3**).
+pub const JAI_BUILD_DATE: &str = "6 February 2025";
+
+/// The same release as the three numbers a metaprogram compares against.
+pub const JAI_VERSION_NUMBERS: (i32, i32, i32) = (0, 2, 9);
 
 /// The compile-time state a metaprogram works on: what the compiler will tell
 /// it about itself, and the `Build_Options` a fresh workspace starts with.
@@ -588,9 +605,9 @@ fn metaprogram_state(
   root: &Path,
 ) -> oj_meta::Meta {
   let mut meta = oj_meta::Meta::numbered_from(options.workspace_id.max(1));
-  meta.base_path = oj_meta::base_path_of(jai_dir().as_ref());
+  meta.base_path = oj_meta::base_path_of(distribution().as_ref());
   meta.command_line = options.compile_time_command_line.clone();
-  meta.version = String::from(JAI_VERSION);
+  meta.version = format!("{JAI_VERSION}, built on {JAI_BUILD_DATE}");
   meta.version_numbers = JAI_VERSION_NUMBERS;
   if let Some(build_options) = checker.type_named("Build_Options") {
     meta.default_build_options = checker.default_bytes(build_options).unwrap_or_default();
@@ -650,7 +667,7 @@ fn seed_default_paths(meta: &mut oj_meta::Meta, options: &BuildOptions, root: &P
       .map(|directory| directory.display().to_string())
       .collect();
     path.push(directory.join("modules").display().to_string());
-    if let Some(jai) = jai_dir() {
+    if let Some(jai) = distribution() {
       path.push(format!("{}/", jai.join("modules").display()));
     }
     meta.seed_strings(at, &path);
@@ -1208,32 +1225,14 @@ fn keep_compile_time_data(program: &mut oj_ir::Program, engine: &oj_jit::Engine)
   }
 }
 
-/// The jai distribution the standard modules come from: `OJ_JAI_DIR`, else a
-/// `vendor/jai` in the current directory or one of its ancestors
+/// The distribution the standard modules come from: the `modules/` directory
+/// `OJ_MODULES` names, else the one that sits beside the compiler's own binary
 /// (`docs/spec.md` §5).
-pub fn jai_dir() -> Option<PathBuf> {
-  if let Some(value) = std::env::var_os("OJ_JAI_DIR").filter(|value| !value.is_empty()) {
-    let candidate = PathBuf::from(value);
-    return candidate.join("modules").is_dir().then_some(candidate);
-  }
-  if let Ok(current) = std::env::current_dir()
-    && let Some(vendored) = current.ancestors().find_map(|directory| {
-      let candidate = directory.join("vendor").join("jai");
-      candidate.join("modules").is_dir().then_some(candidate)
-    })
-  {
-    return Some(vendored);
-  }
-  own_distribution()
-}
-
-/// orangejuice's own modules, which is what a checkout with no reference
-/// distribution behind it compiles against.
 ///
-/// The reference distribution still wins where there is one, so a tree that
-/// has both keeps being measured against the real thing; this is the fallback
-/// that makes `oj` a compiler somebody can use on its own.
-pub fn own_distribution() -> Option<PathBuf> {
+/// orangejuice ships its own modules, so this is the only distribution there
+/// is; `Preload.jai` is what identifies a directory as one, since a program
+/// cannot be compiled at all without it (**L§11.4**).
+pub fn distribution() -> Option<PathBuf> {
   if let Some(value) = std::env::var_os("OJ_MODULES").filter(|value| !value.is_empty()) {
     let candidate = PathBuf::from(value);
     return candidate.join("Preload.jai").is_file().then(|| {

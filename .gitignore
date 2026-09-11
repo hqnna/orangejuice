@@ -4,4 +4,11 @@ vendor/jai/*
 /target/
 /result
 /result-*
-/.build/
+.build/
+
+# An example built in place, which is what `oj examples/010_hello.jai` leaves.
+/examples/*
+!/examples/*.jai
+!/examples/*.out
+!/examples/*.md
+!/examples/support/
