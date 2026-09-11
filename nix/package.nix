@@ -4,9 +4,9 @@ let
   # cleanCargoSource keeps only Rust sources. What it drops and the build needs:
   # rustfmt.toml and clippy.toml, which the fmt and clippy checks read the
   # workspace style rules from; the .jai fixtures and insta snapshots beside the
-  # tests; and `modules/` and `examples/` — the distribution `oj` ships and the
-  # acceptance suite that compiles against it, without which nothing can be
-  # built at all.
+  # tests; and `modules/` and `docs/examples/` — the distribution `oj` ships
+  # and the acceptance suite that compiles against it, without which nothing
+  # can be built at all.
   src = pkgs.lib.cleanSourceWith {
     src = ../.;
     name = "orangejuice-source";
@@ -15,7 +15,8 @@ let
       || builtins.match ".*/(rustfmt|clippy)\\.toml$" path != null
       || builtins.match ".*/tests/.*\\.(jai|snap)$" path != null
       || builtins.match ".*/modules(/.*)?$" path != null
-      || builtins.match ".*/examples(/.*)?$" path != null;
+      || builtins.match ".*/docs$" path != null
+      || builtins.match ".*/docs/examples(/.*)?$" path != null;
   };
 
   # `llvm-sys` links LLVM, libffi, zlib, libxml2, ncurses and libstdc++

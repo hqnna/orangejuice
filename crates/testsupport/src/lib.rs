@@ -1,7 +1,7 @@
 //! Where the tests find the distribution orangejuice ships.
 //!
 //! orangejuice *is* a Jai distribution: `modules/` sits at the root of this
-//! repository the way it does in any other, and `examples/` beside it is the
+//! repository the way it does in any other, and `docs/examples/` is the
 //! acceptance suite (`docs/spec.md` §8). Nothing here looks for a reference
 //! compiler — there is none to look for.
 
@@ -26,7 +26,7 @@ pub fn workspace_root() -> &'static Path {
   &ROOT
 }
 
-/// The distribution under test: `modules/` and `examples/` live here.
+/// The distribution under test: `modules/` and `docs/examples/` live here.
 pub fn distribution() -> &'static Path {
   workspace_root()
 }
@@ -36,9 +36,11 @@ pub fn modules() -> PathBuf {
   distribution().join("modules")
 }
 
-/// The acceptance suite: whole programs with the output each must print.
+/// The acceptance suite: whole programs with the output each must print. It
+/// lives under `docs/` because it is the language tour as much as it is a
+/// test (`docs/examples/README.md`).
 pub fn examples() -> PathBuf {
-  distribution().join("examples")
+  distribution().join("docs").join("examples")
 }
 
 /// Points a compilation this process drives at the distribution under test,

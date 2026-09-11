@@ -3,9 +3,10 @@
 /result-*
 .build/
 
-# An example built in place, which is what `oj examples/010_hello.jai` leaves.
-/examples/*
-!/examples/*.jai
-!/examples/*.out
-!/examples/*.md
-!/examples/support/
+# An example built in place, which is what `oj docs/examples/010_hello.jai`
+# leaves beside the source.
+/docs/examples/*
+!/docs/examples/*.jai
+!/docs/examples/*.out
+!/docs/examples/*.md
+!/docs/examples/support/

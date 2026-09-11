@@ -1,70 +1,37 @@
 # orangejuice
 
-orangejuice (`oj`) is a cleanroom implementation of the [Jai](https://jai.community/)
-programming language, compatible with **beta 0.2.009**. Written in Rust, it
-targets Linux x86_64 through LLVM 19, and runs its compile-time code on an LLVM
-ORC JIT.
+A cleanroom implementation of Jonathan Blow's language Jai. Built entirely from
+the ground up in Rust and made to be compatible with Jai Beta v0.2.009. Aiming
+to be a drop-in replacement with quality of life improvements, such as system
+LLVM, LLD, and pkg-config support, with compile-time code execution using the
+LLVM ORC JIT engine.
 
-It is a whole distribution, not just a compiler: `modules/` is a clean-room
-standard library — Preload, Runtime_Support, Basic, String, Math, Hash_Table,
-File, Socket, Thread, POSIX, Compiler and the rest — written from the language
-reference rather than derived from anyone else's source. Nothing in this
+It is a standalone distribution, not just a compiler. The `modules` directory is
+a cleanroom implementation of Jai's standard library, minus a bunch of modules
+that felt unnecessary or could be handled by libraries instead. Based upon but
+not copied from the reference implementation of the language. Nothing in this
 repository is copied from the reference distribution, and nothing depends on
 having one.
 
-```
-oj hello.jai                      compile it; the executable lands beside the source
-oj hello.jai -- run               compile and run it
-oj a.jai b.jai -release           several files, optimized
-oj hello.jai - --port 8080        arguments after `-` reach the program's #runs
-oj hello.jai -- dump ir proc main what the back end made of one procedure
-oj -- help                        the compiler's own options
+```console
+$ oj hello.jai                       # compile a program
+$ oj hello.jai -- run                # compile and run a program
+$ oj a.jai b.jai                     # compile multiple files
+$ oj hello.jai - --port 8080         # arguments after `-` reach the program's #runs
+$ oj hello.jai -- dump ir proc main  # what the back end made of one procedure
+$ oj -- help                         # the compiler's own options
 ```
 
-The command line is Jai's, so `jai` invocations translate verbatim; everything
-after the last `--` is orangejuice's own (`docs/spec.md` §5).
+The command line is meant to act as a drop-in replacement for `jai`, so all
+invocations translate verbatim, everything after the last `--` is orangejuice's
+own commands and arguments.
 
 ## Building
 
-Everything comes from the Nix flake:
+Everything was built in an isolated sandbox using a Nix flake.
 
+```console
+$ nix develop             # dev shell: nightly Rust, LLVM 19, clang
+$ nix flake check         # clippy, fmt, test and doc checks
+$ nix run . -- --version
 ```
-nix develop                 # dev shell: nightly Rust, LLVM 19, clang
-nix flake check             # clippy, fmt, test and doc checks
-nix run . -- --version
-```
-
-Inside the dev shell, `scripts/check.sh` runs the same gate locally:
-
-```
-cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-```
-
-## Examples
-
-`examples/` is the acceptance suite and a tour of the language — 23 programs,
-each with the output it must print. `010` through `230` covers values, control
-flow, procedures, structs, arrays, pointers, enums, strings, polymorphism,
-compile-time execution, macros, the context, modules, type info, operator
-overloading, `using`, files, threads, C interop, inline assembly and writing a
-metaprogram.
-
-```
-oj examples/010_hello.jai -- run
-cargo test -p oj-driver --test examples
-```
-
-Each golden was compared against the reference compiler, byte for byte, when
-the example was written.
-
-## Documentation
-
-| File | Contents |
-|---|---|
-| `docs/language.md` | the Jai language reference orangejuice implements |
-| `docs/compiler.md` | the behavior of the reference compiler it matches |
-| `docs/spec.md` | goals, architecture, CLI, testing strategy, milestones |
-
-## License
-
-MIT, see `LICENSE`.
