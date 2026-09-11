@@ -1,0 +1,95 @@
+# Builds the release artifact and attaches it to the release the tag names.
+#
+# The tag is what starts this: `git push origin v0.1.0`. The release itself is
+# written by hand, so that its notes say what the release is for; this only
+# builds what it ships and uploads it, with `--clobber` so that re-running the
+# job replaces the asset rather than failing on it.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # For trying the build without cutting a release: uploads nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build and upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # A release that does not pass its own gate is not a release. This is the
+      # same `nix flake check` the repository is developed against: clippy, fmt,
+      # doc, and the whole test suite including the acceptance examples.
+      - name: Check
+        run: nix flake check --print-build-logs
+
+      - name: Build the portable distribution
+        run: nix build .#portable --print-build-logs
+
+      # `result` is a symlink into the store, and the store is read-only; the
+      # asset is copied out so that `gh` can upload a plain file.
+      - name: Stage the artifact
+        id: stage
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for archive in result/*.tar.zst; do
+            [ -L "$archive" ] && continue
+            cp -L "$archive" dist/
+          done
+          ls -l dist
+          echo "name=$(cd dist && echo *.tar.zst)" >> "$GITHUB_OUTPUT"
+
+      # What a downloader gets, so that a truncated transfer is visible.
+      - name: Checksum
+        working-directory: dist
+        run: sha256sum *.tar.zst | tee SHA256SUMS
+
+      # The artifact is unpacked and run the way a downloader would, on a
+      # runner that has no Nix store on its PATH. `env -i` is the whole point:
+      # the tree carries its own loader and libraries, so it must run with
+      # nothing set at all.
+      - name: Smoke-test the artifact
+        env:
+          ARCHIVE: ${{ steps.stage.outputs.name }}
+        run: |
+          set -euo pipefail
+          tar --zstd -xf "dist/$ARCHIVE" -C "$RUNNER_TEMP"
+          root="$RUNNER_TEMP/${ARCHIVE%.tar.zst}"
+          env -i "$root/bin/oj" -- version
+          printf '#import "Basic";\nmain :: () { print("release artifact works\\n"); }\n' > "$RUNNER_TEMP/hello.jai"
+          cd "$RUNNER_TEMP" && "$root/bin/oj" hello.jai -quiet -- run
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orangejuice-portable
+          path: dist/*
+
+      # The release is written by hand and may be published a moment after the
+      # tag that started this job, so the upload waits for it rather than
+      # failing the build over the order the two arrived in.
+      - name: Upload to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 30); do
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && break
+            sleep 10
+          done
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

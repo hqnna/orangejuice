@@ -33,6 +33,9 @@
         {
           packages.default = oj;
           packages.oj = oj;
+          # The release artifact: `oj`, its loader and libraries, and the
+          # modules it ships, as one relocatable tree.
+          packages.portable = oj.passthru.portable;
 
           apps.default = {
             type = "app";
