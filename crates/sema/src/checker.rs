@@ -277,6 +277,10 @@ pub struct Checker<'a> {
   references_seen: std::cell::Cell<usize>,
   /// How many units this checker has read. The rest arrived after it started.
   units_seen: usize,
+  /// `Build_Options.context_size_max` (**C§4**): what `#Context` is padded out
+  /// to, so that its size does not depend on which modules a program imports
+  /// (**L§10.1**). `-context_size` is what changes it.
+  context_size_max: u64,
   struct_scopes: HashMap<StructId, ScopeId>,
   /// The struct a members scope belongs to, which is what says a constant
   /// declared there is a specialization's (**L§8.5**).
@@ -474,9 +478,20 @@ impl<'a> Checker<'a> {
       loop_expansions: HashMap::default(),
       argument_instances: HashMap::default(),
       units_seen: 0,
+      context_size_max: crate::aggregate::DEFAULT_CONTEXT_SIZE,
     };
     checker.refresh_units();
     checker
+  }
+
+  /// What `-context_size` asked `#Context` to be padded out to (**C§4**). It
+  /// has to be set before anything asks for the context's layout.
+  pub fn set_context_size_max(&mut self, size: u64) {
+    self.context_size_max = size;
+  }
+
+  pub(crate) fn context_size_max(&self) -> u64 {
+    self.context_size_max
   }
 
   /// Reads the files the program has gained since this checker last looked.

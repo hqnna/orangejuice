@@ -474,20 +474,18 @@ fn build(invocation: &Invocation) -> u8 {
     println!("{}", version_line());
     return EXIT_SUCCESS;
   }
-  for deferred in &parsed.deferred {
-    eprintln!(
-      "error: '{}' is not implemented yet (planned for milestone {})",
-      deferred.option, deferred.milestone
-    );
-  }
-  if !parsed.deferred.is_empty() {
-    return EXIT_FAILURE;
+  for warning in &parsed.warnings {
+    eprintln!("{warning}");
   }
   // `-help` is answered by the metaprogram, which owns the text (**C§2.1**),
   // so it has to reach one — and asking for help is not asking to compile
   // nothing. Without this the compiler tells you to pass the option you just
-  // passed.
-  if invocation.files.is_empty() && !parsed.options.print_help {
+  // passed. `-add` and `-run` are something to compile in their own right
+  // (**C§2.1**).
+  if invocation.files.is_empty()
+    && parsed.options.build_strings.is_empty()
+    && !parsed.options.print_help
+  {
     eprintln!("{NOTHING_TO_COMPILE}");
     return EXIT_USAGE;
   }
@@ -519,7 +517,7 @@ fn build(invocation: &Invocation) -> u8 {
 
   let input = oj_driver::Input {
     files: invocation.files.clone(),
-    strings: Vec::new(),
+    strings: oj_driver::command_line_strings(&invocation.files, &options),
   };
   let report = match metaprogram {
     Some(metaprogram) => oj_driver::run_through_metaprogram(

@@ -14,7 +14,7 @@ use crate::constants::{Const, Value};
 
 /// `Build_Options.context_size_max`'s default, which is what `size_of(#Context)`
 /// reports whatever the program imports (**L§10.1**, `docs/spec.md` §5.1).
-const CONTEXT_SIZE_MAX: u64 = 4096;
+pub(crate) const DEFAULT_CONTEXT_SIZE: u64 = 4096;
 
 /// The members and layout of one struct body, accumulated while its statements
 /// are walked.
@@ -874,12 +874,11 @@ impl Checker<'_> {
     // The context is padded out to `context_size_max` so that its size does not
     // depend on which modules a program imports (**L§10.1**).
     let layout = builder.finish();
+    let padded = layout.size.max(self.context_size_max());
     self.types_mut().struct_info_mut(definition).members = members;
-    self.types_mut().finish_struct(
-      definition,
-      layout.size.max(CONTEXT_SIZE_MAX),
-      layout.alignment,
-    );
+    self
+      .types_mut()
+      .finish_struct(definition, padded, layout.alignment);
     type_id
   }
 

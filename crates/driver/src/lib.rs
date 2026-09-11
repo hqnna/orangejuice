@@ -18,9 +18,7 @@ use std::path::{Path, PathBuf};
 use oj_diag::SourceMap;
 use oj_lexer::Interner;
 
-pub use options::{
-  BuildOptions, Deferred, Optimization, OptionError, ParsedOptions, RuntimeSupport, parse,
-};
+pub use options::{BuildOptions, Optimization, OptionError, ParsedOptions, RuntimeSupport, parse};
 
 /// How far the pipeline runs, and what it prints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +94,31 @@ impl Input {
       .or_else(|| self.strings.first().map(|(path, _)| path.clone()))
       .unwrap_or_default()
   }
+}
+
+/// What `-add` and `-run` put into a compilation nothing else drives: one
+/// unit per string, named the way a metaprogram's `add_build_string` names
+/// one so that a diagnostic about it can be rendered (**C§2.1**).
+pub fn command_line_strings(files: &[PathBuf], options: &BuildOptions) -> Vec<(PathBuf, String)> {
+  let directory = files
+    .first()
+    .and_then(|file| file.parent().map(Path::to_path_buf))
+    .unwrap_or_else(|| PathBuf::from("."));
+  options
+    .build_strings
+    .iter()
+    .enumerate()
+    .map(|(index, text)| {
+      (
+        directory.join(format!(
+          ".added_strings_w{}_{}.jai",
+          options.workspace_id,
+          index + 1
+        )),
+        text.clone(),
+      )
+    })
+    .collect()
 }
 
 /// Runs the pipeline over one root file.
@@ -315,6 +338,7 @@ fn run_workspace_once(
   }
 
   let mut checker = oj_sema::Checker::new(&program);
+  checker.set_context_size_max(options.context_size_max);
   // Compile-time execution is part of typechecking: a `#run` produces the
   // constant a declaration was waiting for (**L§12.1**).
   let engine = match oj_jit::Engine::new() {
@@ -692,6 +716,7 @@ fn build_options_layout(
       "import_path" => layout.import_path = Some(offset),
       "os_target" => layout.os_target = Some(offset),
       "cpu_target" => layout.cpu_target = Some(offset),
+      "context_size_max" => layout.context_size_max = Some(offset),
       "append_executable_filename_extension" => {
         layout.append_executable_filename_extension = Some(offset);
       }
@@ -895,6 +920,14 @@ fn workspace_input(
   }
   if let Some(custom) = workspace.option_u8(layout, |layout| layout.use_custom_link_command) {
     nested.custom_link_command = custom != 0;
+  }
+  // A workspace a metaprogram created starts from a *fresh* `Build_Options`
+  // (**C§4**), so what `#Context` is padded out to there is what that struct's
+  // own default says unless the metaprogram changed it.
+  if let Some(size) = workspace.option_s64(layout, |layout| layout.context_size_max)
+    && size > 0
+  {
+    nested.context_size_max = size as u64;
   }
   // A metaprogram that added a directory to `import_path` means a `#import` in
   // the workspace it drives to search there (**C§4**).

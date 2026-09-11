@@ -78,6 +78,9 @@ pub struct BuildOptionsLayout {
   /// when they are `LINUX` and `X64` (`docs/spec.md` §2).
   pub os_target: Option<u64>,
   pub cpu_target: Option<u64>,
+  /// `context_size_max`, what `#Context` is padded out to (**C§4**,
+  /// **L§10.1**).
+  pub context_size_max: Option<u64>,
 }
 
 /// Where the `Build_Options_During_Compile` members the driver acts on sit
@@ -220,6 +223,18 @@ impl Workspace {
     let offset = member(layout)? as usize;
     let bytes = self.options.get(offset..offset + 4)?;
     Some(u32::from_le_bytes(bytes.try_into().ok()?))
+  }
+
+  /// One eight-byte member of the build options — `context_size_max` is an
+  /// `s64` (**C§4**).
+  pub fn option_s64(
+    &self,
+    layout: &BuildOptionsLayout,
+    member: impl FnOnce(&BuildOptionsLayout) -> Option<u64>,
+  ) -> Option<i64> {
+    let offset = member(layout)? as usize;
+    let bytes = self.options.get(offset..offset + 8)?;
+    Some(i64::from_le_bytes(bytes.try_into().ok()?))
   }
 
   /// One `string` member of a `Build_Options_During_Compile` a metaprogram

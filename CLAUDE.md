@@ -125,12 +125,13 @@ directly, which is also what a checkout with no distribution behind it does.
 Exit codes: 0 success, 1 compile/link failure, 2 usage error. Env:
 `OJ_MODULES`, `OJ_LOG`, `OJ_THREADS`, `OJ_TIMING`, `OJ_CODEGEN_UNITS`,
 `OJ_NO_LLD`. A build writes the object into `<output_path>/.build/<name>.o`
-and the executable beside it, then prints its path. The options `oj-driver`
-acts on so far are `-release`, `-very_debug`, `-quiet`, `-verbose`, `-exe`,
-`-output_path`, `-import_dir`, `-no_color`, `-msvc_format`, `-output_ir`,
-`-version` and the lone `-`; the ones that need the metaprogram or the
-interpreter (`-plug`, `-add`, `-run`, `-context_size`, `-debugger`, the `Check`
-switches) parse with the right arity and then say which milestone owns them.
+and the executable beside it, then prints its path. Every option of
+`docs/spec.md` §5.1 is acted on: `-add` and `-run` are `add_build_string` of
+the text the reference wraps them in, `-context_size` is what `#Context` is
+padded out to, `-plug`/`-ps5` name plugins the metaprogram loads, and the two
+the project does not have — `-x64`, which says so and builds with LLVM, and
+`-debugger`, which is a stack trace rather than an interpreter to stop — are
+`docs/spec.md` §2's non-goals rather than unfinished work.
 
 **Single-dash options are the reference compiler's, not ours.** Before adding
 or changing one, read `docs/spec.md` §5.1 (the full table: name, arity,

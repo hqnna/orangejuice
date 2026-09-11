@@ -5353,3 +5353,82 @@ fn a_using_of_a_polymorphic_struct_brings_in_its_parameters() {
   };
   assert_eq!(built.output, "10 10\n");
 }
+
+// ------------------------------------------------------- the command line ---
+
+#[test]
+fn add_and_run_compile_alongside_the_files() {
+  // `-add CODE` and `-run EXPR` are `add_build_string` of the text the
+  // reference wraps them in (**C§2.1**); the driver adds them itself when no
+  // metaprogram is in the way.
+  if !linker_is_available() {
+    return;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("program.jai");
+  std::fs::write(
+    &path,
+    format!("{PRELUDE}\nmain :: () {{ put_number(EXTRA); }}\n"),
+  )
+  .expect("the input should be writable");
+
+  // SAFETY: cargo runs each integration test binary in its own process.
+  unsafe {
+    oj_testsupport::use_own_modules();
+  }
+  let mut options = oj_driver::BuildOptions::new();
+  options.build_strings = vec![
+    String::from("EXTRA :: 7;"),
+    String::from("#run put(\"ran\\n\");"),
+  ];
+  let files = vec![path.clone()];
+  let input = oj_driver::Input {
+    files: files.clone(),
+    strings: oj_driver::command_line_strings(&files, &options),
+  };
+  let report = oj_driver::run_input(&input, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+}
+
+#[test]
+fn context_size_is_what_the_context_is_padded_out_to() {
+  // `-context_size N` is `Build_Options.context_size_max` (**C§4**), which is
+  // what `size_of(#Context)` reports whatever a program imports (**L§10.1**).
+  if !linker_is_available() {
+    return;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("program.jai");
+  std::fs::write(
+    &path,
+    format!("{PRELUDE}\nmain :: () {{ put_number(size_of(#Context)); }}\n"),
+  )
+  .expect("the input should be writable");
+
+  // SAFETY: cargo runs each integration test binary in its own process.
+  unsafe {
+    oj_testsupport::use_own_modules();
+  }
+  let mut options = oj_driver::BuildOptions::new();
+  options.context_size_max = 8192;
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+  let executable = report.executable.expect("a successful build has one");
+  let output = Command::new(&executable)
+    .output()
+    .expect("the produced program should run");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "8192\n");
+}

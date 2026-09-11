@@ -68,6 +68,9 @@ build :: () {
         options.optimization_level = 2;
         options.stack_trace = false;
     }
+    if options_from_command_line.context_size {
+        options.context_size_max = options_from_command_line.context_size;
+    }
     // Whatever followed the lone `-` is the program's own command line, not
     // ours (**C§2.1**).
     options.compile_time_command_line = options_from_command_line.program_arguments;
@@ -91,6 +94,7 @@ build :: () {
 
     compiler_begin_intercept(w, intercept_flags);
     for options_from_command_line.files  add_build_file(it, w);
+    for options_from_command_line.build_strings  add_build_string(it, w);
     run_add_source(plugins);
 
     failed := false;
@@ -133,9 +137,16 @@ Command_Line_State :: struct {
     import_paths:           [..] string;
     plugin_names:           [..] string;
     program_arguments:      [..] string;
+    // What `-add` and `-run` asked to be compiled beside the files, each
+    // already wrapped in the text the reference wraps it in (**C§2.1**).
+    build_strings:          [..] string;
     release:                bool;
     no_check:               bool;
     wants_help:             bool;
+    // `-context_size`, which is `Build_Options.context_size_max` (**C§2.1**).
+    // Zero means the option was not given, and the workspace keeps the
+    // default its own `Build_Options` declares.
+    context_size:           s64;
 }
 
 #scope_module
@@ -196,6 +207,30 @@ parse_command_line :: (args: [] string, state: *Command_Line_State) {
                 if at + 1 < args.count  array_add(*state.plugin_names, args[at + 1]);
                 at += 2;
 
+            // `-ps5` is `-plug ps5_build` spelled shorter (**C§2.1**).
+            case "-ps5";
+                array_add(*state.plugin_names, "ps5_build");
+                at += 1;
+
+            case "-add";
+                if at + 1 < args.count {
+                    array_add(*state.build_strings, tprint("%;", args[at + 1]));
+                }
+                at += 2;
+
+            case "-run";
+                if at + 1 < args.count {
+                    array_add(*state.build_strings, tprint("#run %;", args[at + 1]));
+                }
+                at += 2;
+
+            case "-context_size";
+                if at + 1 < args.count {
+                    size, ok := string_to_int(args[at + 1]);
+                    if ok  state.context_size = size;
+                }
+                at += 2;
+
             case "-no_check";
                 state.no_check = true;
                 at += 1;
@@ -218,6 +253,9 @@ Usage: oj <file.jai>... [options] [- program arguments] [-- compiler options]
     -plug <module>       Load a metaprogram plugin.
     -no_check            Do not load the Check plugin.
     -release             Optimize, and leave stack traces out.
+    -add <code>          Compile this declaration along with the files.
+    -run <expr>          Compile `#run <expr>;` along with the files.
+    -context_size <n>    How large #Context is padded out to.
     -help                Print this.
 
     -                    Everything after this goes to the program being
