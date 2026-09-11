@@ -282,6 +282,25 @@ impl Checker<'_> {
       if varargs {
         signature.varargs = true;
         signature.vararg_index = Some(index as u32);
+        // `$args: .. Code` bakes each argument's syntax and hands the body an
+        // array of it (**L§13.1**). orangejuice has no constant array of
+        // `Code` to bind it to, so the header is refused where it is written
+        // rather than reported as a call that matches nothing
+        // (`docs/spec.md` §10.2).
+        let element = self
+          .types()
+          .array_of(type_id)
+          .map(|(element, _)| element)
+          .unwrap_or(type_id);
+        if element == TypeId::CODE && self.is_baked_parameter(source, *parameter) {
+          let span = ast.node(*parameter).span;
+          self.error(
+            source,
+            span,
+            "orangejuice does not support a variadic 'Code' parameter. Declare one \
+             '$c: Code' parameter per expression instead.",
+          );
+        }
       }
       // A `$` parameter is baked per call, which makes the procedure a family
       // rather than a value (**L§7.8**).

@@ -680,3 +680,34 @@ fn a_return_forwards_every_value_the_call_it_names_produces() {
     ",
   );
 }
+
+#[test]
+fn a_variadic_code_parameter_is_refused_where_it_is_written() {
+  // `$args: .. Code` bakes each argument's syntax into an array the body
+  // reads (**L§13.1**), which orangejuice does not build. The header is what
+  // is reported, rather than every call site that matches nothing
+  // (`docs/spec.md` §10.2).
+  assert_eq!(
+    errors("show :: ($args: ..Code) #expand { }"),
+    vec![
+      "orangejuice does not support a variadic 'Code' parameter. Declare one '$c: Code' \
+       parameter per expression instead."
+        .to_string()
+    ]
+  );
+}
+
+#[test]
+fn a_variadic_struct_parameter_is_refused_where_it_is_written() {
+  // `struct (types: .. Type)` gathers the rest of the arguments into an array
+  // the body can index (**L§8.5**), which orangejuice does not build
+  // (`docs/spec.md` §10.2).
+  assert_eq!(
+    errors("Holder :: struct (types: .. Type) { n: s64; }\nf :: () { h: Holder(s64); }"),
+    vec![
+      "orangejuice does not support a variadic parameter on a struct. Declare one parameter \
+       per argument instead."
+        .to_string()
+    ]
+  );
+}
