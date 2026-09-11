@@ -483,7 +483,11 @@ fn build(invocation: &Invocation) -> u8 {
   if !parsed.deferred.is_empty() {
     return EXIT_FAILURE;
   }
-  if invocation.files.is_empty() {
+  // `-help` is answered by the metaprogram, which owns the text (**C§2.1**),
+  // so it has to reach one — and asking for help is not asking to compile
+  // nothing. Without this the compiler tells you to pass the option you just
+  // passed.
+  if invocation.files.is_empty() && !parsed.options.print_help {
     eprintln!("{NOTHING_TO_COMPILE}");
     return EXIT_USAGE;
   }
@@ -707,6 +711,24 @@ mod tests {
   fn the_compilers_help_and_version_are_its_own_options() {
     assert_eq!(code(&["--", "version"]), EXIT_SUCCESS);
     assert_eq!(code(&["--", "help"]), EXIT_SUCCESS);
+  }
+
+  /// `-help` is the metaprogram's, and it is asked for *instead of* a file to
+  /// compile (**C§2.1**) — so the usual complaint about having nothing to
+  /// build must not swallow it. It used to, which meant the compiler answered
+  /// `-help` by telling you to pass `-help`.
+  #[test]
+  fn asking_for_help_is_not_asking_to_compile_nothing() {
+    for spelling in ["-help", "-?"] {
+      let parsed = oj_driver::parse(&[String::from(spelling)]).expect("a known option");
+      assert!(parsed.options.print_help, "{spelling} asks for help");
+      assert!(parsed.files.is_empty(), "{spelling} names no file");
+    }
+
+    // Everything else with no file to compile still says so.
+    let parsed = oj_driver::parse(&[String::from("-release")]).expect("a known option");
+    assert!(!parsed.options.print_help);
+    assert!(parsed.files.is_empty());
   }
 
   fn dump_scopes_of(source: &str) -> (u8, tempfile::TempDir) {

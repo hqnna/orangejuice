@@ -171,7 +171,7 @@ parse_command_line :: (args: [] string, state: *Command_Line_State) {
 
         if argument == {
             case "-help";    #through;
-            case "-h";
+            case "-?";
                 state.wants_help = true;
                 at += 1;
 

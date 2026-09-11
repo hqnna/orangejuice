@@ -1840,3 +1840,39 @@ fn error_continuable_lets_the_next_report_through() {
     "{reported}"
   );
 }
+
+/// `-help` is answered by the metaprogram rather than by the compiler
+/// (**C§2.1**), and it is asked for instead of a file to compile — so the
+/// metaprogram has to run, print, and finish without a workspace, rather than
+/// the compiler refusing to start because nothing was named.
+#[test]
+fn the_metaprogram_answers_help_with_no_file_to_compile() {
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  // SAFETY: cargo runs each integration test binary in its own process, and
+  // nothing else in this one reads it.
+  unsafe { oj_testsupport::use_own_modules() };
+  let metaprogram =
+    oj_driver::default_metaprogram().expect("the distribution ships a Default_Metaprogram");
+
+  for spelling in ["-help", "-?"] {
+    let report = oj_driver::run_through_metaprogram(
+      &metaprogram,
+      &[],
+      &[String::from(spelling)],
+      &oj_driver::BuildOptions::new(),
+      oj_driver::Stage::Executable,
+    );
+    assert!(
+      !report.failed,
+      "{spelling} should be answered, but:\n{}",
+      report.diagnostics.join("")
+    );
+    assert!(
+      report.executable.is_none(),
+      "{spelling} asks for help, not for a build"
+    );
+  }
+}
