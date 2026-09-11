@@ -1,59 +1,107 @@
 //
-// Hashing bytes and the things made of them.
+// Hash functions for short strings and small values.
 //
-// FNV-1a, 64-bit: one multiply and one xor per byte, no tables, and good
-// enough spread for a hash table's keys. It is not a cryptographic hash and
-// nothing here should be used as one.
+// `get_hash` is the one `Hash_Table` calls; the named functions under it are
+// there for a caller that wants a particular one. All the 32-bit ones take an
+// `h` to chain from, so hashing B with A's result mixes the two — a design the
+// reference itself flags as the wrong way round, since it forces every hash
+// function used here to grow that parameter. Expect it to be replaced by a
+// mixing function that combines any two results.
 //
 
-FNV_64_OFFSET :: 0xcbf2_9ce4_8422_2325;
-FNV_64_PRIME  :: 0x0000_0100_0000_01b3;
+#import "Basic";
 
-// The seed to start a rolling hash from, so that several values can be hashed
-// into one result: `h := fnv1a(a); h = fnv1a(b, h);`
-fnv1a :: (bytes: *u8, count: s64, seed: u64 = FNV_64_OFFSET) -> u64 {
-    hash := seed;
-    index := 0;
-    while index < count {
-        hash ^= bytes[index];
-        hash *= FNV_64_PRIME;
-        index += 1;
+// Hash from the sdbm project: `hash(i) = hash(i-1) * 65599 + data[i]`, written
+// as shifts. Like djb2 it produces near-sequential hashes for inputs with
+// sequential trailing bytes, which asset names often are; fnv1a is the better
+// general-purpose string hash.
+sdbm_hash :: (data: *void, size: int, h := HASH_INIT) -> u32 {
+    hash := h;
+    for 0..size - 1 {
+        hash = (hash << 16) + (hash << 6) - hash + (cast(*u8) data)[it];
     }
     return hash;
 }
 
-fnv1a :: (s: string, seed: u64 = FNV_64_OFFSET) -> u64 {
-    return fnv1a(s.data, s.count, seed);
+// The same, with negative zero folded onto zero so that the two hash alike.
+// Cleaning up the input is usually the better answer.
+sdbm_float_hash :: inline (f: *float, count: int, h := HASH_INIT) -> u32 {
+    hash := h;
+    for 0..count - 1 {
+        bits := (cast(*u32) (f + it)).*;
+        if bits == 0x8000_0000  bits = 0;
+        hash = inline sdbm_hash(*bits, 4, hash);
+    }
+    return hash;
 }
 
-// The default for a hash table's key: a string hashes by its bytes, anything
-// else by the bytes it occupies. A type holding a pointer therefore hashes by
-// the pointer rather than by what it points at, which is why a key with
-// indirection in it wants a hash procedure of its own.
-get_hash :: (value: $T) -> u64 {
-    #if T == string {
-        return fnv1a(value);
+djb2_hash :: (s: string) -> u32 {
+    hash := HASH_INIT;
+    for 0..s.count - 1  hash = ((hash << 5) + hash) + s[it];  // hash * 33 + c
+    return hash;
+}
+
+// FNV-1a. Good distribution and chains well when hashing repeatedly. Fold it
+// into the range you want by xor rather than by shifting.
+FNV_64_PRIME       : u64 : 0x100000001b3;
+FNV_64_OFFSET_BIAS : u64 : 0xcbf29ce484222325;
+
+fnv1a_hash :: inline (val: u64, h := FNV_64_OFFSET_BIAS) -> u64 {
+    hash := h;
+    hash ^= val;
+    return hash * FNV_64_PRIME;
+}
+
+fnv1a_hash :: (data: *void, size: int, h := FNV_64_OFFSET_BIAS) -> u64 {
+    hash := h;
+    for 0..size - 1  hash = fnv1a_hash((cast(*u8) data)[it], hash);
+    return hash;
+}
+
+// Knuth's multiplicative hash. The *high* bits are the good ones, so shift it
+// down to the range you want rather than masking it.
+knuth_hash :: inline (x: u64) -> u64 {
+    KNUTH_GOLDEN_RATIO_64 :: 11400714819323198485;
+    return KNUTH_GOLDEN_RATIO_64 * x;
+}
+
+// ------------------------------------------------------------ the general ---
+
+// Anything that is a number, a bool, an enum or a pointer. A float goes
+// through sdbm because Knuth's multiply would map its exponent bits badly;
+// everything else is Knuth, which is both better and faster for the small
+// integers a table's keys usually are.
+get_hash :: (x: $T, h := HASH_INIT) -> u32
+#modify {
+    info := cast(*Type_Info) T;
+    // A distinct type over one of these hashes like the type it is.
+    while info.type == .VARIANT {
+        info = (cast(*Type_Info_Variant) info).variant_of;
+    }
+    if info.type == .INTEGER  return true;
+    if info.type == .BOOL     return true;
+    if info.type == .ENUM     return true;
+    if info.type == .POINTER  return true;
+    if info.type == .FLOAT    return true;
+    return false;
+}
+{
+    #if T == float32 || T == float64 {
+        value := x;
+        return inline sdbm_hash(*value, size_of(T), h);
     } else {
-        local := value;
-        return fnv1a(cast(*u8) *local, size_of(T));
+        return cast,trunc(u32) (knuth_hash(cast,no_check(u64) x ^ h) >> 32);
     }
 }
 
-// Mixes a 64-bit value so that keys differing in the low bits land in
-// different buckets. Thomas Wang's finalizer.
-hash_u64 :: (value: u64) -> u64 {
-    hash := value;
-    hash = (~hash) + (hash << 21);
-    hash = hash ^ (hash >> 24);
-    hash = (hash + (hash << 3)) + (hash << 8);
-    hash = hash ^ (hash >> 14);
-    hash = (hash + (hash << 2)) + (hash << 4);
-    hash = hash ^ (hash >> 28);
-    hash = hash + (hash << 31);
-    return hash;
+get_hash :: (s: string, h := HASH_INIT) -> u32 {
+    return cast,trunc(u32) inline fnv1a_hash(s.data, s.count, h);
 }
 
-// Folds another value into a hash already computed.
-combine_hash :: (hash: u64, other: u64) -> u64 {
-    return hash_u64(hash ^ (other + 0x9e37_79b9_7f4a_7c15 + (hash << 6) + (hash >> 2)));
+get_hash :: (array: [] $T, h := HASH_INIT) -> u32 {
+    return inline sdbm_hash(array.data, array.count * size_of(T), h);
 }
+
+#scope_file
+
+HASH_INIT : u32 : 5381;
