@@ -37,6 +37,26 @@ pub fn version_line() -> String {
   )
 }
 
+/// Writes a listing to stdout. A reader that has gone away — `oj … -- dump ir
+/// | head` — is not a failure of the compiler's, so the write is dropped
+/// rather than reported: Rust's own `print!` panics on `EPIPE`, which is not
+/// what a command-line tool should do.
+fn out(text: &str) {
+  use std::io::Write;
+  let mut stdout = std::io::stdout().lock();
+  if let Err(error) = stdout.write_all(text.as_bytes())
+    && error.kind() != std::io::ErrorKind::BrokenPipe
+  {
+    eprintln!("error: could not write to stdout: {error}");
+  }
+}
+
+/// The same, with a newline after it.
+fn out_line(text: &str) {
+  out(text);
+  out("\n");
+}
+
 pub const EXIT_SUCCESS: u8 = 0;
 pub const EXIT_FAILURE: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
@@ -265,11 +285,11 @@ orangejuice options: run [program arguments...], dump stage, no_metaprogram.
 fn execute(invocation: &Invocation) -> u8 {
   let compiler = &invocation.compiler;
   if compiler.help {
-    println!("{COMPILER_HELP}");
+    out_line(COMPILER_HELP);
     return EXIT_SUCCESS;
   }
   if compiler.version {
-    println!("{}", version_line());
+    out_line(&version_line());
     return EXIT_SUCCESS;
   }
 
@@ -313,7 +333,7 @@ fn dump_tokens(path: &Path) -> u8 {
   let interner = Interner::new();
   let lexed = oj_lexer::tokenize(file.bytes(), id, &interner);
 
-  print!("{}", oj_lexer::dump_tokens(&lexed.tokens, &file, &interner));
+  out(&oj_lexer::dump_tokens(&lexed.tokens, &file, &interner));
   for diagnostic in &lexed.diagnostics {
     eprint!("{}", oj_diag::render(diagnostic, &file));
   }
@@ -342,15 +362,13 @@ fn dump_ast(path: &Path, tree: bool) -> u8 {
   let parsed = oj_syntax::parse(file.bytes(), id, &interner);
 
   if tree {
-    print!(
-      "{}",
-      oj_syntax::print_tree(&parsed.ast, parsed.root, &interner)
-    );
+    out(&oj_syntax::print_tree(&parsed.ast, parsed.root, &interner));
   } else {
-    print!(
-      "{}",
-      oj_syntax::print_source(&parsed.ast, parsed.root, &interner)
-    );
+    out(&oj_syntax::print_source(
+      &parsed.ast,
+      parsed.root,
+      &interner,
+    ));
   }
   for diagnostic in &parsed.diagnostics {
     eprint!("{}", oj_diag::render(diagnostic, &file));
@@ -379,11 +397,8 @@ fn dump_scopes(path: &Path, file_only: bool) -> u8 {
   };
 
   let program = oj_scope::Program::build(&sources, &interner, path, options);
-  print!("{}", oj_scope::print_scopes(&program));
-  println!(
-    "{}",
-    oj_scope::summary(program.tree(), program.unit_count())
-  );
+  out(&oj_scope::print_scopes(&program));
+  out_line(&oj_scope::summary(program.tree(), program.unit_count()));
 
   // A file resolved on its own has no imports to look names up in, so only
   // what it gets wrong by itself is worth reporting.
@@ -428,8 +443,8 @@ fn dump_types(path: &Path, file_only: bool) -> u8 {
   let mut checker = oj_sema::Checker::new(&program);
   checker.check();
 
-  print!("{}", oj_sema::print_types(&checker));
-  println!("{}", oj_sema::summary(&checker));
+  out(&oj_sema::print_types(&checker));
+  out_line(&oj_sema::summary(&checker));
 
   for diagnostic in program.diagnostics().iter().chain(checker.diagnostics()) {
     let file = sources.file(diagnostic.source);
@@ -448,7 +463,7 @@ fn dump_types(path: &Path, file_only: bool) -> u8 {
 fn dump(path: &Path, stage: oj_driver::Stage, only: Option<&str>) -> u8 {
   let options = oj_driver::BuildOptions::new();
   let report = oj_driver::run(path, &options, stage, only);
-  print!("{}", report.output);
+  out(&report.output);
   for diagnostic in &report.diagnostics {
     eprint!("{diagnostic}");
   }
@@ -471,7 +486,7 @@ fn build(invocation: &Invocation) -> u8 {
   };
   // `-version` prints and stops, whether or not there was anything to build.
   if parsed.options.print_version {
-    println!("{}", version_line());
+    out_line(&version_line());
     return EXIT_SUCCESS;
   }
   for warning in &parsed.warnings {
@@ -545,7 +560,7 @@ fn build(invocation: &Invocation) -> u8 {
   }
   if !compiler.run {
     if !options.quiet {
-      println!("{}", executable.display());
+      out_line(&executable.display().to_string());
     }
     return EXIT_SUCCESS;
   }
