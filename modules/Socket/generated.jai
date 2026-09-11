@@ -497,7 +497,7 @@ cmsghdr :: struct {
     cmsg_len: size_t;
     cmsg_level: s32;
     cmsg_type: s32;
-    __cmsg_data: [] u8;
+    __cmsg_data: [1] u8;
 }
 
 ucred :: struct {

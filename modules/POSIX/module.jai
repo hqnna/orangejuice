@@ -303,36 +303,6 @@ librt :: #system_library "c";
 
 #scope_export
 
-// ------------------------------------------------------ file watching ---
-
-// inotify: the kernel tells the process about changes rather than the process
-// asking over and over.
-inotify_init1  :: (flags: s32) -> s32 #foreign libc;
-inotify_add_watch :: (fd: s32, path: *u8, mask: u32) -> s32 #foreign libc;
-inotify_rm_watch  :: (fd: s32, watch: s32) -> s32 #foreign libc;
-
-IN_NONBLOCK :: 0x800;
-
-IN_ACCESS   :: 0x1;
-IN_MODIFY   :: 0x2;
-IN_ATTRIB   :: 0x4;
-IN_CLOSE_WRITE :: 0x8;
-IN_MOVED_FROM  :: 0x40;
-IN_MOVED_TO    :: 0x80;
-IN_CREATE   :: 0x100;
-IN_DELETE   :: 0x200;
-IN_DELETE_SELF :: 0x400;
-IN_MOVE_SELF   :: 0x800;
-
-// @Volatile: the kernel writes these back to back, each followed by `len`
-// bytes of name.
-inotify_event :: struct {
-    wd:     s32;
-    mask:   u32;
-    cookie: u32;
-    len:    u32;
-}
-
 // ----------------------------------------------------------- threads ---
 
 // `pthread_t` is a pointer-sized handle on Linux. The attribute and mutex

@@ -464,7 +464,9 @@ append_u64 :: (builder: *String_Builder, value: u64) {
     append(builder, text);
 }
 
-HEX_DIGITS :: "0123456789abcdef";
+// Up to base 64; the first sixteen are the hex digits, so a hex number reads
+// the way it always did.
+HEX_DIGITS :: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_.";
 
 // A `FormatInt` prints the integer it holds, in the base it names, padded and
 // grouped as it asks. A negative value keeps its sign outside the padding, so
@@ -477,7 +479,7 @@ append_format_int :: (builder: *String_Builder, format: *FormatInt) {
     }
 
     base := format.base;
-    if base < 2 || base > 16  base = 10;
+    if base < 2 || base > 64  base = 10;
 
     info := cast(*Type_Info_Integer) value.type;
     negative := false;
@@ -1046,4 +1048,92 @@ decimal_length :: (d: *Decimal, format: *FormatFloat) -> s64 {
     if format.thousand_separators && total > 3  total += (total - 1) / 3;
     if d.fraction  total += 1 + d.fraction;
     return total;
+}
+
+#scope_export
+
+// An unsigned number in the base a `FormatInt` names, with its padding and its
+// digit grouping. The sign is the caller's business, which is what lets a
+// signed formatter put it outside the padding.
+print_u64_base_n :: (builder: *String_Builder, v: u64, format: FormatInt) {
+    base := cast(u64) format.base;
+    assert(base >= 2);
+    assert(base <= 64);
+
+    MAX_OUTPUT_LENGTH :: 64;
+
+    assert(format.minimum_digits >= 0);
+    digits := format.minimum_digits;
+    if digits > MAX_OUTPUT_LENGTH  digits = MAX_OUTPUT_LENGTH;
+
+    output: [MAX_OUTPUT_LENGTH] u8;
+
+    // Written from the right, since the digits come out lowest first.
+    end := output.data + MAX_OUTPUT_LENGTH;
+    p   := end;
+
+    value := v;
+    while value || digits > 0 {
+        place := value % base;
+        value /= base;
+
+        p -= 1;
+        // A leading position past the end of the number is padding rather than
+        // a zero digit — except the units place, which is a zero.
+        if place || value || p == end - 1  p.* = HEX_DIGITS[place];
+        else                               p.* = format.padding;
+
+        digits -= 1;
+    }
+
+    if p == end && digits > 0 {
+        p -= 1;
+        p.* = format.padding;
+    }
+
+    text: string;
+    text.data  = p;
+    text.count = end - p;
+
+    if format.digits_per_comma <= 0 || !format.comma_string.count {
+        append(builder, text);
+        return;
+    }
+
+    // Commas fall between groups counted from the right, so the leftmost group
+    // is whatever is left over.
+    per := cast(s64) format.digits_per_comma;
+    before := text.count % per;
+
+    if before {
+        head := text;
+        head.count = before;
+        append(builder, head);
+        advance(*text, before);
+        if text.count  append(builder, format.comma_string);
+    }
+
+    while text.count > 0 {
+        piece := text;
+        piece.count = per;
+        append(builder, piece);
+        advance(*text, per);
+        if text.count  append(builder, format.comma_string);
+    }
+}
+
+// A struct's members, given its type and where its bytes are. The same as what
+// `%` does for a struct, for a caller doing its own formatting.
+append_struct_info :: (builder: *String_Builder, info: *Type_Info_Struct, base_pointer: *void, format: *FormatStruct = null) {
+    // A union's members overlap, so there is no telling which of them is the
+    // one that was written.
+    if info.textual_flags & .UNION {
+        append(builder, "(union)");
+        return;
+    }
+
+    chosen := format;
+    if !chosen  chosen = *context.print_style.default_format_struct;
+
+    append_struct(builder, base_pointer, info, chosen.*);
 }

@@ -398,3 +398,33 @@ __jai_install_crash_handler :: () #c_call {
     Handler :: #import "Runtime_Support_Crash_Handler";
     Handler.init();
 }
+
+// Which platforms this module's Unix code paths are for.
+OS_IS_UNIX :: OS == .MACOS || OS == .LINUX || OS == .PS5 || OS == .IOS || OS == .ANDROID;
+
+// Runs `to_insert` exactly once, whichever thread gets there first and however
+// many arrive together. `synch_value` is the caller's own word and must start
+// at zero; it goes 0 (nobody yet) → 1 (one thread is running the code) → 2
+// (done), and a thread that finds 1 spins until it sees 2.
+//
+// Exposed because a library wanting the same thing should not have to write it
+// again.
+one_time_init :: (synch_value: *s32, to_insert: Code) #expand {
+    while true {
+        // Read first: once it is 2 this is the whole cost, rather than a
+        // compare-and-swap on every call for the rest of the program.
+        if synch_value.* == 2  break;
+
+        success, old := compare_and_swap(synch_value, 0, 1);
+        if old == {
+          case 0;
+            #insert to_insert;
+            if !compare_and_swap(synch_value, 1, 2)  debug_break();
+          case 1;
+            #if CPU == .X64 {
+                for 1..4 #asm { pause; pause; pause; pause; pause; }
+            }
+          case 2;
+        }
+    }
+}

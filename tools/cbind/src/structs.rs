@@ -167,8 +167,12 @@ fn self_member(line: &str) -> Option<String> {
     let (name, type_text) = split_name(head, 0);
     let name = member_name(&name);
     let jai = jai_type(&type_text)?;
+    // A C flexible array member — `char name[];` — has no count. Jai has no
+    // zero-length array, so it becomes a one-element one, the way the
+    // reference's own bindings write it; the real length is whatever the
+    // struct's own count member says.
     if count.is_empty() {
-      return Some(format!("{name}: [] {jai};"));
+      return Some(format!("{name}: [1] {jai};"));
     }
     return Some(format!("{name}: [{count}] {jai};"));
   }

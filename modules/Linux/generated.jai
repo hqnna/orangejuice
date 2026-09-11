@@ -134,7 +134,7 @@ inotify_event :: struct {
     mask: uint32_t;
     cookie: uint32_t;
     len: uint32_t;
-    name: [] u8;
+    name: [1] u8;
 }
 
 sys_info :: struct {
@@ -298,7 +298,7 @@ io_uring_cqe :: struct {
     user_data: __u64;
     res: __s32;
     flags: __u32;
-    big_cqe: [] __u64;
+    big_cqe: [1] __u64;
 }
 
 io_sqring_offsets :: struct {
@@ -379,7 +379,7 @@ io_uring_probe :: struct {
     ops_len: __u8;
     resv: __u16;
     resv2: [3] __u32;
-    ops: [] io_uring_probe_op;
+    ops: [1] io_uring_probe_op;
 }
 
 io_uring_restriction :: struct {
@@ -411,7 +411,7 @@ io_uring_buf_ring :: struct {
         using _anonymous_6: struct {
             __empty_bufs: struct {
             }
-            bufs: [] io_uring_buf;
+            bufs: [1] io_uring_buf;
         }
     }
 }
@@ -685,7 +685,10 @@ epoll_ctl :: (__epfd: s32, __op: s32, __fd: s32, __event: *epoll_event) -> s32 #
 epoll_pwait :: (__epfd: s32, __events: *epoll_event, __maxevents: s32, __timeout: s32, __ss: *__sigset_t) -> s32 #foreign libc;
 epoll_wait :: (__epfd: s32, __events: *epoll_event, __maxevents: s32, __timeout: s32) -> s32 #foreign libc;
 inotify_add_watch :: (__fd: s32, __name: *u8, __mask: uint32_t) -> s32 #foreign libc;
-inotify_init :: () -> s32 #foreign libc;
+// The header declares this with no arguments and `inotify_init1` with them;
+// the reference gives the one name the flags and a default, which is what a
+// caller wants.
+inotify_init :: (flags: s32 = 0) -> s32 #foreign libc "inotify_init1";
 inotify_rm_watch :: (__fd: s32, __wd: s32) -> s32 #foreign libc;
 sysinfo :: (__info: *sys_info) -> s32 #foreign libc;
 

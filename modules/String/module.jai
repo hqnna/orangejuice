@@ -250,8 +250,16 @@ eat_trailing_spaces :: (_s: string) -> string {
     return trim_right(_s, DEFAULT_SPACES);
 }
 
+// Everything from the first space or tab to the end. The *remainder*, not the
+// word: what came before it is the caller subtracting one count from the other.
 eat_until_space :: (_s: string) -> string {
-    return stop_at_any(_s, DEFAULT_SPACES);
+    s := _s;
+    while s {
+        if s[0] == #char " "  break;
+        if s[0] == 9          break;
+        advance(*s, 1);
+    }
+    return s;
 }
 
 // `\r\n` becomes `\n`, in place. The string shortens, so this takes a pointer:
