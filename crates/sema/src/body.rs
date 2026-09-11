@@ -12,6 +12,9 @@ use crate::checker::Checker;
 #[derive(Clone)]
 struct Context {
   returns: Vec<TypeId>,
+  /// Whether each return value was written with a default, which is what lets
+  /// a `return x;` leave the rest of them out (**L§7.2**).
+  return_defaults: Vec<bool>,
   scope: ScopeId,
   source: SourceId,
 }
@@ -252,7 +255,29 @@ impl Checker<'_> {
       return;
     }
 
-    self.check_procedure_body(source, decl.scope, *block, signature.returns.clone());
+    let defaults = self.return_defaults(source, &header.returns);
+    self.check_procedure_body(
+      source,
+      decl.scope,
+      *block,
+      signature.returns.clone(),
+      defaults,
+    );
+  }
+
+  /// Whether each of a header's return values was written with a default
+  /// (**L§7.2**).
+  pub(crate) fn return_defaults(&self, source: SourceId, returns: &[NodeId]) -> Vec<bool> {
+    let Some(ast) = self.ast(source) else {
+      return vec![false; returns.len()];
+    };
+    returns
+      .iter()
+      .map(|node| match ast.data(*node) {
+        NodeData::Declaration(declaration) => declaration.expression.is_some(),
+        _ => false,
+      })
+      .collect()
   }
 
   /// The statements of one body, checked against what its `return`s have to
@@ -264,9 +289,11 @@ impl Checker<'_> {
     scope: ScopeId,
     block: NodeId,
     returns: Vec<TypeId>,
+    return_defaults: Vec<bool>,
   ) {
     let context = Context {
       returns,
+      return_defaults,
       scope,
       source,
     };
@@ -459,6 +486,7 @@ impl Checker<'_> {
     let statements = block.statements.clone();
     let inner = Context {
       returns: context.returns.clone(),
+      return_defaults: context.return_defaults.clone(),
       scope: expansion.scope,
       source: expansion.source,
     };
@@ -572,6 +600,7 @@ impl Checker<'_> {
 
   fn check_return(&mut self, context: &Context, node: NodeId, arguments: &[Argument]) {
     let (scope, source) = (context.scope, context.source);
+    self.check_return_arity(context, node, arguments);
     for (index, argument) in arguments.iter().enumerate() {
       let value = self.expression_type(scope, source, argument.expression);
       // `return format, compressed = true;` names the return it fills, which
@@ -589,6 +618,66 @@ impl Checker<'_> {
         .ast(source)
         .map_or(Span::at(0), |ast| ast.node(node).span);
       self.report_mismatch(source, span, target, value.type_id);
+    }
+  }
+
+  /// A `return` has to fill every return value that was not written with a
+  /// default (**L§7.2**). `return f();` hands on all of `f`'s values at once,
+  /// so what counts is how many values were produced rather than how many
+  /// expressions were written.
+  fn check_return_arity(&mut self, context: &Context, node: NodeId, arguments: &[Argument]) {
+    let wanted = context.returns.len();
+    // A named return fills a slot of its own, which the count does not say
+    // anything about; and a return type nothing has worked out yet is not
+    // something to measure against.
+    if arguments.iter().any(|argument| argument.name.is_some())
+      || context
+        .returns
+        .iter()
+        .any(|type_id| self.mentions_unknown(*type_id))
+    {
+      return;
+    }
+    let required = context
+      .return_defaults
+      .iter()
+      .rposition(|has_default| !has_default)
+      .map_or(0, |last| last + 1);
+    if required == 0 {
+      return;
+    }
+    let given = match arguments {
+      [only] => match self.values_produced(context, only.expression) {
+        Some(count) => count,
+        None => return,
+      },
+      other => other.len(),
+    };
+    if given >= required {
+      return;
+    }
+    let span = self
+      .ast(context.source)
+      .map_or(Span::at(0), |ast| ast.node(node).span);
+    self.error(
+      context.source,
+      span,
+      format!("Not enough return values: Wanted {wanted}, got {given}."),
+    );
+  }
+
+  /// How many values one expression stands for: a call hands on every return
+  /// it has (**L§7.2**), and everything else is one value. A call that did not
+  /// resolve stands for nothing anyone can count, so it is `None`.
+  fn values_produced(&mut self, context: &Context, expression: NodeId) -> Option<usize> {
+    let (scope, source) = (context.scope, context.source);
+    let ast = self.ast(source)?;
+    match ast.data(expression) {
+      NodeData::ProcedureCall(_) => match self.call_return_types(scope, source, expression).len() {
+        0 => None,
+        count => Some(count),
+      },
+      _ => Some(1),
     }
   }
 

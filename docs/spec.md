@@ -390,16 +390,6 @@ what it actually does.
   builds its context from a declaration without a value instead, which is what
   **L§4.6** says applies defaults, and that works — but the field should be
   filled.
-- **A `return` whose arity is short is still caught in code generation, not by
-  the checker.** `return x;` in a procedure with two return values, neither of
-  which has a default, is invalid Jai — the reference says `Not enough return
-  values: Wanted 2, got 1.` — but the checker accepts it and the back end then
-  reports a milestone error naming M7, which is both wrong and confusing.
-  Checking it properly needs the return list's *defaults* plumbed into
-  `Context`, since **L§7.2** allows a partial `return x;` when the rest have
-  them. The *forwarding* case, `return f();` where `f` produces exactly as many
-  values as the header declares, is no longer part of this: it hands all of
-  them on, which is what **L§7.2** asks for.
 - **Variadic `Code` parameters are not supported.** `print_vars :: ($args: ..
   Code)` is how the reference declares it — each argument bakes as the syntax
   the call site wrote, and the body reads them as an array. orangejuice reports
@@ -427,9 +417,15 @@ what it actually does.
   underscore the reference's own bindings give it, so nothing in `modules/`
   relies on the difference.
 
-Four that were gaps and are now closed, each pinned by a test in
+Five that were gaps and are now closed, each pinned by a test in
 `crates/driver/tests/build.rs` or `crates/sema/tests/matching.rs`:
 
+- **A `return` whose arity is short** used to be caught in code generation.
+  The checker measures it now: the return list's defaults are carried in the
+  body's `Context`, so `return x;` fills every value that was not written with
+  one and `Not enough return values: Wanted 2, got 1.` comes out where the
+  `return` is. `return f();` still hands on everything `f` produces, and a
+  call that did not resolve is not counted against the header.
 - **A call with no matching overload** used to leave the expression with no
   type and reach code generation, which complained about a milestone. The
   checker reports it where it happens now — `The arguments given to 'g' did

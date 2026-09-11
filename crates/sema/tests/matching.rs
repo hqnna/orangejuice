@@ -647,3 +647,36 @@ fn only_a_string_literal_casts_to_a_pointer_or_a_number() {
     ]
   );
 }
+
+#[test]
+fn a_return_that_fills_too_few_values_is_reported() {
+  // **L§7.2**: a `return` has to fill every return value that was not written
+  // with a default, and the reference says how many it wanted.
+  assert_eq!(
+    errors(
+      "
+      f :: () -> (a: s64, b: s64) { return 1; }
+      "
+    ),
+    vec!["Not enough return values: Wanted 2, got 1.".to_string()]
+  );
+}
+
+#[test]
+fn a_return_may_leave_out_the_values_that_have_defaults() {
+  accepts(
+    "
+    f :: () -> (a: s64, b: bool = true) { return 1; }
+    ",
+  );
+}
+
+#[test]
+fn a_return_forwards_every_value_the_call_it_names_produces() {
+  accepts(
+    "
+    g :: () -> (a: s64, b: s64) { return 1, 2; }
+    f :: () -> (a: s64, b: s64) { return g(); }
+    ",
+  );
+}

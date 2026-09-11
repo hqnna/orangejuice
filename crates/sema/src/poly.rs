@@ -704,8 +704,9 @@ impl Checker<'_> {
     else {
       return;
     };
+    let defaults = self.return_defaults(source, &payload.returns);
     self.with_instance(Some(id), |checker| {
-      checker.check_procedure_body(source, instance.outer_scope, block, returns);
+      checker.check_procedure_body(source, instance.outer_scope, block, returns, defaults);
     });
   }
 
