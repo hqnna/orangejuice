@@ -33,6 +33,11 @@ pub struct Run {
   pub value: Option<NodeId>,
   /// The symbol the JIT looks the wrapper up under.
   pub symbol: String,
+  /// The globals an earlier run of this compilation already gave storage, by
+  /// symbol. Every `#run` shares one set of data segments (`docs/spec.md`
+  /// §6.5), so a global one of them initialized must not be initialized again
+  /// by the next: what it holds by then is what compile time has made of it.
+  pub already_initialized: std::collections::HashSet<String>,
 }
 
 /// Where each of a run's values goes in the buffer the caller hands the
@@ -59,6 +64,7 @@ pub fn run_result_layout(checker: &mut Checker, results: &[TypeId]) -> (Vec<u64>
 /// Lowers one `#run` into a program the JIT can compile.
 pub fn lower_run(checker: &mut Checker, run: &Run) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::CompileTime);
+  lowering.already_initialized = run.already_initialized.clone();
   lowering.lower_run(run);
   lowering.finish()
 }
@@ -141,6 +147,13 @@ impl Lowering<'_, '_> {
       });
     }
 
+    // A global whose initializer did not fold is assigned by generated code
+    // (**L§12.3**), and compile time needs that to have happened before the
+    // run reads it. Which globals those are is only known once the body has
+    // been walked, so the call goes in here afterwards — right after the
+    // context the initializers themselves need.
+    let initializers_at = self.blocks[0].instructions.len();
+
     match run.value {
       Some(expression) => self.run_expression(run, out, expression),
       None => self.run_block(run, out, context_address),
@@ -155,6 +168,22 @@ impl Lowering<'_, '_> {
     procedure.entry = BlockId(0);
 
     self.drain_queue();
+    self.emit_global_initializers();
+    self.drain_queue();
+    if let Some(init) = self.global_initializer() {
+      let signature = self.procedures[init.0 as usize].type_id;
+      self.procedures[id.0 as usize].blocks[0]
+        .instructions
+        .insert(
+          initializers_at,
+          Inst::Call {
+            dest: None,
+            callee: Callee::Direct(init),
+            signature,
+            arguments: vec![context_address],
+          },
+        );
+    }
   }
 
   /// `__jai_runtime_init(0, null)`: no command line, and the `#Context` it

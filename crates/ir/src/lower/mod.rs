@@ -225,7 +225,11 @@ struct Lowering<'c, 'p> {
   context_type: TypeId,
   /// Global declarations whose initializer is not a constant, in the order
   /// they were reached; they run in a generated procedure before `main`.
-  deferred_initializers: Vec<(GlobalId, DeclId)>,
+  pub(super) deferred_initializers: Vec<(GlobalId, DeclId)>,
+  /// Globals an earlier `#run` of this compilation already initialized, by
+  /// symbol. They keep whatever compile time has made of them (`docs/spec.md`
+  /// §6.5).
+  pub(super) already_initialized: std::collections::HashSet<String>,
   /// The `Type_Info` graph of every type the program asked about, and the
   /// global it is placed in (**L§17**).
   type_table: crate::typetable::TypeTable,
@@ -336,6 +340,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       entry_decl: None,
       context_type,
       deferred_initializers: Vec::new(),
+      already_initialized: std::collections::HashSet::new(),
       type_table: crate::typetable::TypeTable::default(),
       type_table_global: None,
       type_table_symbol: String::from(TYPE_TABLE_SYMBOL),
@@ -633,10 +638,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
           .collect(),
       }
     };
-    let global_init = procedures
-      .iter()
-      .position(|procedure| procedure.symbol == GLOBAL_INIT_SYMBOL)
-      .map(|index| ProcId(index as u32));
+    let global_init = find_global_initializer(&procedures);
     Lowered {
       program: Program {
         types: checker.types().clone(),
@@ -1111,6 +1113,12 @@ impl<'c, 'p> Lowering<'c, 'p> {
       self.globals[id.0 as usize].init = GlobalInit::Constant(constant);
       return;
     }
+    if self
+      .already_initialized
+      .contains(&self.globals[id.0 as usize].symbol)
+    {
+      return;
+    }
     self.deferred_initializers.push((id, decl));
   }
 
@@ -1398,6 +1406,21 @@ impl<'c, 'p> Lowering<'c, 'p> {
 }
 
 const GLOBAL_INIT_SYMBOL: &str = "__oj_global_init";
+
+/// The generated procedure that assigns the globals whose initializers did not
+/// fold (**L§12.3**), when this lowering produced one.
+fn find_global_initializer(procedures: &[Procedure]) -> Option<ProcId> {
+  procedures
+    .iter()
+    .position(|procedure| procedure.symbol == GLOBAL_INIT_SYMBOL)
+    .map(|index| ProcId(index as u32))
+}
+
+impl Lowering<'_, '_> {
+  pub(super) fn global_initializer(&self) -> Option<ProcId> {
+    find_global_initializer(&self.procedures)
+  }
+}
 
 /// The generated procedure that fills in the stack trace info records
 /// (**C§13**).

@@ -26,6 +26,9 @@ pub struct Modify {
   pub instance: oj_sema::InstanceId,
   pub variables: Vec<oj_sema::ModifyVariable>,
   pub symbol: String,
+  /// The globals an earlier run or modify of this compilation already gave
+  /// storage, by symbol (`docs/spec.md` §6.5).
+  pub already_initialized: std::collections::HashSet<String>,
 }
 
 /// The size of the buffer a `#modify` writes its answer into.
@@ -36,6 +39,7 @@ pub fn modify_result_size(variables: usize) -> usize {
 /// Lowers one `#modify` block into a program the JIT can compile.
 pub fn lower_modify(checker: &mut Checker, modify: &Modify) -> Lowered {
   let mut lowering = Lowering::new(checker, Mode::CompileTime);
+  lowering.already_initialized = modify.already_initialized.clone();
   lowering.lower_modify(modify);
   lowering.finish()
 }
@@ -98,6 +102,10 @@ impl Lowering<'_, '_> {
     };
     self.context_value = Some(context_address);
 
+    // A `#modify` reads globals the same way a `#run` does, so the ones whose
+    // initializers did not fold are assigned here too (**L§12.3**).
+    let initializers_at = self.blocks[0].instructions.len();
+
     let previous = self.checker.enter_instance(Some(modify.instance));
     self.modify_body(modify, out);
     self.checker.enter_instance(previous);
@@ -110,6 +118,22 @@ impl Lowering<'_, '_> {
     procedure.entry = BlockId(0);
 
     self.drain_queue();
+    self.emit_global_initializers();
+    self.drain_queue();
+    if let Some(init) = self.global_initializer() {
+      let signature = self.procedures[init.0 as usize].type_id;
+      self.procedures[id.0 as usize].blocks[0]
+        .instructions
+        .insert(
+          initializers_at,
+          Inst::Call {
+            dest: None,
+            callee: Callee::Direct(init),
+            signature,
+            arguments: vec![context_address],
+          },
+        );
+    }
   }
 
   fn modify_body(&mut self, modify: &Modify, out: ValueId) {

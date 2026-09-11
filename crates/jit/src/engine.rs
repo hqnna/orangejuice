@@ -94,6 +94,10 @@ impl Engine {
       results: request.results.clone(),
       value: request.value,
       symbol: request.symbol.clone(),
+      // Every run of a compilation shares one set of data segments, so a
+      // global an earlier one initialized keeps what compile time has made of
+      // it rather than being assigned again (`docs/spec.md` §6.5).
+      already_initialized: self.state.borrow().defined.clone(),
     };
     // Lowering asks the checker its usual questions, and one of those answers
     // may be another `#run` — so nothing of this engine is borrowed here.
@@ -233,6 +237,7 @@ impl Engine {
       instance: request.instance,
       variables: request.variables.clone(),
       symbol: request.symbol.clone(),
+      already_initialized: self.state.borrow().defined.clone(),
     };
     let mut lowered = oj_ir::lower_modify(checker, &modify);
     if lowered.has_errors() {
@@ -600,9 +605,10 @@ fn reaches_type_table(program: &Program) -> Vec<bool> {
 }
 
 /// The bytes a global starts compile time with: whatever the front end folded,
-/// zeroes otherwise. A global the front end could not fold is left zero, and
-/// the reference's own answer — evaluating the initializer at compile time —
-/// waits for the same scheduler M8 needs (`docs/spec.md` §10).
+/// zeroes otherwise. One it could not fold is assigned by the generated
+/// initializer the run's own wrapper calls before its body (**L§12.3**), so
+/// the zeroes here are what that assignment starts from — and only the first
+/// run to reach a global assigns it, since they all share one set of segments.
 fn initial_bytes(types: &Types, global: &Global) -> Vec<u8> {
   let size = global.size.max(1) as usize;
   let mut bytes = vec![0u8; size];

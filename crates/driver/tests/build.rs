@@ -5456,3 +5456,23 @@ fn a_wide_literal_in_a_shift_takes_the_width_that_asked_for_it() {
   };
   assert_eq!(built.output, "18446744073709551584 65295 32\n");
 }
+
+#[test]
+fn a_global_a_run_reads_has_had_its_initializer_run() {
+  // A global whose initializer does not fold is assigned by generated code
+  // (**L§12.3**); compile time needs that to have happened before a `#run`
+  // reads it. Two runs share one set of globals, so the second sees what the
+  // first left rather than a fresh initialization (`docs/spec.md` §6.5).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     make :: () -> [] int { a: [..] int; array_add(*a, 1); return a; }\n\
+     TABLE : [] int = make();\n\
+     bump :: () -> int { TABLE[0] += 10; return TABLE[0]; }\n\
+     A :: #run bump();\n\
+     B :: #run bump();\n\
+     main :: () { print(\"% % %\\n\", A, B, TABLE[0]); }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "11 21 1\n");
+}
