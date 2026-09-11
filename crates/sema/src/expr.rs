@@ -1233,9 +1233,13 @@ impl Checker<'_> {
       // A shift keeps its left operand's type, so one written as a literal has
       // nothing to take a width from and defaults the way an untyped integer
       // does anywhere else: `1 << a` is an `s64` whatever `a` is, where `2 * a`
-      // is `a`'s type (measured against the reference, **L§5.10**).
+      // is `a`'s type (measured against the reference, **L§5.10**). It stays
+      // untyped while something is still asking, though, so `m: u64 =
+      // 0xffff_ffff_ffff_ffff << n` takes the width the declaration wanted
+      // rather than defaulting first and then failing to fit it.
       None => {
         let type_id = match keeps_left {
+          true if self.types().is_untyped_int(unified) => unified,
           true => self.harden(unified),
           false => unified,
         };

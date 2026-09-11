@@ -396,11 +396,6 @@ what it actually does.
   a milestone error naming M7. `modules/Print_Vars.jai` takes eight defaulted
   `$c: Code` parameters instead, which keeps the call syntax for up to eight
   expressions.
-- **A mixed-width bitwise expression needs its casts written out.** `u32 ^ u8`
-  reports that the front end cannot work out the type. Whether the reference
-  accepts it has not been measured.
-- **An untyped integer literal wider than `s64` has no type inside a shift.**
-  `0xffff_ffff_ffff_ffff << n` fails to check; a typed constant works.
 - **Variadic type parameters on a struct are not supported.** `Tagged_Union ::
   struct (value_types: .. Type)` is how the reference declares it, and the
   reference's own module failed under orangejuice the same way ours did, with a
@@ -409,10 +404,16 @@ what it actually does.
   and iterate. `modules/Tagged_Union.jai` takes four defaulted parameters
   instead, which keeps the call syntax for up to four types.
 
-Six that were gaps and are now closed, each pinned by a test in
+Seven that were gaps and are now closed, each pinned by a test in
 `crates/driver/tests/build.rs`, `crates/sema/tests/matching.rs` or
 `crates/scope/tests/scopes.rs`:
 
+- **A wide literal in a shift** had no width to take. A shift's result is its
+  left operand's type (**L§5.10**), and one written as a literal used to
+  default to `s64` on the spot, so `m: u64 = 0xffff_ffff_ffff_ffff << n` was a
+  loss of information. It stays untyped while something is still asking now,
+  and `1 << n` on its own is still an `s64`. A mixed-width bitwise expression
+  (`u32 ^ u8`) was recorded here too and turned out to work.
 - **A declaration named after a primitive type** was accepted where the
   reference rejects it. The scope pass reports it now, in the reference's
   words: `Primitive types cannot be shadowed. You must choose a different name

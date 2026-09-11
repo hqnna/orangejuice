@@ -289,6 +289,11 @@ impl Types {
     self.kind(id).is_untyped()
   }
 
+  /// An integer literal that has not taken a width yet (**L§5.10**).
+  pub fn is_untyped_int(&self, id: TypeId) -> bool {
+    *self.kind(id) == TypeKind::UntypedInt
+  }
+
   pub fn integer_kind(&self, id: TypeId) -> Option<IntKind> {
     match self.kind(self.underlying(id)) {
       TypeKind::Integer(kind) => Some(*kind),

@@ -5435,3 +5435,24 @@ fn context_size_is_what_the_context_is_padded_out_to() {
     .expect("the produced program should run");
   assert_eq!(String::from_utf8_lossy(&output.stdout), "8192\n");
 }
+
+#[test]
+fn a_wide_literal_in_a_shift_takes_the_width_that_asked_for_it() {
+  // A shift's result is its left operand's type (**L§5.10**). One written as
+  // a literal defaults to `s64` where nothing else asks — `1 << n` is an
+  // `s64` — but a declaration that wants a `u64` gets one, rather than the
+  // default first and a loss of information afterwards.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       n := 5;\n  \
+       m: u64 = 0xffff_ffff_ffff_ffff << n;\n  \
+       a: u32 = 0xff00;\n  \
+       b: u8 = 0x0f;\n  \
+       print(\"% % %\\n\", m, a ^ b, 1 << n);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "18446744073709551584 65295 32\n");
+}

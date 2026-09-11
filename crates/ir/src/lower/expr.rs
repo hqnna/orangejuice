@@ -1595,8 +1595,14 @@ impl Lowering<'_, '_> {
     // defaults to: `1 << n` is an `s64` (**L§5.2**, **L§5.10**). When neither
     // operand has a type of its own — `.WEST | .EAST` — what asked for the
     // value is what says which enum they belong to (**L§5.12**).
+    // What asked for the value only decides the operands' type when it is one
+    // they can be computed in: `print("%", 1 << n)` wants an `Any`, which is
+    // where the shift's *result* goes rather than what it is done in.
     let result = match self.checker.types().is_untyped(info.type_id) || info.autocast {
-      true => want.unwrap_or_else(|| self.checker.hardened(info.type_id)),
+      true => match want.filter(|target| self.is_scalar(*target)) {
+        Some(target) => target,
+        None => self.checker.hardened(info.type_id),
+      },
       false => self.checker.hardened(info.type_id),
     };
     let operand = if binary.is_comparison() {
