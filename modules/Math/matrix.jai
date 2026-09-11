@@ -1,32 +1,187 @@
 //
 // Matrices, row-major.
 //
-// `m[row][column]`, and a transform multiplies as `M * v` with the vector on
-// the right — the convention most graphics maths is written in. A back end
+// `m.coef[row][column]`, and a transform multiplies as `M * v` with the vector
+// on the right — the convention most graphics maths is written in. A back end
 // wanting column-major uploads the transpose.
 //
+// Each matrix names its elements `_11`.._nn and places three views over the
+// same storage: `v` as row vectors, `coef` as a two-dimensional array, and
+// `floats` as one flat run. They are the same bytes read three ways, which is
+// what lets a matrix be indexed, destructured or uploaded without a copy.
+//
+
+Matrix2 :: struct {
+    _11, _12: float;
+    _21, _22: float;
+
+    #place _11; v:      [2]    Vector2 = ---;
+    #place _11; coef:   [2][2] float   = ---;
+    #place _11; floats: [4]    float   = ---;
+
+    Row_Type    :: Vector2;
+    Column_Type :: Vector2;
+
+    IsMatrixFromMathModule :: true;
+}
+
+Matrix2_Identity :: Matrix2.{_11 = 1, _22 = 1};
 
 Matrix3 :: struct {
-    // Identity by default, since a matrix that starts as zeroes is almost
-    // never what a caller wanted.
-    coef: [3][3] float32 = .[
-        .[1, 0, 0],
-        .[0, 1, 0],
-        .[0, 0, 1],
-    ];
+    _11, _12, _13: float;
+    _21, _22, _23: float;
+    _31, _32, _33: float;
+
+    #place _11; v:      [3]    Vector3 = ---;
+    #place _11; coef:   [3][3] float   = ---;
+    #place _11; floats: [9]    float   = ---;
+
+    Row_Type    :: Vector3;
+    Column_Type :: Vector3;
+
+    IsMatrixFromMathModule :: true;
 }
+
+Matrix3_Identity :: Matrix3.{_11 = 1, _22 = 1, _33 = 1};
 
 Matrix4 :: struct {
-    coef: [4][4] float32 = .[
-        .[1, 0, 0, 0],
-        .[0, 1, 0, 0],
-        .[0, 0, 1, 0],
-        .[0, 0, 0, 1],
-    ];
+    _11, _12, _13, _14: float;
+    _21, _22, _23, _24: float;
+    _31, _32, _33, _34: float;
+    _41, _42, _43, _44: float;
+
+    #place _11; mat4x3: Matrix4x3 = ---;
+
+    #place _11; v:      [4]    Vector4 = ---;
+    #place _11; coef:   [4][4] float   = ---;
+    #place _11; floats: [16]   float   = ---;
+
+    Row_Type    :: Vector4;
+    Column_Type :: Vector4;
+
+    IsMatrixFromMathModule :: true;
 }
 
-MATRIX3_IDENTITY :: Matrix3.{};
-MATRIX4_IDENTITY :: Matrix4.{};
+Matrix4_Identity :: Matrix4.{_11 = 1, _22 = 1, _33 = 1, _44 = 1};
+
+// A `Matrix4` whose bottom row is known to be [0, 0, 0, 1] — the usual case
+// in affine graphics. Dropping the row saves the storage and the multiplies
+// that would only ever produce it again.
+Matrix4x3 :: struct {
+    _11, _12, _13, _14: float;
+    _21, _22, _23, _24: float;
+    _31, _32, _33, _34: float;
+
+    #place _11; v:      [3]    Vector4 = ---;
+    #place _11; coef:   [3][4] float   = ---;
+    #place _11; floats: [12]   float   = ---;
+
+    Row_Type    :: Vector4;
+    Column_Type :: Vector3;
+
+    IsMatrixFromMathModule :: true;
+}
+
+Matrix4x3_Identity :: Matrix4x3.{_11 = 1, _22 = 1, _33 = 1};
+
+// The shapes that let one routine work on the top-left block of a Matrix3, a
+// Matrix4 or a Matrix4x3 alike. They have no `coef`, so a routine needing one
+// must take the real type.
+AnyMatrix3 :: struct {
+    _11, _12, _13: float;
+    _21, _22, _23: float;
+    _31, _32, _33: float;
+}
+
+AnyMatrix4x3 :: struct {
+    _11, _12, _13, _14: float;
+    _21, _22, _23, _24: float;
+    _31, _32, _33, _34: float;
+}
+
+AnyMatrix2 :: struct {
+    _11, _12: float;
+    _21, _22: float;
+}
+
+AnyMatrix :: struct {
+    IsMatrixFromMathModule :: true;
+}
+
+// The older spellings of the identity constants.
+MATRIX3_IDENTITY :: Matrix3_Identity;
+MATRIX4_IDENTITY :: Matrix4_Identity;
+
+// ------------------------------------------------------- rows and columns ---
+
+row :: (m: Matrix4, i: int) -> Vector4 { return m.v[i]; }
+row :: (m: Matrix3, i: int) -> Vector3 { return m.v[i]; }
+row :: (m: Matrix2, i: int) -> Vector2 { return m.v[i]; }
+row :: (m: Matrix4x3, i: int) -> Vector4 { return m.v[i]; }
+
+column :: (m: Matrix4, i: int) -> Vector4 {
+    return .{m.coef[0][i], m.coef[1][i], m.coef[2][i], m.coef[3][i]};
+}
+
+column :: (m: Matrix3, i: int) -> Vector3 {
+    return .{m.coef[0][i], m.coef[1][i], m.coef[2][i]};
+}
+
+column :: (m: Matrix2, i: int) -> Vector2 {
+    return .{m.coef[0][i], m.coef[1][i]};
+}
+
+// A Matrix4x3's columns are three tall: the row it does not store is the one
+// that would have contributed the fourth element.
+column :: (m: Matrix4x3, i: int) -> Vector3 {
+    return .{m.coef[0][i], m.coef[1][i], m.coef[2][i]};
+}
+
+make_matrix_from_rows :: (a: Vector3, b: Vector3, c: Vector3) -> Matrix3 {
+    result: Matrix3 = ---;
+    result.v[0] = a;
+    result.v[1] = b;
+    result.v[2] = c;
+    return result;
+}
+
+make_matrix_from_rows :: (a: Vector4, b: Vector4, c: Vector4, d: Vector4) -> Matrix4 {
+    result: Matrix4 = ---;
+    result.v[0] = a;
+    result.v[1] = b;
+    result.v[2] = c;
+    result.v[3] = d;
+    return result;
+}
+
+make_matrix_from_columns :: (a: Vector3, b: Vector3, c: Vector3) -> Matrix3 {
+    return transpose(make_matrix_from_rows(a, b, c));
+}
+
+make_matrix_from_columns :: (a: Vector4, b: Vector4, c: Vector4, d: Vector4) -> Matrix4 {
+    return transpose(make_matrix_from_rows(a, b, c, d));
+}
+
+make_matrix3 :: (a: Vector3, b: Vector3, c: Vector3) -> Matrix3 {
+    return make_matrix_from_rows(a, b, c);
+}
+
+make_matrix4 :: (a: Vector4, b: Vector4, c: Vector4, d: Vector4) -> Matrix4 {
+    return make_matrix_from_rows(a, b, c, d);
+}
+
+identity :: ($T: Type) -> T {
+    #if T == Matrix2  return Matrix2_Identity;
+    #if T == Matrix3  return Matrix3_Identity;
+    #if T == Matrix4  return Matrix4_Identity;
+    #if T == Matrix4x3  return Matrix4x3_Identity;
+    empty: T;
+    return empty;
+}
+
+identity_of :: (m: $T) -> T {
+    return identity(T);
+}
 
 operator * :: (a: Matrix4, b: Matrix4) -> Matrix4 {
     result: Matrix4;
