@@ -29,6 +29,37 @@ pub struct Options {
   pub debug_info: bool,
   /// Whether the module is an executable's or a compile-time run's.
   pub purpose: crate::Purpose,
+  /// Which of the program's codegen units this module is, and how many there
+  /// are. LLVM's own work — instruction selection, register allocation, the
+  /// pass pipeline — is most of a build, and it is per-module, so the program
+  /// is split across modules that are built on separate threads and linked
+  /// together.
+  ///
+  /// A count of one is the whole program in one module, which is what a
+  /// compile-time run and every textual output get.
+  pub unit_index: usize,
+  pub unit_count: usize,
+}
+
+impl Options {
+  /// Whether this module is the one that defines what there may only be one
+  /// of: the program's globals and its entry point.
+  pub(crate) fn is_primary_unit(&self) -> bool {
+    self.unit_count <= 1 || self.unit_index == 0
+  }
+
+  /// Whether a procedure belongs to this module. Round-robin rather than
+  /// contiguous, so that a run of large procedures next to one another in the
+  /// program does not land in one unit.
+  pub(crate) fn owns_procedure(&self, index: usize) -> bool {
+    self.unit_count <= 1 || index % self.unit_count == self.unit_index
+  }
+
+  /// Whether a procedure a unit does not own may still be called from it,
+  /// which is what stops a split program giving anything internal linkage.
+  pub(crate) fn is_split(&self) -> bool {
+    self.unit_count > 1
+  }
 }
 
 /// `Llvm_Bitcode_Optimization_Setting` (**C§4**): which of LLVM's own
@@ -93,6 +124,8 @@ impl Default for Options {
       module_name: String::from("oj"),
       debug_info: true,
       purpose: crate::Purpose::Executable,
+      unit_index: 0,
+      unit_count: 1,
     }
   }
 }

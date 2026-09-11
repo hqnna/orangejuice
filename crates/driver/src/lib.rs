@@ -472,13 +472,16 @@ fn run_workspace_once(
       }
       let object = build.join(format!("{name}.o"));
       let object_name = object.display().to_string();
-      if let Err(error) = oj_codegen::compile(
-        &lowered.program,
-        &codegen,
-        oj_codegen::Output::Object(&object),
-      ) {
-        return Report::failure(error);
-      }
+      // An object-file build *is* the object the caller asked for, so there is
+      // nothing to split it across; everything else is linked, and may be.
+      let units = match options.output_type {
+        oj_link::OutputType::ObjectFile => 1,
+        _ => oj_codegen::default_units(&lowered.program),
+      };
+      let objects = match oj_codegen::compile_objects(&lowered.program, &codegen, &object, units) {
+        Ok(objects) => objects,
+        Err(error) => return Report::failure(error),
+      };
       timing.mark("llvm + object");
 
       let file = match options.append_extension {
@@ -486,13 +489,17 @@ fn run_workspace_once(
         false => name.clone(),
       };
       let request = oj_link::Request {
-        objects: vec![object],
+        objects: objects.clone(),
         output: directory.join(&file),
         output_type: options.output_type,
         libraries: lowered.program.libraries.clone(),
         additional_arguments: Vec::new(),
       };
-      report.compiled.object_files = vec![object_name];
+      report.compiled.object_files = objects
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+      let _ = object_name;
       report.compiled.system_libraries = lowered
         .program
         .libraries

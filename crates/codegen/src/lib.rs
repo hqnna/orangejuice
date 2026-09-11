@@ -49,6 +49,8 @@ pub fn compile(
   options: &Options,
   output: Output<'_>,
 ) -> Result<String, String> {
+  let timing = std::env::var_os("OJ_TIMING").is_some();
+  let t0 = std::time::Instant::now();
   let machine = machine::target_machine(options)?;
   let context = Context::create();
   let module = build_module(
@@ -56,7 +58,9 @@ pub fn compile(
     program,
     options,
   )?;
+  let t1 = std::time::Instant::now();
   optimize(&module, &machine, options)?;
+  let t2 = std::time::Instant::now();
   let module = &module;
 
   match output {
@@ -65,10 +69,23 @@ pub fn compile(
       .write_to_memory_buffer(module, FileType::Assembly)
       .map(|buffer| String::from_utf8_lossy(buffer.as_slice()).into_owned())
       .map_err(|error| error.to_string()),
-    Output::Object(path) => machine
-      .write_to_file(module, FileType::Object, path)
-      .map(|()| String::new())
-      .map_err(|error| error.to_string()),
+    Output::Object(path) => {
+      let result = machine
+        .write_to_file(module, FileType::Object, path)
+        .map(|()| String::new())
+        .map_err(|error| error.to_string());
+      if timing {
+        let t3 = std::time::Instant::now();
+        eprintln!(
+          "oj timing    build_module {:.1}ms  optimize {:.1}ms  emit {:.1}ms  (procedures {})",
+          (t1 - t0).as_secs_f64() * 1000.0,
+          (t2 - t1).as_secs_f64() * 1000.0,
+          (t3 - t2).as_secs_f64() * 1000.0,
+          program.procedures.len(),
+        );
+      }
+      result
+    }
   }
 }
 
@@ -113,3 +130,92 @@ pub fn build_module<'ctx>(
 /// A borrowed context, for a caller that owns one LLVM context but not the
 /// [`Context`] wrapper — the JIT's thread-safe context, for instance.
 pub type Borrowed<'ctx> = ContextRef<'ctx>;
+
+/// Compiles a program into one or more object files, built in parallel.
+///
+/// LLVM's own work — the pass pipeline, instruction selection, register
+/// allocation, object emission — is most of a build's time, and all of it is
+/// per-module: on a 12,000-line program it is nearly half of a debug build and
+/// nine tenths of a release one. So the program is split across `units`
+/// modules, each built on a thread of its own with a context of its own, and
+/// the objects are linked together.
+///
+/// A split program cannot give anything internal linkage — a call may cross
+/// units — and defines its globals and its entry point in the first unit only.
+/// One unit is the whole program in one module, which is what a small program
+/// and every textual output get.
+pub fn compile_objects(
+  program: &oj_ir::Program,
+  options: &Options,
+  object: &Path,
+  units: usize,
+) -> Result<Vec<std::path::PathBuf>, String> {
+  let units = units.max(1);
+  if units == 1 {
+    compile(program, options, Output::Object(object))?;
+    return Ok(vec![object.to_path_buf()]);
+  }
+
+  let paths: Vec<std::path::PathBuf> = (0..units)
+    .map(|index| match index {
+      // The first unit keeps the name the caller asked for, so a build that
+      // stopped splitting still writes where it used to.
+      0 => object.to_path_buf(),
+      _ => object.with_extension(format!("{index}.o")),
+    })
+    .collect();
+
+  let results: Vec<Result<(), String>> = std::thread::scope(|scope| {
+    let handles: Vec<_> = paths
+      .iter()
+      .enumerate()
+      .map(|(index, path)| {
+        let mut unit = options.clone();
+        unit.unit_index = index;
+        unit.unit_count = units;
+        scope.spawn(move || {
+          // Each unit needs a context of its own: LLVM's are not shared
+          // between threads.
+          compile(program, &unit, Output::Object(path)).map(|_| ())
+        })
+      })
+      .collect();
+    handles
+      .into_iter()
+      .map(|handle| {
+        handle
+          .join()
+          .unwrap_or_else(|_| Err(String::from("a codegen unit panicked")))
+      })
+      .collect()
+  });
+
+  for result in results {
+    result?;
+  }
+  Ok(paths)
+}
+
+/// How many objects a program of this size is worth splitting across. Below a
+/// few hundred procedures the threads cost more than they save, and past the
+/// machine's parallelism they only make more objects to link.
+pub fn default_units(program: &oj_ir::Program) -> usize {
+  const PROCEDURES_PER_UNIT: usize = 128;
+  if let Some(value) = std::env::var_os("OJ_CODEGEN_UNITS")
+    && let Some(count) = value.to_str().and_then(|text| text.parse::<usize>().ok())
+  {
+    return count.max(1);
+  }
+  let bodies = program
+    .procedures
+    .iter()
+    .filter(|procedure| procedure.has_body())
+    .count();
+  if bodies < 2 * PROCEDURES_PER_UNIT {
+    return 1;
+  }
+  let cores = std::thread::available_parallelism()
+    .map(std::num::NonZeroUsize::get)
+    .unwrap_or(1);
+  (bodies / PROCEDURES_PER_UNIT).min(cores).max(1)
+}

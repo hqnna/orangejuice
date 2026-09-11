@@ -302,3 +302,56 @@ fn an_optimized_build_runs_the_pass_pipeline() {
     "the entry point should survive:\n{optimized}"
   );
 }
+
+/// A split program has to be one program: what a unit does not define it
+/// declares, and nothing it keeps to itself may reach `.dynsym`, where a name
+/// like `errno` would interpose on the C library's own — which is what made a
+/// split program die in the dynamic loader before `main`.
+#[test]
+fn a_split_program_hides_what_it_does_not_export() {
+  let options = oj_codegen::Options {
+    unit_index: 1,
+    unit_count: 2,
+    debug_info: false,
+    ..oj_codegen::Options::default()
+  };
+  let Some(text) = llvm_ir_with(
+    "helper :: (x: int) -> int { return x * 2; }\n\
+     main :: () { n := helper(21); }\n",
+    &options,
+  ) else {
+    return;
+  };
+  // The entry point belongs to the primary unit and to nothing else.
+  assert!(!text.contains("define i32 @main("), "{text}");
+  // Whatever this unit defines is either something the program exports on
+  // purpose — `__jai_runtime_init`, which a library publishes — or hidden, so
+  // that `-export-dynamic` cannot publish an internal name like `errno` over
+  // the C library's own.
+  let mut hidden = 0;
+  for line in text.lines().filter(|line| line.starts_with("define ")) {
+    if line.contains("@__jai_") {
+      continue;
+    }
+    assert!(
+      line.contains(" hidden "),
+      "a procedure the program keeps to itself escaped into the dynamic symbols: {line}"
+    );
+    hidden += 1;
+  }
+  assert!(hidden > 0, "the unit should define something: {text}");
+}
+
+/// The whole program in one module is what a small one gets, and then a
+/// procedure nobody exports keeps internal linkage.
+#[test]
+fn one_unit_keeps_internal_linkage() {
+  let Some(text) = llvm_ir(
+    "helper :: (x: int) -> int { return x * 2; }\n\
+     main :: () { n := helper(21); }\n",
+  ) else {
+    return;
+  };
+  assert!(text.contains("define internal"), "{text}");
+  assert!(text.contains("define i32 @main("), "{text}");
+}

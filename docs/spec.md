@@ -133,7 +133,7 @@ Compiler-level options precede the files and are separated by `---` or `--`: `--
 
 `oj build` with no file prints usage. Exit codes: 0 success, 1 compilation/link failure, 2 usage error. Diagnostics go to stderr in the reference format (**C§12**), colored when stderr is a TTY unless `-no_color`.
 
-Environment: `OJ_JAI_DIR` (base path containing `modules/`, default: `vendor/jai` relative to the current working directory or the path baked in at build time via nix), `OJ_LOG` (tracing filter), `OJ_THREADS` (scheduler threads, default = cores), `OJ_TIMING` (per-stage wall-clock times to stderr), `OJ_NO_LLD` (link with the C driver's default linker rather than `lld`).
+Environment: `OJ_JAI_DIR` (base path containing `modules/`, default: `vendor/jai` relative to the current working directory or the path baked in at build time via nix), `OJ_LOG` (tracing filter), `OJ_THREADS` (scheduler threads, default = cores), `OJ_TIMING` (per-stage wall-clock times to stderr), `OJ_CODEGEN_UNITS` (how many objects the program is split across; default chosen from its size and the machine), `OJ_NO_LLD` (link with the C driver's default linker rather than `lld`).
 
 ## 6. Architecture
 
@@ -171,6 +171,8 @@ A typed, backend-neutral instruction set that plays the role of jai's bytecode: 
 ### 6.6 Code generation (`oj-codegen`)
 
 inkwell/LLVM 19: one LLVM module per split (procedure batches, `enable_split_modules`), `x86_64-unknown-linux-gnu` target machine with `target_system_cpu`/`features`, data layout consistent with `oj-types`, DWARF 5 debug info (`emit_debug_info`), frame pointers/red zone options, optimization pipelines mapped from `Llvm_Options` (bitcode `O0…OZ`, machine-code `NONE…AGGRESSIVE`, inlining/vectorization/unrolling/tail-call/merge flags), `#intrinsic "llvm.*"` passthrough, `#asm` → module-level assembly functions (or inline asm with the register constraints computed by the `#asm` allocator), `#bytes` → raw byte functions, `#program_export` visibility, `#elsewhere` externs, sections for user data segments, `.o` emission into `.build/`. `oj dump asm` prints the IR or assembly.
+
+The program is split across several LLVM modules built in parallel, one thread and one context each, and the objects are linked together. LLVM's own work — the pass pipeline, instruction selection, register allocation, object emission — is per-module and is most of a build's time: on a 12,000-line program it is nearly half of a debug build and nine tenths of a release one, and splitting it across the machine is a straight multiple. `oj_codegen::default_units` picks the count from how many procedure bodies the program has and how much parallelism the machine offers; `OJ_CODEGEN_UNITS` overrides it, and an object-file build is never split, since the object *is* what was asked for. A split program defines its globals and its entry point in the first unit and declares them in the rest, and nothing may keep internal linkage — a call may cross units. What would have been internal gets external linkage with **hidden visibility** instead: a sibling object can reach it, and it never lands in `.dynsym`, where `-export-dynamic` would publish every internal name the program has. That last part is not a nicety — our `errno` wrapper interposing on glibc's thread-local `errno` killed a split program inside the dynamic loader, before `main`.
 
 ### 6.7 Linking (`oj-link`)
 

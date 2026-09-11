@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use inkwell::GlobalVisibility;
 use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
 use inkwell::context::ContextRef;
@@ -49,6 +50,10 @@ pub struct Emitter<'ctx, 'p> {
   constants: usize,
   /// The DWARF description of the program, when one was asked for (**C§4**).
   debug: Option<crate::debug::Debug<'ctx>>,
+  /// Which of the program's codegen units this module is. A split program
+  /// defines each procedure's body in exactly one of them and declares it in
+  /// the rest, so nothing may keep internal linkage.
+  unit: crate::Options,
 }
 
 impl<'ctx, 'p> Emitter<'ctx, 'p> {
@@ -75,6 +80,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       strings: HashMap::new(),
       constants: 0,
       debug,
+      unit: options.clone(),
     }
   }
 
@@ -91,7 +97,7 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     self.declare_functions();
     if self.debug.is_some() {
       for (index, procedure) in self.program.procedures.iter().enumerate() {
-        if !procedure.has_body() {
+        if !procedure.has_body() || !self.unit.owns_procedure(index) {
           continue;
         }
         let function = self.functions[index];
@@ -105,12 +111,12 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       }
     }
     for (index, procedure) in self.program.procedures.iter().enumerate() {
-      if !procedure.has_body() {
+      if !procedure.has_body() || !self.unit.owns_procedure(index) {
         continue;
       }
       self.emit_body(ProcId(index as u32), procedure)?;
     }
-    if self.purpose == crate::Purpose::Executable {
+    if self.purpose == crate::Purpose::Executable && self.unit.is_primary_unit() {
       self.emit_entry_point()?;
     }
     if let Some(debug) = self.debug.as_ref() {
@@ -250,6 +256,23 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       }
       return;
     }
+    // A split program defines its globals once, in the primary unit; the rest
+    // declare them, the way a compile-time module does.
+    if !self.unit.is_primary_unit() {
+      for global in &self.program.globals {
+        let storage = self.context.i8_type().array_type(global.size.max(1) as u32);
+        let value = self
+          .module
+          .add_global(storage, Some(AddressSpace::default()), &global.symbol);
+        value.set_alignment(global.alignment as u32);
+        value.set_linkage(Linkage::External);
+        if !global.external && !global.imported {
+          value.set_visibility(GlobalVisibility::Hidden);
+        }
+        self.globals.push(value);
+      }
+      return;
+    }
     for global in &self.program.globals {
       // The type table points at itself, so it has to exist before its own
       // initializer can be written (**L§17**).
@@ -298,11 +321,14 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         if let Some(initializer) = initializer {
           value.set_initializer(&initializer);
         }
-        value.set_linkage(if global.external {
-          Linkage::External
+        if global.external {
+          value.set_linkage(Linkage::External);
+        } else if self.unit.is_split() {
+          value.set_linkage(Linkage::External);
+          value.set_visibility(GlobalVisibility::Hidden);
         } else {
-          Linkage::Internal
-        });
+          value.set_linkage(Linkage::Internal);
+        }
       }
       self.globals.push(value);
     }
@@ -337,7 +363,20 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         crate::Purpose::Executable => !procedure.flags.contains(ProcedureFlags::EXPORT),
       };
       if procedure.has_body() && private {
-        function.set_linkage(Linkage::Internal);
+        // A split program cannot give a procedure internal linkage — a call
+        // may cross units — so it gets external linkage and *hidden*
+        // visibility instead: a sibling object can call it, and it never
+        // reaches `.dynsym`. Without the visibility, `-export-dynamic` would
+        // publish every internal name the program has, and one of them
+        // interposing on a libc symbol is enough to break the program before
+        // it starts — our `errno` wrapper over glibc's thread-local `errno`
+        // did exactly that.
+        match self.unit.is_split() {
+          true => function
+            .as_global_value()
+            .set_visibility(GlobalVisibility::Hidden),
+          false => function.set_linkage(Linkage::Internal),
+        }
       }
       for (position, attribute) in self.memory_attributes(&procedure.abi) {
         function.add_attribute(AttributeLoc::Param(position), attribute);
@@ -502,7 +541,15 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       .add_global(storage, Some(AddressSpace::default()), symbol);
     value.set_alignment(alignment);
     value.set_constant(true);
-    value.set_linkage(Linkage::Internal);
+    // A split program keeps the type-table image in the primary unit, so every
+    // other unit reaches it by symbol.
+    match self.unit.is_split() {
+      true => {
+        value.set_linkage(Linkage::External);
+        value.set_visibility(GlobalVisibility::Hidden);
+      }
+      false => value.set_linkage(Linkage::Internal),
+    }
 
     let base = value.as_pointer_value();
     let i64_type = self.context.i64_type();
