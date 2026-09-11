@@ -8,6 +8,8 @@
 // else.
 //
 
+#load "generated.jai";
+
 #scope_export
 
 // ------------------------------------------------------------- allocation ---

@@ -1,0 +1,9 @@
+if_nameindex if_nameindex_t
+sigaction sigaction_t
+sigstack sigstack_t
+stat64 stat64_t
+statfs statfs_t
+statfs64 statfs64_t
+statvfs statvfs_t
+statvfs64 statvfs64_t
+sysinfo sysinfo_t
