@@ -5574,3 +5574,25 @@ fn a_run_reaches_an_initializer_through_the_type_table_too() {
   };
   assert_eq!(built.output, "800\n");
 }
+
+#[test]
+fn initializer_of_a_type_that_is_all_zeroes_is_null() {
+  // **L§5.13**: `initializer_of(T)` is the struct's initializer procedure, or
+  // null when the type starts as all zeroes — which is the same answer
+  // `Type_Info_Struct.initializer` gives, and what `New`'s `#if ini … else
+  // memset` in `Basic` is written against.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Plain :: struct { a: int; b: int; }\n\
+     Defaults :: struct { a := 7; }\n\
+     main :: () {\n  \
+       print(\"% %\\n\", initializer_of(Plain) != null, initializer_of(Defaults) != null);\n  \
+       p := New(Plain);\n  \
+       d := New(Defaults);\n  \
+       print(\"% %\\n\", p.a, d.a);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "false true\n0 7\n");
+}

@@ -1424,12 +1424,18 @@ impl Checker<'_> {
         Expr::constant(Const::new(pointer, Value::Address(address)))
       }
       // `initializer_of(T)` is a procedure the compiler writes out, and a
-      // procedure name is a constant like any other (**L§5.11**).
+      // procedure name is a constant like any other (**L§5.11**). A type that
+      // starts as all zeroes has none, and the query is `null` (**L§5.13**) —
+      // which is the same answer `Type_Info_Struct.initializer` gives
+      // (**L§17**).
       TypeQueryKind::InitializerOf => {
         let void_pointer = TypeId::VOID_POINTER;
         let mut signature = oj_types::ProcedureType::new(vec![void_pointer], Vec::new());
         signature.flags = oj_types::ProcedureFlags::HAS_NO_CONTEXT;
         let procedure = self.types_mut().procedure(signature);
+        if !self.needs_initializer(type_id) {
+          return Expr::constant(Const::new(procedure, Value::Null));
+        }
         let address = crate::constants::Address {
           at: crate::constants::AddressOf::Initializer(type_id),
           offset: 0,

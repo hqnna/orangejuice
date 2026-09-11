@@ -399,7 +399,10 @@ now, each pinned by a test in `crates/driver/tests/build.rs`,
   dylib. A procedure the image names is shared even when it reads the table,
   since the engine writes it in by symbol — so a `#Context` initializer a
   later run's image names fills `context_info` with the earlier run's record:
-  the same type, in a different image.
+  the same type, in a different image. `initializer_of(T)` answers the same
+  way — null for a type that is all zeroes (**L§5.13**), where it used to hand
+  back a procedure whatever the type was, so `Basic`'s `New` takes the
+  `memset` branch its `#if ini … else` was written for.
 - **A `$`-marked varargs parameter** now bakes to a `[N] T` whose `N` is how
   many arguments landed in the slot (**L§7.3**), each one a constant: a `Code`
   element takes the syntax the call site wrote, the way a single `$c: Code`
