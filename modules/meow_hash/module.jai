@@ -71,45 +71,21 @@ MeowMaskLen: [32] u8 = u8.[
 ];
 
 // The 128-bit result, as bytes.
-Meow_Hash :: struct {
-    bytes: [16] u8;
+
+// How far ahead to prefetch, and how many blocks it is worth doing it for. A
+// large input needs the prefetch to reach full speed; a small one runs faster
+// without it, since the prefetches compete for the same ports as the work.
+MEOW_PREFETCH       :: 4096;
+MEOW_PREFETCH_LIMIT :: 0x3ff;
+
+// A hook for dumping the eight lanes between steps while debugging. It does
+// nothing; the parameters are here so that a caller can fill it in.
+MEOW_DUMP_STATE :: (T: string, r0: reg, r1: reg, r2: reg, r3: reg, r4: reg, r5: reg, r6: reg, r7: reg) #expand {
 }
 
-// The whole input at once.
-meow_hash :: (seed: [128] u8, source: *void, length: u64) -> Meow_Hash {
-    result: Meow_Hash;
-    hash_into(seed, source, length, result.bytes.data);
-    return result;
-}
-
-meow_hash :: (s: string) -> Meow_Hash {
-    return meow_hash(MeowDefaultSeed, s.data, cast(u64) s.count);
-}
-
-meow_hash :: (bytes: [] u8) -> Meow_Hash {
-    return meow_hash(MeowDefaultSeed, bytes.data, cast(u64) bytes.count);
-}
-
-// The low 64 or 32 bits, for a caller that wants an ordinary integer.
-meow_u64 :: (hash: Meow_Hash) -> u64 {
-    result: u64;
-    memcpy(*result, hash.bytes.data, 8);
-    return result;
-}
-
-meow_u32 :: (hash: Meow_Hash) -> u32 {
-    result: u32;
-    memcpy(*result, hash.bytes.data, 4);
-    return result;
-}
-
-meow_hashes_are_equal :: (a: Meow_Hash, b: Meow_Hash) -> bool {
-    return memcmp(a.bytes.data, b.bytes.data, 16) == 0;
-}
-
-#scope_module
-
-// One mixing step over four 128-bit inputs already in registers.
+// One mixing step over four 128-bit inputs already in registers. Two AES
+// rounds, which is where the mixing strength comes from, with the additions
+// and xors keeping the lanes coupled.
 MEOW_MIX_REG :: (r1: reg, r2: reg, r3: reg, r4: reg, r5: reg, i1: reg, i2: reg, i3: reg, i4: reg) #expand {
     #asm {
         aesdec  r1, r2;
@@ -146,92 +122,85 @@ MEOW_SHUFFLE :: (r1: reg, r2: reg, r3: reg, r4: reg, r5: reg, r6: reg) #expand {
     }
 }
 
-hash_into :: (seed: [128] u8, source_in: *void, length: u64, store: *u8) {
-    source := source_in;
+// Half of a 128-bit hash register as an ordinary integer.
+MeowU64From :: (Hash: reg, $INDEX: int) -> u64 #expand {
+    result: u64 = ---;
+    #asm { pextrq result, Hash, INDEX; }
+    return result;
+}
 
+MeowU32From :: (Hash: reg, $INDEX: int) -> u32 #expand {
+    result: u32 = ---;
+    #asm { pextrd result, Hash, INDEX; }
+    return result;
+}
+
+// Seeds the eight hash registers from the 128-byte seed.
+MeowBegin :: (Seed: [128] u8, h0: reg, h1: reg, h2: reg, h3: reg, h4: reg, h5: reg, h6: reg, h7: reg) #expand {
+    SeedPtr := Seed.data;
     #asm {
-        h0: vec; h1: vec; h2: vec; h3: vec;
-        h4: vec; h5: vec; h6: vec; h7: vec;
+        movdqu h0, [SeedPtr + 0x00];
+        movdqu h1, [SeedPtr + 0x10];
+        movdqu h2, [SeedPtr + 0x20];
+        movdqu h3, [SeedPtr + 0x30];
+        movdqu h4, [SeedPtr + 0x40];
+        movdqu h5, [SeedPtr + 0x50];
+        movdqu h6, [SeedPtr + 0x60];
+        movdqu h7, [SeedPtr + 0x70];
     }
 
-    // Seed the eight lanes.
-    seed_pointer := seed.data;
-    #asm {
-        movdqu h0, [seed_pointer + 0x00];
-        movdqu h1, [seed_pointer + 0x10];
-        movdqu h2, [seed_pointer + 0x20];
-        movdqu h3, [seed_pointer + 0x30];
-        movdqu h4, [seed_pointer + 0x40];
-        movdqu h5, [seed_pointer + 0x50];
-        movdqu h6, [seed_pointer + 0x60];
-        movdqu h7, [seed_pointer + 0x70];
-    }
+    MEOW_DUMP_STATE("Seed", h0, h1, h2, h3, h4, h5, h6, h7);
+}
 
-    // Every whole 256-byte block, eight 32-byte windows at a time.
-    block_count := length >> 8;
-    advance := block_count << 8;
-    while block_count {
-        MEOW_MIX(h0, h4, h6, h1, h2, source, 0x00);
-        MEOW_MIX(h1, h5, h7, h2, h3, source, 0x20);
-        MEOW_MIX(h2, h6, h0, h3, h4, source, 0x40);
-        MEOW_MIX(h3, h7, h1, h4, h5, source, 0x60);
-        MEOW_MIX(h4, h0, h2, h5, h6, source, 0x80);
-        MEOW_MIX(h5, h1, h3, h6, h7, source, 0xa0);
-        MEOW_MIX(h6, h2, h4, h7, h0, source, 0xc0);
-        MEOW_MIX(h7, h3, h5, h0, h1, source, 0xe0);
-        source += 0x100;
-        block_count -= 1;
-    }
-    source = source_in;
+// Every whole 256-byte block, eight 32-byte windows at a time. The two loops
+// are the same work with and without the prefetch.
+MeowAbsorbBlocks :: (BlockCount: u64, Source: *void, h0: reg, h1: reg, h2: reg, h3: reg, h4: reg, h5: reg, h6: reg, h7: reg) #expand {
+    remaining := BlockCount;
+    at := Source;
 
-    // The residual: whatever is left after the whole blocks, in two registers.
-    #asm {
-        pxor r1:, r1;
-        pxor r3:, r3;
-    }
+    if remaining > MEOW_PREFETCH_LIMIT {
+        while remaining {
+            #asm {
+                prefetcht0 [at + (MEOW_PREFETCH + 0x00)];
+                prefetcht0 [at + (MEOW_PREFETCH + 0x40)];
+                prefetcht0 [at + (MEOW_PREFETCH + 0x80)];
+                prefetcht0 [at + (MEOW_PREFETCH + 0xc0)];
+            }
 
-    last := source + (length & ~cast(u64) 0xf);
-    tail := length & 0xf;
-    if tail {
-        mask_pointer := MeowMaskLen.data;
-        shift_pointer := MeowShiftAdjust.data;
-        mask_index := 0x10 - tail;
-        #asm {
-            mask: vec;
-            movdqu mask, [mask_pointer + mask_index];
+            MEOW_MIX(h0, h4, h6, h1, h2, at, 0x00);
+            MEOW_MIX(h1, h5, h7, h2, h3, at, 0x20);
+            MEOW_MIX(h2, h6, h0, h3, h4, at, 0x40);
+            MEOW_MIX(h3, h7, h1, h4, h5, at, 0x60);
+            MEOW_MIX(h4, h0, h2, h5, h6, at, 0x80);
+            MEOW_MIX(h5, h1, h3, h6, h7, at, 0xa0);
+            MEOW_MIX(h6, h2, h4, h7, h0, at, 0xc0);
+            MEOW_MIX(h7, h3, h5, h0, h1, at, 0xe0);
+
+            at += 0x100;
+            remaining -= 1;
         }
+    } else {
+        while remaining {
+            MEOW_MIX(h0, h4, h6, h1, h2, at, 0x00);
+            MEOW_MIX(h1, h5, h7, h2, h3, at, 0x20);
+            MEOW_MIX(h2, h6, h0, h3, h4, at, 0x40);
+            MEOW_MIX(h3, h7, h1, h4, h5, at, 0x60);
+            MEOW_MIX(h4, h0, h2, h5, h6, at, 0x80);
+            MEOW_MIX(h5, h1, h3, h6, h7, at, 0xa0);
+            MEOW_MIX(h6, h2, h4, h7, h0, at, 0xc0);
+            MEOW_MIX(h7, h3, h5, h0, h1, at, 0xe0);
 
-        // Reading sixteen bytes from `last` could cross into the next page.
-        // When it would, the read is backed up to an alignment boundary and
-        // the bytes shifted into place instead.
-        last_ok := cast(*void) ((((cast(u64) source) + length - 1) | (MEOW_PAGESIZE - 1)) - 16);
-        align: u64 = 0;
-        if last > last_ok  align = (cast(u64) last) & 0xf;
-        last_aligned := last - align;
-
-        #asm {
-            shift_adjust: vec;
-            movdqu  shift_adjust, [shift_pointer + align];
-            movdqu  r1, [last_aligned];
-            pshufb  r1, shift_adjust;
-            pand    r1, mask;
-        }
-    }
-
-    if length & 0x10 {
-        #asm {
-            movdqu r3, r1;
-            movdqu r1, [last - 0x10];
+            at += 0x100;
+            remaining -= 1;
         }
     }
+}
 
-    source += advance;
-
-    // Build the residual and length injects, then mix both in. The residual is
-    // always mixed even when empty, so the pattern stays the same whatever the
-    // length; the length is appended so that padding cannot make two different
-    // inputs hash alike.
-    length_value := length;
+// Mixes in the residual and the length, then the whole 32-byte lanes left
+// over, then folds the eight lanes down into `h0`. `Store128` non-null gets
+// the eight lanes before the fold.
+MeowEnd :: (Len: u64, Source: *void, r1: reg, r3: reg, h0: reg, h1: reg, h2: reg, h3: reg, h4: reg, h5: reg, h6: reg, h7: reg, Store128: *void) #expand {
+    length_value := Len;
     #asm {
         movdqu  r0:, r1;
         movdqu  r2:, r1;
@@ -249,24 +218,32 @@ hash_into :: (seed: [128] u8, source_in: *void, length: u64, store: *u8) {
         palignr r6, r7, 1;
     }
 
+    MEOW_DUMP_STATE("PostBlocks", h0, h1, h2, h3, h4, h5, h6, h7);
+    MEOW_DUMP_STATE("Residuals", r0, r1, r2, r3, r4, r5, r6, r7);
+
+    // The residual is always mixed, even when it is empty, so that the pattern
+    // is the same whatever the length; the length goes in after it, so that
+    // the 32-byte padding cannot make two different inputs hash alike.
     MEOW_MIX_REG(h0, h4, h6, h1, h2,  r0, r1, r2, r3);
     MEOW_MIX_REG(h1, h5, h7, h2, h3,  r4, r5, r6, r7);
 
-    // The whole 32-byte lanes between the last block and the residual.
-    lane_count := (length >> 5) & 0x7;
+    MEOW_DUMP_STATE("PostAppend", h0, h1, h2, h3, h4, h5, h6, h7);
+
+    lane_count := (Len >> 5) & 0x7;
     while true {
-        if lane_count == 0 break; MEOW_MIX(h2, h6, h0, h3, h4, source, 0x00); lane_count -= 1;
-        if lane_count == 0 break; MEOW_MIX(h3, h7, h1, h4, h5, source, 0x20); lane_count -= 1;
-        if lane_count == 0 break; MEOW_MIX(h4, h0, h2, h5, h6, source, 0x40); lane_count -= 1;
-        if lane_count == 0 break; MEOW_MIX(h5, h1, h3, h6, h7, source, 0x60); lane_count -= 1;
-        if lane_count == 0 break; MEOW_MIX(h6, h2, h4, h7, h0, source, 0x80); lane_count -= 1;
-        if lane_count == 0 break; MEOW_MIX(h7, h3, h5, h0, h1, source, 0xa0); lane_count -= 1;
-        if lane_count == 0 break; MEOW_MIX(h0, h4, h6, h1, h2, source, 0xc0); lane_count -= 1;
+        if lane_count == 0 break; MEOW_MIX(h2, h6, h0, h3, h4, Source, 0x00); lane_count -= 1;
+        if lane_count == 0 break; MEOW_MIX(h3, h7, h1, h4, h5, Source, 0x20); lane_count -= 1;
+        if lane_count == 0 break; MEOW_MIX(h4, h0, h2, h5, h6, Source, 0x40); lane_count -= 1;
+        if lane_count == 0 break; MEOW_MIX(h5, h1, h3, h6, h7, Source, 0x60); lane_count -= 1;
+        if lane_count == 0 break; MEOW_MIX(h6, h2, h4, h7, h0, Source, 0x80); lane_count -= 1;
+        if lane_count == 0 break; MEOW_MIX(h7, h3, h5, h0, h1, Source, 0xa0); lane_count -= 1;
+        if lane_count == 0 break; MEOW_MIX(h0, h4, h6, h1, h2, Source, 0xc0); lane_count -= 1;
         break;
     }
 
-    // Fold the eight lanes into one. Twelve shuffles, so that every lane has
-    // reached every other.
+    MEOW_DUMP_STATE("PostLanes", h0, h1, h2, h3, h4, h5, h6, h7);
+
+    // Twelve shuffles, so that every lane has reached every other.
     MEOW_SHUFFLE(h0, h1, h2, h4, h5, h6);
     MEOW_SHUFFLE(h1, h2, h3, h5, h6, h7);
     MEOW_SHUFFLE(h2, h3, h4, h6, h7, h0);
@@ -280,6 +257,21 @@ hash_into :: (seed: [128] u8, source_in: *void, length: u64, store: *u8) {
     MEOW_SHUFFLE(h2, h3, h4, h6, h7, h0);
     MEOW_SHUFFLE(h3, h4, h5, h7, h0, h1);
 
+    MEOW_DUMP_STATE("PostMix", h0, h1, h2, h3, h4, h5, h6, h7);
+
+    #if !is_constant(Store128) {
+        if Store128 #asm {
+            movdqu [Store128 + 0x00], h0;
+            movdqu [Store128 + 0x10], h1;
+            movdqu [Store128 + 0x20], h2;
+            movdqu [Store128 + 0x30], h3;
+            movdqu [Store128 + 0x40], h4;
+            movdqu [Store128 + 0x50], h5;
+            movdqu [Store128 + 0x60], h6;
+            movdqu [Store128 + 0x70], h7;
+        }
+    }
+
     #asm {
         paddq   h0, h2;
         paddq   h1, h3;
@@ -288,6 +280,253 @@ hash_into :: (seed: [128] u8, source_in: *void, length: u64, store: *u8) {
         pxor    h0, h1;
         pxor    h4, h5;
         paddq   h0, h4;
-        movdqu  [store], h0;
     }
+
+    MEOW_DUMP_STATE("PostFold", h0, h1, h2, h3, h4, h5, h6, h7);
+}
+
+// The whole input at once. The answer is left in `h0`, which the caller has to
+// declare — a register cannot be returned.
+MeowHash :: (Seed: [128] u8, Len: u64, Source: *void, h0: reg) #expand {
+    #asm {
+        h1: vec; h2: vec; h3: vec; h4: vec; h5: vec; h6: vec; h7: vec;
+    }
+
+    MeowBegin(Seed, h0, h1, h2, h3, h4, h5, h6, h7);
+
+    BlockCount := Len >> 8;
+    Advance := BlockCount << 8;
+    MeowAbsorbBlocks(BlockCount, Source, h0, h1, h2, h3, h4, h5, h6, h7);
+
+    #asm {
+        pxor r1:, r1;
+        pxor r3:, r3;
+    }
+
+    Last := Source + (Len & ~cast(u64) 0xf);
+    Len8 := Len & 0xf;
+    if Len8 {
+        MeowMaskLenPtr := MeowMaskLen.data;
+        MeowShiftAdjustPtr := MeowShiftAdjust.data;
+
+        MaskIndex := 0x10 - Len8;
+        #asm {
+            movdqu Mask:, [MeowMaskLenPtr + MaskIndex];
+        }
+
+        // Reading sixteen bytes from `Last` could cross into the next page.
+        // Where it would, the read is backed up to an alignment boundary and
+        // the bytes shifted into place instead.
+        LastOk := cast(*void) (((cast(u64) Source + Len - 1) | (MEOW_PAGESIZE - 1)) - 16);
+
+        Align: u64 = 0;
+        if Last > LastOk  Align = (cast(u64) Last) & 0xf;
+
+        LastAligned := Last - Align;
+
+        #asm {
+            movdqu  ShiftAdjust:, [MeowShiftAdjustPtr + Align];
+            movdqu  r1, [LastAligned];
+            pshufb  r1, ShiftAdjust;
+            pand    r1, Mask;
+        }
+    }
+
+    if Len & 0x10 #asm {
+        movdqu r3, r1;
+        movdqu r1, [Last - 0x10];
+    }
+
+    Tail := Source + Advance;
+    MeowEnd(Len, Tail, r1, r3, h0, h1, h2, h3, h4, h5, h6, h7, null);
+}
+
+// -------------------------------------------------------------- streaming ---
+
+// For input that does not arrive all at once. The register file is kept in
+// memory between calls, since a register cannot live across one; `Pad` is
+// there so that the tail may be over-read by a whole register without running
+// off the end.
+meow_state :: struct {
+    RegisterFile: [256] u8;
+    TotalLengthInBytes: u64;
+
+    BufferLen: u32;
+
+    Buffer: [256] u8;
+    Pad: [32] u8;
+}
+
+MeowBegin :: (State: *meow_state, Seed: [128] u8) {
+    #asm { h0: vec; h1: vec; h2: vec; h3: vec; h4: vec; h5: vec; h6: vec; h7: vec; }
+    MeowBegin(Seed, h0, h1, h2, h3, h4, h5, h6, h7);
+
+    RegisterFilePtr := State.RegisterFile.data;
+    #asm {
+        movdqu [RegisterFilePtr + 0x00], h0;
+        movdqu [RegisterFilePtr + 0x10], h1;
+        movdqu [RegisterFilePtr + 0x20], h2;
+        movdqu [RegisterFilePtr + 0x30], h3;
+        movdqu [RegisterFilePtr + 0x40], h4;
+        movdqu [RegisterFilePtr + 0x50], h5;
+        movdqu [RegisterFilePtr + 0x60], h6;
+        movdqu [RegisterFilePtr + 0x70], h7;
+    }
+
+    State.BufferLen = 0;
+    State.TotalLengthInBytes = 0;
+}
+
+MeowAbsorb :: (State: *meow_state, Len: u64, Source: *void) {
+    RegisterFilePtr := State.RegisterFile.data;
+    #asm {
+        movdqu h0:, [RegisterFilePtr + 0x00];
+        movdqu h1:, [RegisterFilePtr + 0x10];
+        movdqu h2:, [RegisterFilePtr + 0x20];
+        movdqu h3:, [RegisterFilePtr + 0x30];
+        movdqu h4:, [RegisterFilePtr + 0x40];
+        movdqu h5:, [RegisterFilePtr + 0x50];
+        movdqu h6:, [RegisterFilePtr + 0x60];
+        movdqu h7:, [RegisterFilePtr + 0x70];
+    }
+
+    remaining := Len;
+    at := Source;
+
+    State.TotalLengthInBytes += Len;
+
+    // Whatever the last call left over is topped up to a block first.
+    if State.BufferLen {
+        Fill: u64 = cast(u64) State.Buffer.count - State.BufferLen;
+        if Fill > remaining  Fill = remaining;
+
+        remaining -= Fill;
+        while Fill {
+            State.Buffer[State.BufferLen] = (cast(*u8) at).*;
+            State.BufferLen += 1;
+            at += 1;
+            Fill -= 1;
+        }
+
+        if State.BufferLen == State.Buffer.count {
+            one: u64 = 1;
+            MeowAbsorbBlocks(one, State.Buffer.data, h0, h1, h2, h3, h4, h5, h6, h7);
+            State.BufferLen = 0;
+        }
+    }
+
+    BlockCount := remaining >> 8;
+    Advance := BlockCount << 8;
+    MeowAbsorbBlocks(BlockCount, at, h0, h1, h2, h3, h4, h5, h6, h7);
+
+    remaining -= Advance;
+    at += Advance;
+
+    while remaining {
+        State.Buffer[State.BufferLen] = (cast(*u8) at).*;
+        State.BufferLen += 1;
+        at += 1;
+        remaining -= 1;
+    }
+
+    #asm {
+        movdqu [RegisterFilePtr + 0x00], h0;
+        movdqu [RegisterFilePtr + 0x10], h1;
+        movdqu [RegisterFilePtr + 0x20], h2;
+        movdqu [RegisterFilePtr + 0x30], h3;
+        movdqu [RegisterFilePtr + 0x40], h4;
+        movdqu [RegisterFilePtr + 0x50], h5;
+        movdqu [RegisterFilePtr + 0x60], h6;
+        movdqu [RegisterFilePtr + 0x70], h7;
+    }
+}
+
+// Finishes a streamed hash, leaving the answer in `h0`.
+MeowEnd :: (State: *meow_state, h0: reg, Store128: *void = null) #expand {
+    RegisterFilePtr := State.RegisterFile.data;
+    #asm {
+        movdqu h0,  [RegisterFilePtr + 0x00];
+        movdqu h1:, [RegisterFilePtr + 0x10];
+        movdqu h2:, [RegisterFilePtr + 0x20];
+        movdqu h3:, [RegisterFilePtr + 0x30];
+        movdqu h4:, [RegisterFilePtr + 0x40];
+        movdqu h5:, [RegisterFilePtr + 0x50];
+        movdqu h6:, [RegisterFilePtr + 0x60];
+        movdqu h7:, [RegisterFilePtr + 0x70];
+    }
+
+    #asm {
+        pxor r1:, r1;
+        pxor r3:, r3;
+    }
+
+    Source := State.Buffer.data;
+    Len := State.TotalLengthInBytes;
+
+    // The buffer has `Pad` after it, so no alignment dance is needed here.
+    Last := Source + (Len & 0xf0);
+    Len8 := Len & 0xf;
+    if Len8 {
+        MeowMaskLenPtr := MeowMaskLen.data;
+        MaskIndex := 0x10 - Len8;
+        #asm {
+            movdqu  Mask:, [MeowMaskLenPtr + MaskIndex];
+            movdqu  r1, [Last];
+            pand    r1, Mask;
+        }
+    }
+
+    if State.TotalLengthInBytes & 0x10 #asm {
+        movdqu r3, r1;
+        movdqu r1, [Last - 0x10];
+    }
+
+    MeowEnd(Len, Source, r1, r3, h0, h1, h2, h3, h4, h5, h6, h7, Store128);
+}
+
+// ------------------------------------------------------ the simple wrapper ---
+
+Meow_Hash :: struct {
+    bytes: [16] u8;
+}
+
+// The whole input at once.
+meow_hash :: (seed: [128] u8, source: *void, length: u64) -> Meow_Hash {
+    result: Meow_Hash;
+    hash_into(seed, source, length, result.bytes.data);
+    return result;
+}
+
+meow_hash :: (s: string) -> Meow_Hash {
+    return meow_hash(MeowDefaultSeed, s.data, cast(u64) s.count);
+}
+
+meow_hash :: (bytes: [] u8) -> Meow_Hash {
+    return meow_hash(MeowDefaultSeed, bytes.data, cast(u64) bytes.count);
+}
+
+// The low 64 or 32 bits, for a caller that wants an ordinary integer.
+meow_u64 :: (hash: Meow_Hash) -> u64 {
+    result: u64;
+    memcpy(*result, hash.bytes.data, 8);
+    return result;
+}
+
+meow_u32 :: (hash: Meow_Hash) -> u32 {
+    result: u32;
+    memcpy(*result, hash.bytes.data, 4);
+    return result;
+}
+
+meow_hashes_are_equal :: (a: Meow_Hash, b: Meow_Hash) -> bool {
+    return memcmp(a.bytes.data, b.bytes.data, 16) == 0;
+}
+
+
+#scope_module
+
+hash_into :: (seed: [128] u8, source: *void, length: u64, store: *u8) {
+    #asm { h0: vec; }
+    MeowHash(seed, length, source, h0);
+    #asm { movdqu [store], h0; }
 }
