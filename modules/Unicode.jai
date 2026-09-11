@@ -212,3 +212,106 @@ for_expansion :: (chars: *Characters, body: Code, flags: For_Flags) #expand {
         #insert body;
     }
 }
+
+// ---------------------------------------------------- the ConvertUTF names ---
+//
+// The names and tables from Unicode's own `ConvertUTF.c`, which a good deal of
+// code was written against. They say the same things the procedures above do,
+// in the shapes that reference code expects.
+
+Unicode_Result :: enum {
+    CONVERSION_OK;
+    SOURCE_EXHAUSTED;
+    SOURCE_ILLEGAL;
+}
+
+UNI_REPLACEMENT_CHAR :: 0x0000FFFD;
+UNI_MAX_BMP          :: 0x0000FFFF;
+UNI_MAX_UTF16        :: 0x0010FFFF;
+UNI_MAX_UTF32        :: 0x7FFFFFFF;
+
+// How many bytes follow a given leading byte. A continuation byte's entry is
+// zero, so a resynchronising scan reads it as a one-byte sequence and moves on.
+trailingBytesForUTF8 :: #run -> [256] u8 {
+    table: [256] u8;
+    for 0..255 {
+        if      it < 0xc0  table[it] = 0;
+        else if it < 0xe0  table[it] = 1;
+        else if it < 0xf0  table[it] = 2;
+        else if it < 0xf8  table[it] = 3;
+        else if it < 0xfc  table[it] = 4;
+        else               table[it] = 5;
+    }
+    return table;
+};
+
+// What to subtract after folding a sequence's bytes together: the accumulated
+// leading-byte and continuation-byte markers.
+offsetsFromUTF8 :: u32.[0x0000_0000, 0x0000_3080, 0x000E_2080, 0x03C8_2080, 0xFA08_2080, 0x8208_2080];
+
+// The leading byte's marker bits, by sequence length.
+firstByteMark :: u8.[0x00, 0x00, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC];
+
+// What is left of a leading byte once its marker is masked off.
+utf8_inital_byte_mask :: u8.[0x7F, 0x1F, 0x0F, 0x07, 0x03, 0x01];
+
+// One character from `s`, how many bytes it took, and whether it was valid.
+// `strict` rejects the surrogate range and anything past the last code point.
+character_utf8_to_utf32 :: (s: *u8, source_length: s64, $strict := false) -> (u32, s64, Unicode_Result) {
+    if source_length <= 0  return UNI_REPLACEMENT_CHAR, 0, .SOURCE_EXHAUSTED;
+
+    extra := trailingBytesForUTF8[s[0]];
+    if cast(s64) extra + 1 > source_length  return UNI_REPLACEMENT_CHAR, source_length, .SOURCE_EXHAUSTED;
+
+    code: u32 = 0;
+    for 0..extra {
+        code += s[it];
+        if it != extra  code <<= 6;
+    }
+    code -= offsetsFromUTF8[extra];
+
+    length := cast(s64) extra + 1;
+    #if strict {
+        // A surrogate half is not a character, and nothing lives past
+        // UNI_MAX_UTF16.
+        if code >= 0xD800 && code <= 0xDFFF  return UNI_REPLACEMENT_CHAR, length, .SOURCE_ILLEGAL;
+        if code > UNI_MAX_UTF16              return UNI_REPLACEMENT_CHAR, length, .SOURCE_ILLEGAL;
+    }
+    return code, length, .CONVERSION_OK;
+}
+
+// Writes a character into storage the caller already has, which must hold four
+// bytes. The string's count is set to how many were used.
+character_utf32_to_utf8 :: (ch: u32, preallocated_string: *string) {
+    written := encode(preallocated_string.data, ch);
+    preallocated_string.count = written;
+}
+
+character_utf32_to_utf8 :: (ch: u32) -> string {
+    result := alloc_string(4);
+    result.count = encode(result.data, ch);
+    return result;
+}
+
+// The start of the character after the one at `s`.
+unicode_next_character :: (s: *u8) -> *u8 {
+    return s + trailingBytesForUTF8[s[0]] + 1;
+}
+
+// One character off the front of `s`, consuming it.
+utf8_next_character :: (s: *string) -> (code: u32, success: Unicode_Result) {
+    code, bytes, success := character_utf8_to_utf32(s.data, s.count);
+    s.data += bytes;
+    s.count -= bytes;
+    return code, success;
+}
+
+// `for utf8_iter(*s)` walks the characters, consuming the string as it goes.
+utf8_iter :: (s: *string, body: Code, flags: For_Flags) #expand {
+    while s.count {
+        `it, ok := utf8_next_character(s);
+        if ok != .CONVERSION_OK  break;
+        `it_index := 0;
+        #insert body;
+    }
+}

@@ -388,3 +388,608 @@ inverse :: (m: Matrix4) -> (result: Matrix4, ok: bool) {
     r.*[3][3] = ( a[2][0] * s3 - a[2][1] * s1 + a[2][2] * s0) * d;
     return result, true;
 }
+
+// --------------------------------------------------------- more transforms ---
+
+// A perspective projection from a vertical field of view, in the OpenGL
+// convention: the eye looks down -z and the depth range is [-1, 1] unless
+// `depth_range_01` asks for the [0, 1] one.
+make_projection_matrix :: (fov_vertical: float, aspect_ratio_horizontal_over_vertical: float, z_near: float, z_far: float, x_offset := 0.0, y_offset := 0.0, depth_range_01 := false) -> Matrix4 {
+    result := Matrix4_Identity;
+
+    cotangent := 1.0 / cast(float) tan(fov_vertical * 0.5);
+    denominator := 1.0 / (z_far - z_near);
+
+    result._11 = cotangent / aspect_ratio_horizontal_over_vertical;
+    result._22 = cotangent;
+    result._33 = -(z_far + z_near) * denominator;
+    result._43 = -1;
+    result._34 = -2 * z_far * z_near * denominator;
+    result._44 = 0;
+
+    result._13 = x_offset;
+    result._23 = y_offset;
+
+    if depth_range_01  remap_depth_to_01(*result);
+    return result;
+}
+
+// The same projection written as the six planes of the frustum rather than as
+// a field of view, which is what an off-centre or asymmetric one needs.
+make_frustum_matrix :: (l: float, r: float, b: float, t: float, n: float, f: float, depth_range_01 := false) -> Matrix4 {
+    twice_near := 2.0 * n;
+    one_over_x := 1.0 / (r - l);
+    one_over_y := 1.0 / (t - b);
+    one_over_z := 1.0 / (f - n);
+
+    result := Matrix4_Identity;
+    result._11 = twice_near * one_over_x;
+    result._22 = twice_near * one_over_y;
+    result._13 = (r + l) * one_over_x;
+    result._23 = (t + b) * one_over_y;
+    result._33 = -(f + n) * one_over_z;
+    result._43 = -1;
+    result._34 = -f * twice_near * one_over_z;
+    result._44 = 0;
+
+    if depth_range_01  remap_depth_to_01(*result);
+    return result;
+}
+
+orthographic_projection_matrix :: (left: float, right: float, bottom: float, top: float, near: float, far: float, depth_range_01 := false) -> Matrix4 {
+    m: Matrix4;
+
+    m._11 = 2.0 / (right - left);
+    m._14 = -(right + left) / (right - left);
+
+    m._22 = 2.0 / (top - bottom);
+    m._24 = -(top + bottom) / (top - bottom);
+
+    m._33 = -2.0 / (far - near);
+    m._34 = -(far + near) / (far - near);
+
+    m._44 = 1.0;
+
+    if depth_range_01  remap_depth_to_01(*m);
+    return m;
+}
+
+// The view matrix that puts the eye at `viewpoint` looking towards `look_at`.
+// `x_is_forward` is the convention of this distribution — x down the view
+// direction — where a graphics API usually wants -z, which is what passing
+// false gives.
+make_look_at_matrix :: (viewpoint: Vector3, look_at: Vector3, reference_up_vector: Vector3, $x_is_forward := true) -> Matrix4 {
+    forward := look_at - viewpoint;
+    normalize(*forward, fallback = .{z = 1});
+
+    left := cross_product(reference_up_vector, forward);
+    normalize(*left, fallback = .{z = 1});
+
+    // Re-derived from the two that are already orthogonal, so the basis stays
+    // square whatever the caller's `up` was.
+    up := cross_product(forward, left);
+    normalize(*up, fallback = .{z = 1});
+
+    // A view matrix is the *inverse* of the camera's transform, and the
+    // inverse of a rotation is its transpose: the basis vectors go in as rows.
+    #if x_is_forward {
+        rotation := make_matrix_from_rows(forward, left, up);
+    } else {
+        rotation := make_matrix_from_rows(left * -1, up, forward * -1);
+    }
+
+    return translate(rotation, -viewpoint);
+}
+
+// `m` followed by a translation of `t` in `m`'s own frame — the translation
+// column takes the rotated offset, which is what makes this a right multiply.
+translate :: (m: Matrix4, t: Vector3) -> Matrix4 #must {
+    result := m;
+    inline translate(*result, t);
+    return result;
+}
+
+translate :: (m: *Matrix4, t: Vector3) {
+    for row: 0..3 {
+        m.coef[row][3] += m.coef[row][0] * t.x + m.coef[row][1] * t.y + m.coef[row][2] * t.z;
+    }
+}
+
+scale :: (m: $T/interface AnyMatrix3, s: float) -> T #must {
+    scale(*m, s);
+    return m;
+}
+
+scale :: (m: *$T/interface AnyMatrix3, s: float) {
+    m._11 *= s;  m._12 *= s;  m._13 *= s;
+    m._21 *= s;  m._22 *= s;  m._23 *= s;
+    m._31 *= s;  m._32 *= s;  m._33 *= s;
+}
+
+// A non-uniform scale: each *column* is scaled, so the basis vector that
+// column stands for grows rather than the row.
+scale :: (m: $T/interface AnyMatrix3, v: Vector3) -> T #must {
+    scale(*m, v);
+    return m;
+}
+
+scale :: (m: *$T/interface AnyMatrix3, v: Vector3) {
+    m._11 *= v.x;  m._12 *= v.y;  m._13 *= v.z;
+    m._21 *= v.x;  m._22 *= v.y;  m._23 *= v.z;
+    m._31 *= v.x;  m._32 *= v.y;  m._33 *= v.z;
+}
+
+// The rotation a quaternion names, as whichever matrix type was asked for.
+rotation_matrix :: ($T: Type, q: Quaternion) -> T {
+    m: T;
+    #if T == Matrix4  m._44 = 1;
+    set_rotation(*m, q);
+    return m;
+}
+
+// A point goes through the translation column as well as the rotation, which
+// is what tells it apart from a direction.
+transform_point :: (m: $T/interface AnyMatrix4x3, v: Vector3) -> Vector3 {
+    result: Vector3 = ---;
+    result.x = m._11 * v.x + m._12 * v.y + m._13 * v.z + m._14;
+    result.y = m._21 * v.x + m._22 * v.y + m._23 * v.z + m._24;
+    result.z = m._31 * v.x + m._32 * v.y + m._33 * v.z + m._34;
+    return result;
+}
+
+transform_vector :: (m: $T/interface AnyMatrix3, v: Vector3) -> Vector3 {
+    result: Vector3 = ---;
+    result.x = m._11 * v.x + m._12 * v.y + m._13 * v.z;
+    result.y = m._21 * v.x + m._22 * v.y + m._23 * v.z;
+    result.z = m._31 * v.x + m._32 * v.y + m._33 * v.z;
+    return result;
+}
+
+// ----------------------------------------------------- determinant, inverse ---
+
+// Lengyel's formulation: the matrix read as four column vectors and the four
+// numbers of its bottom row, which shares most of its work with the adjugate
+// below.
+determinant :: (m: Matrix4) -> float #must {
+    a, b, c, d, x, y, z, w := lengyel_parts(m);
+
+    s := cross(a, b);
+    t := cross(c, d);
+    u := a * y - b * x;
+    v := c * w - d * z;
+
+    return dot(s, v) + dot(t, u);
+}
+
+// The transpose of the cofactor matrix — the inverse without the divide, so it
+// is finite even for a singular matrix.
+adjugate_lengyel :: (m: Matrix4) -> Matrix4 #must {
+    a, b, c, d, x, y, z, w := lengyel_parts(m);
+
+    s := cross(a, b);
+    t := cross(c, d);
+    u := a * y - b * x;
+    v := c * w - d * z;
+
+    return lengyel_assemble(a, b, c, d, s, t, u, v, x, y, z, w);
+}
+
+adjugate :: adjugate_lengyel;
+
+// The inverse, and whether the matrix was singular enough that the result is
+// not to be trusted.
+inverse_lengyel :: (m: Matrix4, epsilon := 0.0001) -> Matrix4 #must, bool {
+    a, b, c, d, x, y, z, w := lengyel_parts(m);
+
+    s := cross(a, b);
+    t := cross(c, d);
+    u := a * y - b * x;
+    v := c * w - d * z;
+
+    det := dot(s, v) + dot(t, u);
+    // The divide is folded into the four partial products rather than applied
+    // to the sixteen results.
+    inverse_determinant := 1.0 / det;
+    s *= inverse_determinant;
+    t *= inverse_determinant;
+    u *= inverse_determinant;
+    v *= inverse_determinant;
+
+    return lengyel_assemble(a, b, c, d, s, t, u, v, x, y, z, w), abs(det) < epsilon;
+}
+
+// The same inverse by row reduction, which needs no formula and is what a
+// matrix whose structure is unknown is safest through. A column with no
+// non-zero pivot leaves whatever was reduced so far.
+inverse_gaussian_elimination :: (m: Matrix4) -> Matrix4 #must {
+    a := m;
+    b := Matrix4_Identity;
+
+    for i: 0..3 {
+        // Partial pivoting: the largest candidate in the column, which is what
+        // keeps the division from amplifying rounding error.
+        pivot_row := i;
+        best := -1.0;
+        for k: i..3 {
+            if abs(a.coef[k][i]) > best {
+                best = abs(a.coef[k][i]);
+                pivot_row = k;
+            }
+        }
+        if best <= 0  return b;
+
+        if pivot_row != i {
+            for k: i..3  Basic.Swap(*a.coef[i][k], *a.coef[pivot_row][k]);
+            for k: 0..3  Basic.Swap(*b.coef[i][k], *b.coef[pivot_row][k]);
+        }
+
+        pivot := a.coef[i][i];
+        // The elements left of the pivot are already zero, so only what is to
+        // its right needs scaling.
+        for k: i + 1..3  a.coef[i][k] /= pivot;
+        for k: 0..3      b.coef[i][k] /= pivot;
+
+        for j: i + 1..3 {
+            factor := a.coef[j][i];
+            for k: i + 1..3  a.coef[j][k] -= a.coef[i][k] * factor;
+            for k: 0..3      b.coef[j][k] -= b.coef[i][k] * factor;
+        }
+    }
+
+    // Back substitution. `a` is upper triangular with a unit diagonal by now,
+    // so only `b` has to be touched.
+    for #v2 < i: 1..3 {
+        for j: 0..i - 1 {
+            factor := a.coef[j][i];
+            for k: 0..3  b.coef[j][k] -= b.coef[i][k] * factor;
+        }
+    }
+
+    return b;
+}
+
+// The inverse of a matrix that is a rotation and a translation and nothing
+// else: the rotation transposes and the translation is rotated back.
+isometry_inverse :: (m: Matrix4) -> Matrix4 #must {
+    result := Matrix4_Identity;
+    for i: 0..2  for j: 0..2  result.coef[i][j] = m.coef[j][i];
+
+    t := Vector3.{-m.coef[0][3], -m.coef[1][3], -m.coef[2][3]};
+    // The bottom row is known to be [0, 0, 0, 1], so the fourth row of the
+    // translate below would do nothing and is left out.
+    for i: 0..2 {
+        result.coef[i][3] = result.coef[i][0] * t.x + result.coef[i][1] * t.y + result.coef[i][2] * t.z;
+    }
+    return result;
+}
+
+// The transposed adjugate of a 3x3, which is just the three cross products of
+// its rows — what a normal is transformed by.
+adjoint_transpose :: (m: Matrix3) -> Matrix3 {
+    r: Matrix3 = ---;
+    r.v[0] = cross(m.v[1], m.v[2]);
+    r.v[1] = cross(m.v[2], m.v[0]);
+    r.v[2] = cross(m.v[0], m.v[1]);
+    return r;
+}
+
+// ----------------------------------------------------- norms and reflectors ---
+
+// The largest absolute row sum, or column sum when `tpose` — the operator
+// 1-norm and the infinity-norm, which are each other's transpose.
+mat_norm :: (m: Matrix3, tpose: bool) -> float {
+    largest := 0.0;
+    for i: 0..2 {
+        sum: float = ---;
+        if tpose  sum = abs(m.coef[0][i]) + abs(m.coef[1][i]) + abs(m.coef[2][i]);
+        else      sum = abs(m.coef[i][0]) + abs(m.coef[i][1]) + abs(m.coef[i][2]);
+        if largest < sum  largest = sum;
+    }
+    return largest;
+}
+
+norm_inf :: #bake_arguments mat_norm(tpose = false);
+norm_one :: #bake_arguments mat_norm(tpose = true);
+
+// Applies the Householder reflection `u` names to the columns of `m`.
+reflect_cols :: (m: *Matrix3, u: Vector3) {
+    for i: 0..2 {
+        s := u.x * m.coef[0][i] + u.y * m.coef[1][i] + u.z * m.coef[2][i];
+        for j: 0..2  m.coef[j][i] -= u.component[j] * s;
+    }
+}
+
+reflect_rows :: (m: *Matrix3, u: Vector3) {
+    for i: 0..2 {
+        s := dot_product(u, m.v[i]);
+        for j: 0..2  m.coef[i][j] -= u.component[j] * s;
+    }
+}
+
+// Splits a matrix into a rotation and a symmetric stretch, `M = Q * S`, by
+// averaging the matrix with its inverse transpose until the two agree — the
+// Higham iteration. `det` comes back too, since a caller usually wants to know
+// whether the rotation flipped.
+polar_decomp :: (m: Matrix3) -> (Q: Matrix3, S: Matrix3, det: float) {
+    TOLERANCE :: 1.0e-6;
+
+    mk := transpose(m);
+
+    det: float;
+    error := FLOAT32_MAX;
+    m_one := norm_one(mk);
+    m_inf := norm_inf(mk);
+
+    while error > m_one * TOLERANCE {
+        adjugate_transposed := adjoint_transpose(mk);
+
+        det = dot(mk.v[0], adjugate_transposed.v[0]);
+        if det == 0.0 {
+            mk = polar_decomp_rank2(*mk, adjugate_transposed);
+            break;
+        }
+
+        adj_one := norm_one(adjugate_transposed);
+        adj_inf := norm_inf(adjugate_transposed);
+
+        // The weight that makes the two halves of the average the same size,
+        // which is what gives the iteration its quadratic convergence.
+        gamma := sqrt(sqrt((adj_one * adj_inf) / (m_one * m_inf)) / abs(det));
+        g1 := cast(float) (gamma * 0.5);
+        g2 := cast(float) (0.5 / (gamma * det));
+
+        previous := mk;
+        mk = g1 * mk + g2 * adjugate_transposed;
+        previous -= mk;
+
+        error = norm_one(previous);
+        m_one = norm_one(mk);
+        m_inf = norm_inf(mk);
+    }
+
+    q := transpose(mk);
+    s := mk * m;
+
+    // The stretch is symmetric in exact arithmetic; averaging across the
+    // diagonal removes what rounding left.
+    for i: 0..2  for j: 0..2 {
+        s.coef[i][j] = 0.5 * (s.coef[i][j] + s.coef[j][i]);
+        s.coef[j][i] = s.coef[i][j];
+    }
+
+    return q, s, det;
+}
+
+#scope_module
+
+// The rows of the matrix as three columns and the numbers of its bottom row,
+// which is the shape Lengyel's determinant, adjugate and inverse all work in.
+lengyel_parts :: (m: Matrix4) -> (a: Vector3, b: Vector3, c: Vector3, d: Vector3, x: float, y: float, z: float, w: float) {
+    a := Vector3.{m._11, m._21, m._31};
+    b := Vector3.{m._12, m._22, m._32};
+    c := Vector3.{m._13, m._23, m._33};
+    d := Vector3.{m._14, m._24, m._34};
+    return a, b, c, d, m._41, m._42, m._43, m._44;
+}
+
+lengyel_assemble :: (a: Vector3, b: Vector3, c: Vector3, d: Vector3, s: Vector3, t: Vector3, u: Vector3, v: Vector3, x: float, y: float, z: float, w: float) -> Matrix4 {
+    r0 := cross(b, v) + t * y;
+    r1 := cross(v, a) - t * x;
+    r2 := cross(d, u) + s * w;
+    r3 := cross(u, c) - s * z;
+
+    return .{
+        r0.x, r0.y, r0.z, -dot(b, t),
+        r1.x, r1.y, r1.z,  dot(a, t),
+        r2.x, r2.y, r2.z, -dot(d, s),
+        r3.x, r3.y, r3.z,  dot(c, s),
+    };
+}
+
+// A depth range of [-1, 1] becomes [0, 1] by halving the z row and adding half
+// the w row, which is the transform z' = z * 0.5 + 0.5 written on the matrix.
+remap_depth_to_01 :: (m: *Matrix4) {
+    m._33 = m._33 * 0.5 + m._43 * 0.5;
+    m._34 = m._34 * 0.5 + m._44 * 0.5;
+}
+
+// The rank-2 fallback of `polar_decomp`: a singular matrix has no inverse to
+// average with, so the rotation is built out of two Householder reflections
+// and the 2x2 rotation left between them.
+polar_decomp_rank2 :: (m: *Matrix3, adjugate_transposed: Matrix3) -> Matrix3 {
+    q: Matrix3;
+
+    // Any non-zero column of the transposed adjugate spans the kernel's
+    // complement; the first will do.
+    v1 := Vector3.{adjugate_transposed.coef[0][0], adjugate_transposed.coef[1][0], adjugate_transposed.coef[2][0]};
+    v1 = make_reflector(v1);
+    reflect_cols(m, v1);
+
+    v2 := cross(m.v[0], m.v[1]);
+    v2 = make_reflector(v2);
+    reflect_rows(m, v2);
+
+    w := m.coef[0][0];
+    x := m.coef[0][1];
+    y := m.coef[1][0];
+    z := m.coef[1][1];
+
+    if w * z > x * y {
+        c := z + w;
+        s := y - x;
+        d := sqrt(c * c + s * s);
+        c /= d;
+        s /= d;
+        q.coef[0][0] = c;
+        q.coef[1][1] = c;
+        q.coef[0][1] = -s;
+        q.coef[1][0] = s;
+    } else {
+        c := z - w;
+        s := y + x;
+        d := sqrt(c * c + s * s);
+        c /= d;
+        s /= d;
+        q.coef[0][0] = -c;
+        q.coef[1][1] = c;
+        q.coef[0][1] = s;
+        q.coef[1][0] = s;
+    }
+
+    q.coef[2][2] = 1.0;
+
+    reflect_cols(*q, v1);
+    reflect_rows(*q, v2);
+    return q;
+}
+
+#scope_export
+
+// ------------------------------------------------ multiply, in every shape ---
+//
+// A matrix-vector product cannot be written once for every matrix, since
+// `Matrix4x3 * Vector4` produces a `Vector3` where the others produce a vector
+// of their own width, so each shape is spelled out.
+
+multiply :: (m: Matrix4, v: Vector4) -> Vector4 {
+    result: Vector4 = ---;
+    result.x = m._11 * v.x + m._12 * v.y + m._13 * v.z + m._14 * v.w;
+    result.y = m._21 * v.x + m._22 * v.y + m._23 * v.z + m._24 * v.w;
+    result.z = m._31 * v.x + m._32 * v.y + m._33 * v.z + m._34 * v.w;
+    result.w = m._41 * v.x + m._42 * v.y + m._43 * v.z + m._44 * v.w;
+    return result;
+}
+
+multiply :: (m: Matrix4x3, v: Vector4) -> Vector3 {
+    result: Vector3 = ---;
+    result.x = m._11 * v.x + m._12 * v.y + m._13 * v.z + m._14 * v.w;
+    result.y = m._21 * v.x + m._22 * v.y + m._23 * v.z + m._24 * v.w;
+    result.z = m._31 * v.x + m._32 * v.y + m._33 * v.z + m._34 * v.w;
+    return result;
+}
+
+multiply :: (m: Matrix2, v: Vector2) -> Vector2 {
+    result: Vector2 = ---;
+    result.x = m._11 * v.x + m._12 * v.y;
+    result.y = m._21 * v.x + m._22 * v.y;
+    return result;
+}
+
+// The top-left 3x3 block of whatever it was given, which is what makes one
+// routine serve Matrix3, Matrix4 and Matrix4x3 alike.
+multiply :: (m: $T/interface AnyMatrix3, v: Vector3) -> Vector3 {
+    result: Vector3 = ---;
+    result.x = m._11 * v.x + m._12 * v.y + m._13 * v.z;
+    result.y = m._21 * v.x + m._22 * v.y + m._23 * v.z;
+    result.z = m._31 * v.x + m._32 * v.y + m._33 * v.z;
+    return result;
+}
+
+multiply :: (a: Matrix2, b: Matrix2) -> Matrix2 {
+    result: Matrix2;
+    for row: 0..1  for column: 0..1 {
+        sum: float;
+        for k: 0..1  sum += a.coef[row][k] * b.coef[k][column];
+        result.coef[row][column] = sum;
+    }
+    return result;
+}
+
+multiply :: (a: Matrix3, b: Matrix3) -> Matrix3 {
+    result: Matrix3;
+    for row: 0..2  for column: 0..2 {
+        sum: float;
+        for k: 0..2  sum += a.coef[row][k] * b.coef[k][column];
+        result.coef[row][column] = sum;
+    }
+    return result;
+}
+
+multiply :: (a: Matrix4, b: Matrix4) -> Matrix4 {
+    result: Matrix4;
+    for row: 0..3  for column: 0..3 {
+        sum: float;
+        for k: 0..3  sum += a.coef[row][k] * b.coef[k][column];
+        result.coef[row][column] = sum;
+    }
+    return result;
+}
+
+// A `Matrix4x3` is a `Matrix4` whose bottom row is [0, 0, 0, 1], so the
+// products below are the full ones with that row substituted in rather than
+// multiplied out.
+multiply :: (a: Matrix4x3, b: Matrix4x3) -> Matrix4x3 {
+    result: Matrix4x3;
+    for row: 0..2  for column: 0..3 {
+        sum: float;
+        for k: 0..2  sum += a.coef[row][k] * b.coef[k][column];
+        if column == 3  sum += a.coef[row][3];
+        result.coef[row][column] = sum;
+    }
+    return result;
+}
+
+multiply :: (a: Matrix4, b: Matrix4x3) -> Matrix4 {
+    result: Matrix4;
+    for row: 0..3  for column: 0..3 {
+        sum: float;
+        for k: 0..2  sum += a.coef[row][k] * b.coef[k][column];
+        if column == 3  sum += a.coef[row][3];
+        result.coef[row][column] = sum;
+    }
+    return result;
+}
+
+multiply :: (a: Matrix4x3, b: Matrix4) -> Matrix4 {
+    result := Matrix4_Identity;
+    for row: 0..2  for column: 0..3 {
+        sum: float;
+        for k: 0..3  sum += a.coef[row][k] * b.coef[k][column];
+        result.coef[row][column] = sum;
+    }
+    return result;
+}
+
+// The 3x3 stands for the 4x4 that leaves the translation column alone.
+multiply :: (a: Matrix4, b: Matrix3) -> Matrix4 {
+    result: Matrix4;
+    for row: 0..3  for column: 0..3 {
+        sum: float;
+        for k: 0..2  sum += a.coef[row][k] * b.coef[k][column];
+        if column == 3  sum += a.coef[row][3];
+        result.coef[row][column] = sum;
+    }
+    return result;
+}
+
+operator * :: (a: Matrix2, b: Matrix2) -> Matrix2 { return inline multiply(a, b); }
+operator * :: (a: Matrix4x3, b: Matrix4x3) -> Matrix4x3 { return inline multiply(a, b); }
+operator * :: (a: Matrix4, b: Matrix4x3) -> Matrix4 { return inline multiply(a, b); }
+operator * :: (a: Matrix4x3, b: Matrix4) -> Matrix4 { return inline multiply(a, b); }
+operator * :: (a: Matrix4, b: Matrix3) -> Matrix4 { return inline multiply(a, b); }
+operator * :: (m: Matrix2, v: Vector2) -> Vector2 { return inline multiply(m, v); }
+operator * :: (m: Matrix4x3, v: Vector4) -> Vector3 { return inline multiply(m, v); }
+
+// Elementwise, over the flat view, so one routine covers every matrix width.
+operator * :: (a: $T/interface AnyMatrix, t: float) -> T #symmetric {
+    r: T = ---;
+    for 0..a.floats.count - 1  r.floats[it] = a.floats[it] * t;
+    return r;
+}
+
+operator + :: (a: $T/interface AnyMatrix, b: T) -> T {
+    r: T = ---;
+    for 0..a.floats.count - 1  r.floats[it] = a.floats[it] + b.floats[it];
+    return r;
+}
+
+operator - :: (a: $T/interface AnyMatrix, b: T) -> T {
+    r: T = ---;
+    for 0..a.floats.count - 1  r.floats[it] = a.floats[it] - b.floats[it];
+    return r;
+}
+
+operator == :: (a: $T/interface AnyMatrix, b: T) -> bool {
+    for 0..a.floats.count - 1  if a.floats[it] != b.floats[it]  return false;
+    return true;
+}

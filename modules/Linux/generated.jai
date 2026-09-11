@@ -120,8 +120,8 @@ STATX__RESERVED :: 2147483648;
 epoll_data :: union {
     ptr: *void;
     fd: s32;
-    u32: uint32_t;
-    u64: uint64_t;
+    _u32: uint32_t;
+    _u64: uint64_t;
 }
 
 epoll_event :: struct {
@@ -444,8 +444,8 @@ timeval :: struct {
 epoll_data_t :: union {
     ptr: *void;
     fd: s32;
-    u32: uint32_t;
-    u64: uint64_t;
+    _u32: uint32_t;
+    _u64: uint64_t;
 }
 
 __u8 :: u8;

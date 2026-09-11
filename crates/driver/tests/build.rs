@@ -5072,3 +5072,82 @@ fn type_info_lists_only_the_members_a_struct_declares() {
   };
   assert_eq!(built.output, "3\n[middle] USING\n[b] 0\n[] USING\n");
 }
+
+#[test]
+fn a_named_for_expansion_reached_through_a_bake_iterates() {
+  // `for :only_set a` names a `#bake_arguments` over a `for_expansion`, which
+  // is how `Bit_Array` writes `only_set`/`only_unset` (**L§7.10**,
+  // **L§13.2**). The baked slot is filled by the bake rather than by the loop,
+  // so the specialization has to carry that default and the value has to reach
+  // the expansion as a constant.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Box :: struct { xs: [4] int; }\n\
+     picked :: (b: *Box, body: Code, flags: For_Flags, want_even: bool) #expand {\n  \
+       for i: 0..b.xs.count - 1 {\n    \
+         if (b.xs[i] % 2 == 0) != want_even  continue;\n    \
+         `it := b.xs[i];\n    \
+         `it_index := i;\n    \
+         #insert body;\n  \
+       }\n\
+     }\n\
+     only_even :: #bake_arguments picked(want_even = true);\n\
+     only_odd  :: #bake_arguments picked(want_even = false);\n\
+     main :: () {\n  \
+       b := Box.{.[1, 2, 3, 4]};\n  \
+       for :only_even b  print(\"% \", it);\n  \
+       for :only_odd  b  print(\"% \", it);\n  \
+       print(\"\\n\");\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "2 4 1 3 \n");
+}
+
+#[test]
+fn an_alias_of_an_overload_set_is_the_whole_set() {
+  // `operator- :: Basic.operator-;` is how `Thread` reaches the one `Basic`
+  // declares for `Apollo_Time` without importing every name that module has
+  // (**L§7.5**). The alias has no signature of its own, so what it stands for
+  // is every declaration the name it was given reaches — and it must not
+  // shadow them, which is what made the subtraction stop resolving.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     Mod :: #import \"Basic\";\n\
+     operator- :: Mod.operator-;\n\
+     main :: () {\n  \
+       a := current_time_consensus();\n  \
+       b := current_time_consensus();\n  \
+       print(\"%\\n\", to_milliseconds(b - a) >= 0);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "true\n");
+}
+
+#[test]
+fn a_polymorphic_parameter_takes_its_type_from_the_default_it_was_given() {
+  // `platform_code: $T = 0` left out by the call site still has to say what
+  // `T` is, and the only thing left to say it is the header's own default
+  // (**L§7.8**) — which is what `File_Async`'s `error(.Incomplete)` needs.
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     E :: struct { code: enum { A :: 0; B; }; n: s64; }\n\
+     make :: (code: type_of(E.code), n: $T = 0) -> E {\n  \
+       r: E = ---;\n  \
+       r.code = code;\n  \
+       r.n = xx n;\n  \
+       return r;\n\
+     }\n\
+     main :: () {\n  \
+       one := make(.B);\n  \
+       two := make(.A, 5);\n  \
+       print(\"% % % %\\n\", one.code, one.n, two.code, two.n);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "B 0 A 5\n");
+}

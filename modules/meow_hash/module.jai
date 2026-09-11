@@ -33,7 +33,8 @@ MEOW_PAGESIZE :: 4096;
 
 // Whether this processor can run it at all.
 meow_hash_is_available :: () -> bool {
-    return has_feature(.AES);
+    cpu := get_cpu_info();
+    return check_feature(cpu.feature_leaves, .AES);
 }
 
 // The default seed is an encoding of pi — a nothing-up-our-sleeves number, so

@@ -329,6 +329,37 @@ what it actually does.
   and iterate. `modules/Tagged_Union.jai` takes four defaulted parameters
   instead, which keeps the call syntax for up to four types.
 
+- **A member may be named after a primitive type.** `epoll_data`'s C members
+  are `u32` and `u64`; the reference rejects a declaration of either name with
+  `Primitive types cannot be shadowed. You must choose a different name for
+  this Declaration, that does not conflict with the name of a primitive type.`,
+  and orangejuice accepts it. `tools/cbind` now gives such a member the leading
+  underscore the reference's own bindings give it, so nothing in `modules/`
+  relies on the difference.
+- **A call with no matching overload is reported by the back end.**
+  `min(a: float, b: float)` where only vector overloads are in scope leaves the
+  expression with no type and the milestone error naming M7 comes out of code
+  generation rather than a `There is no procedure matching these arguments.`
+  from the checker.
+
+Three that were gaps and are now closed, each pinned by a test in
+`crates/driver/tests/build.rs`:
+
+- A **named `for_expansion` reached through `#bake_arguments`** — `only_set ::
+  #bake_arguments only_set_or_unset(target_value = true)`, which is how
+  `Bit_Array` writes it. The bake's defaults were dropped when the macro was
+  specialized (the parameters are rebuilt from the header, which never had
+  them), and the baked value never reached the expansion as a constant, since
+  only a `$$`-marked parameter was being baked.
+- An **alias of a whole overload set** — `operator- :: Basic.operator-;`, which
+  is how `Thread` reaches the `Apollo_Time` subtraction without importing every
+  name `Basic` has. The alias has no signature of its own, so it both failed to
+  resolve and shadowed the set it was meant to bring in.
+- A **polymorphic parameter whose type comes from its own default** —
+  `platform_code: $T = 0` left out by the call site, which is what
+  `File_Async`'s `error(.Incomplete)` needs. Nothing bound `T`, so the whole
+  candidate was rejected.
+
 Two things that looked like gaps and are not, both measured against the
 reference: `1e6` is not a float literal (a mantissa needs its decimal point),
 and there are no octal literals — the reference writes `0x1B4` with `// 0o664`

@@ -165,6 +165,7 @@ fn self_member(line: &str) -> Option<String> {
     let count = text[bracket + 1..close].trim();
     let head = text[..bracket].trim();
     let (name, type_text) = split_name(head, 0);
+    let name = member_name(&name);
     let jai = jai_type(&type_text)?;
     if count.is_empty() {
       return Some(format!("{name}: [] {jai};"));
@@ -173,7 +174,21 @@ fn self_member(line: &str) -> Option<String> {
   }
 
   let (name, jai) = parameter(text, 0).ok()?;
-  Some(format!("{name}: {jai};"))
+  Some(format!("{}: {jai};", member_name(&name)))
+}
+
+/// A member may not be named after a primitive type, which `epoll_data`'s
+/// `u32` and `u64` are, so those take the leading underscore the reference's
+/// own bindings give them.
+fn member_name(name: &str) -> String {
+  const PRIMITIVES: &[&str] = &[
+    "bool", "float", "float32", "float64", "int", "s8", "s16", "s32", "s64", "string", "u8", "u16",
+    "u32", "u64", "void",
+  ];
+  match PRIMITIVES.contains(&name) {
+    true => format!("_{name}"),
+    false => name.to_string(),
+  }
 }
 
 trait OkExt<T> {

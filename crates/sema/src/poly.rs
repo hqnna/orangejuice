@@ -632,9 +632,23 @@ impl Checker<'_> {
     let (source, header) = signature.header?;
     let type_id = self.instance_type(instance);
     let procedure = self.types().procedure_of(type_id)?.clone();
-    let parameters = self.with_instance(Some(instance), |checker| {
+    let mut parameters = self.with_instance(Some(instance), |checker| {
       checker.header_parameters(source, header, &procedure.arguments)
     });
+    // A `#bake_arguments` writes its defaults onto the *bake's* signature
+    // rather than into the header, so rebuilding the parameters from the
+    // header's own AST would lose them and the baked slot would read as one
+    // the call site failed to fill (**L§7.10**).
+    for &index in &signature.hidden {
+      let (Some(baked), Some(parameter)) =
+        (signature.parameters.get(index), parameters.get_mut(index))
+      else {
+        continue;
+      };
+      parameter.has_default = baked.has_default;
+      parameter.default = baked.default;
+      parameter.default_source = baked.default_source;
+    }
     Some(crate::overload::Signature {
       parameters,
       returns: procedure.returns.clone(),
@@ -1017,6 +1031,26 @@ impl Checker<'_> {
       }
     }
 
+    // A parameter written `x: $T = 0` that the call site left out still has to
+    // say what `T` is, and the only thing left to say it is the default the
+    // header wrote — which is what makes `error(.Incomplete)` mean
+    // `error(.Incomplete, 0)` with `T` an `s64` (**L§7.8**).
+    for (index, parameter) in signature.parameters.iter().enumerate() {
+      if slots.contains(&index) || !self.is_polymorphic_type(parameter.type_id) {
+        continue;
+      }
+      let Some(default) = parameter.default else {
+        continue;
+      };
+      let default_source = parameter.default_source.unwrap_or(source);
+      let scope = self.scope_at(default_source, default, scopes.arguments);
+      let value = self.expression_type(scope, default_source, default);
+      if self.types().is_unknown(value.type_id) {
+        continue;
+      }
+      self.unify_polymorph(parameter.type_id, &value, &mut substitution);
+    }
+
     // Every `$T` the header declares has to have come out of that.
     for id in self.program().tree().declarations(scopes.constants) {
       if solution.bindings.iter().any(|(bound, _)| *bound == id) {
@@ -1049,8 +1083,19 @@ impl Checker<'_> {
       if slots.contains(&index) {
         continue;
       }
-      let Some((decl, _)) = self.baked_parameter_decl(source, signature, index) else {
-        continue;
+      // A `$$` parameter bakes whatever constant it is given; a
+      // `#bake_arguments` bakes the slot it named whether or not the header
+      // marked it, since the whole point of the bake is that the value is
+      // fixed in the procedure it produced (**L§7.10**).
+      let decl = match self.baked_parameter_decl(source, signature, index) {
+        Some((decl, _)) => decl,
+        None if signature.hidden.contains(&index) => {
+          match self.header_parameter_decl(source, signature, index) {
+            Some(decl) => decl,
+            None => continue,
+          }
+        }
+        None => continue,
       };
       if solution.bindings.iter().any(|(bound, _)| *bound == decl) {
         continue;

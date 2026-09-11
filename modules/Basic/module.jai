@@ -68,33 +68,54 @@ free :: (memory: *void, allocator := context.allocator) {
 
 // One `T`, zeroed unless the type has member defaults, in which case the
 // initializer the compiler wrote fills them in (**L§17**).
-New :: ($T: Type, $initialized := true, allocator := context.allocator) -> *T {
-    memory := cast(*T) alloc_zeroed(size_of(T), allocator);
+New :: ($T: Type, $initialized := true) -> *T {
+    memory := alloc(size_of(T));
     #if initialized {
-        if memory {
-            info := cast(*Type_Info_Struct) type_info(T);
-            if info.type == .STRUCT && info.initializer  info.initializer(memory);
-        }
+        // Rolled in here rather than deferred to `Initialize`, since `New` is
+        // called often enough that the extra polymorph would show.
+        ini :: initializer_of(T);
+        #if ini  inline ini(memory);
+        else     memset(memory, 0, size_of(T));
     }
-    return memory;
+    return cast(*T) memory;
 }
 
 // The count comes first, which is the order the reference reads in:
 // `NewArray(n, Node)`.
-NewArray :: (count: s64, $T: Type, $initialized := true, allocator := context.allocator) -> [] T {
-    result: [] T;
-    if count <= 0  return result;
-    result.data = cast(*T) alloc_zeroed(size_of(T) * count, allocator);
-    if !result.data  return result;
+// `alignment` asks for a base that is a multiple of it. The allocator is not
+// asked for one: the extra bytes are taken here and the pointer bumped
+// forward, which every allocator can do. The second result is what was really
+// allocated, and what has to be freed when an alignment was asked for.
+NewArray :: (count: s64, $T: Type, $initialized := true, alignment: s32 = -1) -> (result: [] T, unaligned_base: *void) {
+    if count <= 0  return .[], null;
+
+    extra: s32 = 0;
+    if alignment > 0  extra = alignment;
+
+    original_memory := alloc(size_of(T) * count + extra);
+    if !original_memory  return .[], null;
+
+    memory := original_memory;
+    if alignment > 0  memory = cast(*void) align_forward(cast(s64) original_memory, alignment);
+
+    result: [] T = ---;
     result.count = count;
+    result.data  = memory;
 
     #if initialized {
-        info := cast(*Type_Info_Struct) type_info(T);
-        if info.type == .STRUCT && info.initializer {
-            for 0..count - 1  info.initializer(result.data + it);
+        ini :: initializer_of(T);
+        #if ini {
+            at := memory;
+            for 0..count - 1 {
+                inline ini(at);
+                at += size_of(T);
+            }
+        } else {
+            memset(memory, 0, count * size_of(T));
         }
     }
-    return result;
+
+    return result, original_memory;
 }
 
 // The program's own argument list, as strings rather than the C pointers the
@@ -156,7 +177,7 @@ temp :: Allocator.{temporary_allocator_proc, null};
 // The reference spells the same allocator these two ways as well; all three
 // name one thing, so a module written against any of them works.
 temporary_allocator :: temp;
-__temporary_allocator :: temporary_allocator_proc;
+__temporary_allocator :: temp;
 // The bytes freed storage is stamped with when a program asks for it, so that
 // reading through a stale temporary pointer goes wrong loudly.
 RESET_STORAGE_STAMP    :: 0xdb;
@@ -477,7 +498,7 @@ enum_highest_value :: ($t: Type) -> s64 {
 // what a `for` over an enum's members wants.
 enum_values_as_enum :: ($T: Type) -> [] T {
     info := cast(*Type_Info_Enum) type_info(T);
-    result := NewArray(info.values.count, T, allocator = temp);
+    result := NewArray(info.values.count, T,, temp);
     for info.values  result[it_index] = cast,no_check(T) it;
     return result;
 }

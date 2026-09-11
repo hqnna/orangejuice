@@ -1866,7 +1866,31 @@ __ssize_t :: s64;
 __syscall_slong_t :: s64;
 __syscall_ulong_t :: u64;
 off64_t :: __off64_t;
-clockid_t :: __clockid_t;
+clockid_t :: enum u32 {
+    REALTIME           :: 0;
+    MONOTONIC          :: 1;
+    PROCESS_CPUTIME_ID :: 2;
+    THREAD_CPUTIME_ID  :: 3;
+    MONOTONIC_RAW      :: 4;
+    REALTIME_COARSE    :: 5;
+    MONOTONIC_COARSE   :: 6;
+    BOOTTIME           :: 7;
+    REALTIME_ALARM     :: 8;
+    BOOTTIME_ALARM     :: 9;
+    TAI                :: 11;
+
+    CLOCK_REALTIME           :: REALTIME;
+    CLOCK_MONOTONIC          :: MONOTONIC;
+    CLOCK_PROCESS_CPUTIME_ID :: PROCESS_CPUTIME_ID;
+    CLOCK_THREAD_CPUTIME_ID  :: THREAD_CPUTIME_ID;
+    CLOCK_MONOTONIC_RAW      :: MONOTONIC_RAW;
+    CLOCK_REALTIME_COARSE    :: REALTIME_COARSE;
+    CLOCK_MONOTONIC_COARSE   :: MONOTONIC_COARSE;
+    CLOCK_BOOTTIME           :: BOOTTIME;
+    CLOCK_REALTIME_ALARM     :: REALTIME_ALARM;
+    CLOCK_BOOTTIME_ALARM     :: BOOTTIME_ALARM;
+    CLOCK_TAI                :: TAI;
+}
 int32_t :: __int32_t;
 __atomic_wide_counter :: union {
     __value64: u64;

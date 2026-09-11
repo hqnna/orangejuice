@@ -52,7 +52,7 @@ run_command :: (args: .. string, working_directory := "", capture_and_return_out
 
     // The C argument vector, null-terminated, built before the fork: after it,
     // allocating in the child is not something to rely on.
-    argv := NewArray(args.count + 1, *u8, allocator = temp);
+    argv := NewArray(args.count + 1, *u8,, temp);
     for args  argv[it_index] = to_c_string(it, temp);
     argv[args.count] = null;
 

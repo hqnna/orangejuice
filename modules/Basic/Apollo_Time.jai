@@ -179,7 +179,7 @@ compare_apollo_times :: (a: Apollo_Time, b: Apollo_Time) -> s32 {
 // must come from. It can step backwards when the machine's time is corrected.
 current_time_consensus :: () -> Apollo_Time {
     ts: timespec;
-    clock_gettime(CLOCK_REALTIME, *ts);
+    clock_gettime(.REALTIME, *ts);
     return timespec_to_apollo(ts);
 }
 
@@ -187,7 +187,7 @@ current_time_consensus :: () -> Apollo_Time {
 // one to measure an elapsed span with.
 current_time_monotonic :: () -> Apollo_Time {
     ts: timespec;
-    clock_gettime(CLOCK_MONOTONIC_RAW, *ts);
+    clock_gettime(.MONOTONIC_RAW, *ts);
     return timespec_to_apollo(ts);
 }
 

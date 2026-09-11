@@ -93,10 +93,31 @@ impl Checker<'_> {
     let mut scored: Vec<(u32, Signature)> = Vec::new();
     let mut any_signature = false;
     for candidate in &candidates {
-      let Some(signature) = self.signature_of(*candidate) else {
-        // A candidate whose own type is not worked out yet cannot be ruled
-        // out, so neither can any of the others.
-        return Resolved::Ambiguous;
+      let signature = match self.signature_of(*candidate) {
+        Some(signature) => signature,
+        None => {
+          // `operator- :: Basic.operator-;` names a whole overload set rather
+          // than one procedure, so it has no signature of its own: what it
+          // stands for is every declaration the name it was given reaches
+          // (**L§7.5**). Without this the alias would shadow the set it was
+          // meant to bring in.
+          let aliased = self.alias_overloads(*candidate);
+          if aliased.is_empty() {
+            // A candidate whose own type is not worked out yet cannot be ruled
+            // out, so neither can any of the others.
+            return Resolved::Ambiguous;
+          }
+          for id in aliased {
+            let Some(signature) = self.signature_of(id) else {
+              return Resolved::Ambiguous;
+            };
+            any_signature = true;
+            if let Some(scored_candidate) = self.score_candidate(signature, arguments) {
+              scored.push(scored_candidate);
+            }
+          }
+          continue;
+        }
       };
       any_signature = true;
       if let Some(scored_candidate) = self.score_candidate(signature, arguments) {
@@ -345,6 +366,49 @@ impl Checker<'_> {
   /// The parameters and returns of one candidate. A procedure declaration is
   /// read from its header, so that names and defaults are known; anything else
   /// callable contributes its procedure type alone.
+  /// The declarations an alias of a whole overload set stands for: `operator-
+  /// :: Basic.operator-;` or `add :: Some_Module.add;` is a name for every
+  /// `add` that module declares rather than for one of them (**L§7.5**).
+  /// Empty for anything that is not such an alias.
+  fn alias_overloads(&mut self, candidate: DeclId) -> Vec<DeclId> {
+    let decl = self.program().tree().decl(candidate);
+    if !decl
+      .flags
+      .contains(oj_syntax::ast::DeclarationFlags::IS_CONSTANT)
+    {
+      return Vec::new();
+    }
+    let (Some(source), Some(node), scope) = (decl.source, decl.node, decl.scope) else {
+      return Vec::new();
+    };
+    let Some(NodeData::Declaration(declaration)) = self.ast(source).map(|ast| ast.data(node))
+    else {
+      return Vec::new();
+    };
+    let Some(expression) = declaration.expression else {
+      return Vec::new();
+    };
+    // Only a bare name or a module-qualified one can stand for a set; anything
+    // else is an expression with a type of its own.
+    let Some(ast) = self.ast(source) else {
+      return Vec::new();
+    };
+    if !matches!(
+      ast.data(expression),
+      NodeData::Ident(_) | NodeData::BinaryOperator { .. }
+    ) {
+      return Vec::new();
+    }
+    let scope = self.scope_at(source, expression, scope);
+    let overloads = self.expression_type(scope, source, expression).overloads;
+    // An alias of one procedure already has a signature of its own; this is
+    // only for the sets that do not.
+    match overloads.contains(&candidate) {
+      true => Vec::new(),
+      false => overloads,
+    }
+  }
+
   pub(crate) fn signature_of(&mut self, candidate: DeclId) -> Option<Signature> {
     // `#bake_arguments f(y = 42)` is `f` with `y` already given (**L§7.10**).
     if let Some(baked) = self.baked_signature(candidate) {

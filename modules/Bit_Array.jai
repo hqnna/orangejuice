@@ -1,157 +1,150 @@
 //
-// Bit_Array: one bit per element, packed into words.
+// A dense array of bits.
 //
-// A `[..] bool` spends a byte on each; this spends an eighth of one, which
-// matters once there are millions. Set operations are word-at-a-time, so a
-// union over a million bits is sixteen thousand `or`s.
+// Sixty-four of them to a slot, so a set of a few thousand flags costs a few
+// hundred bytes and a whole-array operation runs a word at a time rather than
+// a bit at a time.
+//
+// `for` over one visits every bit as a `bool`, with `it_index` its position.
+// `only_set` and `only_unset` visit just the bits of one kind, skipping whole
+// empty slots as they go — which is what makes walking a sparse array cheap.
 //
 
 #import "Basic";
 #import "Bit_Operations";
 
 Bit_Array :: struct {
-    BITS_PER_WORD :: 64;
-    // Typed, because an untyped literal this wide has no type the front end
-    // can settle on inside a shift.
-    ALL_ONES : u64 : 0xffff_ffff_ffff_ffff;
-
-    words: [..] u64;
+    slots: [] s64;
     // How many bits the caller asked for, which is not the same as how many
-    // the words hold.
-    count: s64;
+    // the slots hold.
+    count: int;
+
+    allocator: Allocator;
 }
 
-init :: (array: *Bit_Array, count: s64, allocator := context.allocator) {
-    array.words.allocator = allocator;
-    array_reset_keeping_memory(*array.words);
-    array.count = max(count, 0);
-    array_resize(*array.words, words_for(array.count));
-    for * array.words  it.* = 0;
+// Sets the array up with room for `count` bits, all clear. Not to be called
+// twice on the same array.
+init_bit_array :: (array: *Bit_Array, count: int) {
+    if !array.allocator.proc  array.allocator = context.allocator;
+
+    slots := (count + 63) / 64;
+    array.slots = NewArray(slots, s64,, array.allocator);
+    array.count = count;
 }
 
-deinit :: (array: *Bit_Array) {
-    array_free(*array.words);
-    array.count = 0;
+make_bit_array :: (count: int) -> Bit_Array #must {
+    result: Bit_Array;
+    init_bit_array(*result, count);
+    return result;
 }
 
-// Grows with zeroes; shrinking drops the bits past the new end.
-resize :: (array: *Bit_Array, count: s64) {
-    wanted := max(count, 0);
-    needed := words_for(wanted);
-    old_words := array.words.count;
-    array_resize(*array.words, needed);
-    for index: old_words..needed - 1  array.words[index] = 0;
-    array.count = wanted;
-    clear_tail(array);
+deinit :: (using array: *Bit_Array) {
+    if slots.data  free(slots.data,, allocator = allocator);
+    slots.data = null;
+    slots.count = 0;
+    count = 0;
 }
 
-set :: (array: *Bit_Array, index: s64) {
-    if index < 0 || index >= array.count  return;
-    array.words[index / array.BITS_PER_WORD] |= mask(index);
+// ------------------------------------------------------------- one bit ---
+
+set_bit :: (using array: *Bit_Array, i: int) {
+    assert(i >= 0 && i < count);
+    slots[i >> 6] |= (cast(s64) 1 << (i & 63));
 }
 
-unset :: (array: *Bit_Array, index: s64) {
-    if index < 0 || index >= array.count  return;
-    array.words[index / array.BITS_PER_WORD] &= ~mask(index);
+clear_bit :: (using array: *Bit_Array, i: int) {
+    assert(i >= 0 && i < count);
+    slots[i >> 6] &= ~(cast(s64) 1 << (i & 63));
 }
 
-// Sets or clears according to `value`.
-set :: (array: *Bit_Array, index: s64, value: bool) {
-    if value  set(array, index);
-    else      unset(array, index);
+toggle_bit :: (using array: *Bit_Array, i: int) {
+    assert(i >= 0 && i < count);
+    slots[i >> 6] ^= (cast(s64) 1 << (i & 63));
 }
 
-toggle :: (array: *Bit_Array, index: s64) {
-    if index < 0 || index >= array.count  return;
-    array.words[index / array.BITS_PER_WORD] ^= mask(index);
+set_bit_to :: (using array: *Bit_Array, i: int, value: bool) {
+    if value  set_bit(array, i);
+    else      clear_bit(array, i);
 }
 
-// Out of range reads as false rather than as an error, so a caller probing
-// past the end does not have to guard first.
-get :: (array: *Bit_Array, index: s64) -> bool {
-    if index < 0 || index >= array.count  return false;
-    return (array.words[index / array.BITS_PER_WORD] & mask(index)) != 0;
+operator [] :: (a: Bit_Array, i: int) -> bool {
+    assert(i >= 0 && i < a.count);
+    return (a.slots[i >> 6] & (cast(s64) 1 << (i & 63))) != 0;
 }
 
-set_all :: (array: *Bit_Array) {
-    for * array.words  it.* = Bit_Array.ALL_ONES;
-    clear_tail(array);
+operator []= :: inline (a: *Bit_Array, i: int, value: bool) {
+    set_bit_to(a, i, value);
 }
 
-unset_all :: (array: *Bit_Array) {
-    for * array.words  it.* = 0;
+// ------------------------------------------------------------ all of them ---
+//
+// A slot at a time. The bits past `count` in the last slot are set along with
+// the rest; nothing reads them, and masking them would cost a branch on every
+// whole-array operation.
+
+clear_all_bits :: (using array: *Bit_Array) {
+    for * slots  it.* = 0;
 }
 
-// How many bits are set.
-count_set :: (array: *Bit_Array) -> s64 {
-    total := 0;
-    for array.words  total += popcount(it);
-    return total;
+set_all_bits :: (using array: *Bit_Array) {
+    for * slots  it.* = -1;
 }
 
-// The lowest set bit at or after `from`, or -1. Skipping whole empty words is
-// what makes walking a sparse array cheap.
-next_set_bit :: (array: *Bit_Array, from: s64 = 0) -> s64 {
-    start := max(from, 0);
-    if start >= array.count  return -1;
+toggle_all_bits :: (using array: *Bit_Array) {
+    for * slots  it.* = ~it.*;
+}
 
-    word_index := start / array.BITS_PER_WORD;
-    // Ignore the bits below `start` in the word it falls in.
-    word := array.words[word_index] & (Bit_Array.ALL_ONES << cast(u64) (start % array.BITS_PER_WORD));
-    while true {
-        if word {
-            found := word_index * array.BITS_PER_WORD + count_trailing_zeros(word);
-            return ifx found < array.count then found else -1;
-        }
-        word_index += 1;
-        if word_index >= array.words.count  return -1;
-        word = array.words[word_index];
+// -------------------------------------------------------------- iterating ---
+
+for_expansion :: (array: *Bit_Array, body: Code, flags: For_Flags) #expand {
+    for index: 0..array.count - 1 {
+        `it_index := index;
+        `it := (array.slots[index >> 6] & (cast(s64) 1 << (index & 63))) != 0;
+        #insert (break = break index, continue = continue index) body;
     }
-    return -1;
 }
 
-// ------------------------------------------------------ set operations ---
-
-// Each writes into `a`, and treats a shorter `b` as zeroes beyond its end.
-or_with :: (a: *Bit_Array, b: *Bit_Array) {
-    shared := min(a.words.count, b.words.count);
-    for index: 0..shared - 1  a.words[index] |= b.words[index];
-    clear_tail(a);
+for_expansion :: (array: Bit_Array, body: Code, flags: For_Flags) #expand {
+    copy := array;
+    for :for_expansion *copy {
+        `it_index := it_index;
+        `it := it;
+        #insert body;
+    }
 }
 
-and_with :: (a: *Bit_Array, b: *Bit_Array) {
-    shared := min(a.words.count, b.words.count);
-    for index: 0..shared - 1  a.words[index] &= b.words[index];
-    for index: shared..a.words.count - 1  a.words[index] = 0;
-}
-
-xor_with :: (a: *Bit_Array, b: *Bit_Array) {
-    shared := min(a.words.count, b.words.count);
-    for index: 0..shared - 1  a.words[index] ^= b.words[index];
-    clear_tail(a);
-}
-
-// Everything in `a` that is not in `b`.
-subtract :: (a: *Bit_Array, b: *Bit_Array) {
-    shared := min(a.words.count, b.words.count);
-    for index: 0..shared - 1  a.words[index] &= ~b.words[index];
-}
+// `for only_set(*array)` visits the positions of the set bits and nothing
+// else: a slot with none of them is skipped whole, so a sparse array costs
+// about what its contents cost rather than what its length does.
+only_set   :: #bake_arguments only_set_or_unset(target_value = true);
+only_unset :: #bake_arguments only_set_or_unset(target_value = false);
 
 #scope_module
 
-words_for :: (count: s64) -> s64 {
-    return (count + Bit_Array.BITS_PER_WORD - 1) / Bit_Array.BITS_PER_WORD;
-}
+only_set_or_unset :: (array: *Bit_Array, body: Code, flags: For_Flags, target_value: bool) #expand {
+    #assert !flags;
 
-mask :: (index: s64) -> u64 {
-    return cast(u64) 1 << cast(u64) (index % Bit_Array.BITS_PER_WORD);
-}
+    // `it` is the kind of bit being visited, so it never varies; `it_index` is
+    // what the caller is actually after.
+    `it := target_value;
 
-// The last word holds bits past `count`. They must stay zero or `count_set`
-// and `next_set_bit` would see bits nobody asked for.
-clear_tail :: (array: *Bit_Array) {
-    if !array.words.count  return;
-    spare := array.words.count * Bit_Array.BITS_PER_WORD - array.count;
-    if spare <= 0  return;
-    array.words[array.words.count - 1] &= Bit_Array.ALL_ONES >> cast(u64) spare;
+    for slot, slot_index: array.slots {
+        // Looking for clear bits is the same walk over the complement.
+        #if !target_value  slot = ~slot;
+        if !slot  continue;
+
+        remaining := slot;
+        while remaining {
+            // The lowest set bit, and then clear it: `x & (x - 1)` drops it
+            // without a shift.
+            bit := bit_scan_forward(cast,no_check(u64) remaining) - 1;
+            remaining &= remaining - 1;
+
+            index := slot_index * 64 + bit;
+            if index >= array.count  break;
+
+            `it_index := index;
+            #insert body;
+        }
+    }
 }

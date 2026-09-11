@@ -11,10 +11,14 @@
 
 #load "matrix.jai";
 #load "plane.jai";
+#load "print.jai";
 
 #scope_module
 
 libm :: #system_library "m";
+
+// For Swap and the printers.
+Basic :: #import "Basic";
 
 #scope_export
 
@@ -293,24 +297,37 @@ length_squared :: (v: Vector4) -> float32 { return dot(v, v); }
 length_squared :: (q: Quaternion) -> float32 { return dot(q, q); }
 
 length :: (v: Vector2) -> float32 { return sqrtf(length_squared(v)); }
+length :: (q: Quaternion) -> float32 { return sqrtf(length_squared(q)); }
 length :: (v: Vector3) -> float32 { return sqrtf(length_squared(v)); }
 length :: (v: Vector4) -> float32 { return sqrtf(length_squared(v)); }
 
 distance :: (a: Vector2, b: Vector2) -> float32 { return length(b - a); }
 distance :: (a: Vector3, b: Vector3) -> float32 { return length(b - a); }
 
-// A zero-length vector normalizes to zero rather than to NaN, so a caller
-// need not guard the degenerate case.
-normalize :: (v: Vector2) -> Vector2 {
-    len := length(v);
-    if len == 0  return .{0, 0};
-    return v / len;
+// A vector no longer than `epsilon` is replaced by `fallback` rather than
+// divided into a NaN, so a caller need not guard the degenerate case. The
+// length *before* normalizing comes back, which is usually what the caller
+// wanted the vector's length for anyway.
+normalize :: (v: *$T/MyVectors, epsilon := 0.0, fallback := T.{}) -> float {
+    len := length(v.*);
+    if len <= epsilon {
+        v.* = fallback;
+        return len;
+    }
+
+    factor := 1 / len;
+    v.x *= factor;
+    v.y *= factor;
+    #if (T == Vector3) || (T == Vector4) || (T == Quaternion)  v.z *= factor;
+    #if (T == Vector4) || (T == Quaternion)                    v.w *= factor;
+
+    return len;
 }
 
-normalize :: (v: Vector3) -> Vector3 {
-    len := length(v);
-    if len == 0  return .{0, 0, 0};
-    return v / len;
+normalize :: (v: $T/MyVectors, epsilon := 0.0, fallback := T.{}) -> T {
+    result := v;
+    inline normalize(*result, epsilon, fallback);
+    return result;
 }
 
 lerp :: (a: Vector2, b: Vector2, t: float32) -> Vector2 { return a + (b - a) * t; }
@@ -333,12 +350,6 @@ operator * :: (a: Quaternion, b: Quaternion) -> Quaternion {
 // For a unit quaternion the conjugate is the inverse rotation.
 conjugate :: (q: Quaternion) -> Quaternion {
     return .{-q.x, -q.y, -q.z, q.w};
-}
-
-normalize :: (q: Quaternion) -> Quaternion {
-    len := sqrtf(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
-    if len == 0  return .{0, 0, 0, 1};
-    return .{q.x / len, q.y / len, q.z / len, q.w / len};
 }
 
 // The rotation of `angle` radians about `axis`, which must be a unit vector.
@@ -596,4 +607,141 @@ rotate :: (v: Vector2, theta: float) -> Vector2 {
 
 rotate :: (v: *Vector2, theta: float) {
     v.* = rotate(v.*, theta);
+}
+
+// The vector types `normalize` accepts, as a type restriction rather than as
+// an overload each.
+MyVectors :: Type.[Vector2, Vector3, Vector4, Quaternion];
+
+// ----------------------------------------------------------- componentwise ---
+
+min :: inline (v1: Vector2, v2: Vector2) -> Vector2 {
+    return .{Basic.min(v1.x, v2.x), Basic.min(v1.y, v2.y)};
+}
+
+min :: inline (v1: Vector3, v2: Vector3) -> Vector3 {
+    return .{Basic.min(v1.x, v2.x), Basic.min(v1.y, v2.y), Basic.min(v1.z, v2.z)};
+}
+
+max :: inline (v1: Vector2, v2: Vector2) -> Vector2 {
+    return .{Basic.max(v1.x, v2.x), Basic.max(v1.y, v2.y)};
+}
+
+max :: inline (v1: Vector3, v2: Vector3) -> Vector3 {
+    return .{Basic.max(v1.x, v2.x), Basic.max(v1.y, v2.y), Basic.max(v1.z, v2.z)};
+}
+
+// ------------------------------------------------- a rotation as a matrix ---
+
+// Writes the rotation `q` names into the top-left 3x3 block, leaving whatever
+// else the matrix holds — its translation column, say — alone.
+set_rotation :: (using m: *$T/interface AnyMatrix3, q: Quaternion) {
+    // Every product below carries one factor of two, so it is taken out of the
+    // three components once rather than out of the nine results.
+    xs := q.x * 2;
+    ys := q.y * 2;
+    zs := q.z * 2;
+
+    wx := q.w * xs;
+    wy := q.w * ys;
+    wz := q.w * zs;
+
+    _xx := q.x * xs;
+    xy := q.x * ys;
+    xz := q.x * zs;
+
+    yy := q.y * ys;
+    yz := q.y * zs;
+    zz := q.z * zs;
+
+    _11 = 1.0 - (yy + zz);
+    _12 = xy - wz;
+    _13 = xz + wy;
+
+    _21 = xy + wz;
+    _22 = 1.0 - (_xx + zz);
+    _23 = yz - wx;
+
+    _31 = xz - wy;
+    _32 = yz + wx;
+    _33 = 1.0 - (_xx + yy);
+}
+
+// The quaternion a rotation matrix stands for, by Shoemake's method: whichever
+// of the four components is largest is recovered from the trace first, since
+// dividing by a small one would lose most of the precision.
+get_rotation :: (using m: $T/interface AnyMatrix3) -> Quaternion {
+    q: Quaternion = ---;
+    trace := _11 + _22 + _33;
+
+    if trace > 0 {
+        // |w| > 1/2, so w is the safe one to start from.
+        s := sqrt(trace + 1);  // 2w
+
+        q.w = cast(float) (s * 0.5);
+        s = 0.5 / s;           // 1/(4w)
+
+        q.x = cast(float) ((_32 - _23) * s);
+        q.y = cast(float) ((_13 - _31) * s);
+        q.z = cast(float) ((_21 - _12) * s);
+    } else {
+        // Otherwise the largest diagonal element names the component to
+        // recover, and the other two follow from it.
+        diagonal := float.[_11, _22, _33];
+        i := 0;
+        if diagonal[1] > diagonal[0]  i = 1;
+        if diagonal[2] > diagonal[i]  i = 2;
+
+        j := (1 << i) & 3;  // i + 1 modulo 3.
+        k := (1 << j) & 3;
+
+        coef := float.[_11, _12, _13, _21, _22, _23, _31, _32, _33];
+        at :: inline (c: [9] float, row: int, column: int) -> float { return c[row * 3 + column]; }
+
+        s := sqrt(at(coef, i, i) - at(coef, j, j) - at(coef, k, k) + 1);
+
+        q.component[i] = cast(float) (s * 0.5);
+        s = 0.5 / s;
+        q.component[j] = cast(float) ((at(coef, i, j) + at(coef, j, i)) * s);
+        q.component[k] = cast(float) ((at(coef, k, i) + at(coef, i, k)) * s);
+        q.w            = cast(float) ((at(coef, k, j) - at(coef, j, k)) * s);
+    }
+
+    normalize_or_identity(*q);
+    return q;
+}
+
+// ------------------------------------------------------- the cephes corners ---
+//
+// The constants and helpers the argument reduction of the trigonometric
+// routines is written in. They are part of the module's surface because a
+// program doing its own reduction wants the same numbers.
+
+// Pi/4 split across three float64s, so that `x - y*DP1 - y*DP2 - y*DP3` keeps
+// more bits than one subtraction of a rounded Pi/4 could.
+DP1 :: 7.85398125648498535156E-1;
+DP2 :: 3.77489470793079817668E-8;
+DP3 :: 2.69515142907905952645E-15;
+
+// Past this the argument has fewer bits left than the reduction needs, so
+// there is no sensible answer to give.
+LOSSTH : float64 : 1.073741824e9;
+
+// How far outside [-1, 1] `asin`/`acos` tolerate an argument before saying so,
+// rather than quietly returning a NaN for what is usually a rounded 1.
+ASIN_AND_ACOS_ERROR_REPORTING_LIMIT :: 1.000001;
+
+// The multiple of 1/16 nearest below `x` — the first step of the range
+// reduction `pow` and `exp` do.
+reduc :: (x: float64) -> float64 {
+    t := ldexp(x, 4);
+    t = floor(t);
+    return ldexp(t, -4);
+}
+
+// The sine or the cosine, chosen at compile time, so that a caller writing a
+// loop over both pays for one of them.
+sin_or_cos :: (x: float64, $IS_SIN: bool) -> float64 {
+    #if IS_SIN  return sin(x);
+    else        return cos(x);
 }

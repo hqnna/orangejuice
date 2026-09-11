@@ -40,15 +40,12 @@ exit :: (status: s32) #foreign libc;
 
 // ------------------------------------------------------------------ time ---
 
-CLOCK_REALTIME  :: 0;
-CLOCK_MONOTONIC :: 1;
 
 timespec :: struct {
     tv_sec:  s64;
     tv_nsec: s64;
 }
 
-clock_gettime :: (clock: s32, result: *timespec) -> s32 #foreign libc;
 
 // ---------------------------------------------------------------- memory ---
 

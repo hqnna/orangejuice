@@ -116,3 +116,35 @@ base64_value :: (c: u8) -> s64 {
     if c == #char "/" || c == #char "_"  return 63;
     return -1;
 }
+
+// The two alphabets by the names the reference gives them. The URL-safe one
+// swaps `+/` for `-_`, which are safe in a path or a query string.
+BASE64_ENCODER_TABLE    :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+BASE64URL_ENCODER_TABLE :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+// The reverse: a byte's value, or 0xff when it is not in the alphabet.
+BASE64_DECODER_TABLE    :: #run decoder_table(BASE64_ENCODER_TABLE);
+BASE64URL_DECODER_TABLE :: #run decoder_table(BASE64URL_ENCODER_TABLE);
+
+base64url_encode :: (input: string) -> string {
+    return base64_encode(input, url_safe = true, pad = false);
+}
+
+base64url_decode :: (input: string) -> (result: string, success: bool) {
+    bytes, ok := base64_decode(input);
+    text: string;
+    text.data = bytes.data;
+    text.count = bytes.count;
+    return text, ok;
+}
+
+#scope_module
+
+decoder_table :: (alphabet: string) -> [256] u8 {
+    table: [256] u8;
+    for 0..255  table[it] = 0xff;
+    for 0..alphabet.count - 1  table[alphabet[it]] = cast(u8) it;
+    return table;
+}
+
+#scope_export

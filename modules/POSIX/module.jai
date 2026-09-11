@@ -186,23 +186,18 @@ EINVAL :: 22;
 // declared as a global here.
 __errno_location :: () -> *s32 #foreign libc;
 
-errno :: () -> s32 {
-    return __errno_location().*;
+errno :: inline () -> OS_Error_Code #no_context {
+    return (cast(*OS_Error_Code) __errno_location()).*;
 }
 
 strerror :: (code: s32) -> *u8 #foreign libc;
 
 // ------------------------------------------------------------------ time ---
 
-CLOCK_REALTIME  :: 0;
-CLOCK_MONOTONIC :: 1;
-
 timespec :: struct {
     tv_sec:  s64;
     tv_nsec: s64;
 }
-
-CLOCK_MONOTONIC_RAW :: 4;
 
 time_t :: s64;
 
@@ -223,7 +218,7 @@ tm :: struct {
     tm_zone:   *u8;
 }
 
-clock_gettime :: (clock: s32, result: *timespec) -> s32 #foreign libc;
+clock_gettime :: (__clock_id: clockid_t, __tp: *timespec) -> s32 #foreign libc;
 nanosleep     :: (request: *timespec, remaining: *timespec) -> s32 #foreign libc;
 
 // The `_r` forms write into storage the caller owns, which is what makes them

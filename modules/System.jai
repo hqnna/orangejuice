@@ -59,7 +59,7 @@ get_process_id :: () -> s32 {
 // Seconds and nanoseconds since the epoch.
 get_time :: () -> (seconds: s64, nanoseconds: s64) {
     now: timespec;
-    if clock_gettime(CLOCK_REALTIME, *now) != 0  return 0, 0;
+    if clock_gettime(.REALTIME, *now) != 0  return 0, 0;
     return now.tv_sec, now.tv_nsec;
 }
 
@@ -67,7 +67,7 @@ get_time :: () -> (seconds: s64, nanoseconds: s64) {
 // time with: unlike the wall clock it never steps backwards.
 get_monotonic_time :: () -> float64 {
     now: timespec;
-    if clock_gettime(CLOCK_MONOTONIC, *now) != 0  return 0;
+    if clock_gettime(.MONOTONIC, *now) != 0  return 0;
     return cast(float64) now.tv_sec + cast(float64) now.tv_nsec * 1.0e-9;
 }
 

@@ -1376,14 +1376,6 @@ impl Checker<'_> {
     match kind {
       TypeQueryKind::SizeOf => match self.layout_of(type_id).map(|layout| layout.size) {
         Some(size) => Expr::constant(Const::new(TypeId::S64, Value::Int(i128::from(size)))),
-        None if std::env::var_os("OJDBG").is_some() => {
-          eprintln!(
-            "OJDBG size_of({}) unknown scope={scope:?} instance={:?}",
-            self.type_name(type_id),
-            self.current_instance
-          );
-          Expr::UNKNOWN
-        }
         // The size of a type the front end cannot lay out yet is not `s64`
         // with an unknown value: it is not known at all.
         None => Expr::UNKNOWN,
