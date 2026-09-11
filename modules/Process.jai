@@ -173,8 +173,8 @@ POLL_SLICE_MS :: 20;
 drain :: (out_fd: s32, err_fd: s32, pid: s32, timeout_ms: s64) -> (output: string, errors: string, timeout_reached: bool) {
     out_builder: String_Builder;
     err_builder: String_Builder;
-    init_string_builder(*out_builder, temp);
-    init_string_builder(*err_builder, temp);
+    out_builder.allocator = temp;
+    err_builder.allocator = temp;
 
     set_non_blocking(out_fd);
     set_non_blocking(err_fd);
@@ -205,7 +205,7 @@ drain :: (out_fd: s32, err_fd: s32, pid: s32, timeout_ms: s64) -> (output: strin
         waited += POLL_SLICE_MS;
     }
 
-    return builder_to_string(*out_builder, temp), builder_to_string(*err_builder, temp), timeout_reached;
+    return builder_to_string(*out_builder,, allocator = temp), builder_to_string(*err_builder,, allocator = temp), timeout_reached;
 }
 
 // Whether the descriptor is still open, and whether anything came out of it.

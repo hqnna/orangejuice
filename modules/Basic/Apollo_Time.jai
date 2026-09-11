@@ -310,12 +310,12 @@ calendar_to_iso_string :: (ct: Calendar_Time) -> string {
     zone := ifx ct.time_zone == .UTC then "Z" else "";
 
     builder: String_Builder;
-    init_string_builder(*builder, temp);
+    builder.allocator = temp;
     print_to_builder(*builder, "%-%-%T%:%:%.%", ct.year, two(ct.month_starting_at_0 + 1),
                      two(ct.day_of_month_starting_at_0 + 1), two(ct.hour), two(ct.minute),
                      two(ct.second), three(ct.millisecond));
     append(*builder, zone);
-    return builder_to_string(*builder, temp);
+    return builder_to_string(*builder,, allocator = temp);
 }
 
 #scope_module

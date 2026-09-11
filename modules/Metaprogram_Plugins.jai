@@ -35,7 +35,7 @@
 // compiled. That circularity is the whole reason for the placeholder.
 request_plugin_table :: (names: [] string) {
     builder: String_Builder;
-    init_string_builder(*builder, temp);
+    builder.allocator = temp;
 
     append(*builder, "PLUGIN_TABLE_INSERT :: #code {\n");
     for names {
@@ -46,7 +46,7 @@ request_plugin_table :: (names: [] string) {
     }
     append(*builder, "};\n");
 
-    add_build_string(builder_to_string(*builder, temp), get_current_workspace());
+    add_build_string(builder_to_string(*builder,, allocator = temp), get_current_workspace());
 }
 
 // Creates a plugin for each name, in the order given. A name nothing answers

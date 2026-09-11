@@ -41,7 +41,7 @@ log_vars :: ($a: Code = #code,null, $b: Code = #code,null, $c: Code = #code,null
 // One `print`/`log` call per argument that was actually given.
 generate :: (procedure: string, args: .. Code) -> string {
     builder: String_Builder;
-    init_string_builder(*builder, temp);
+    builder.allocator = temp;
 
     for args {
         source := render(it);

@@ -393,9 +393,9 @@ get_field :: (info: *Type_Info_Struct, name: string) -> (member: *Type_Info_Stru
 // A type's name the way `print("%", T)` writes it, in temporary storage.
 type_to_string :: (info: *Type_Info) -> string {
     builder: String_Builder;
-    init_string_builder(*builder, temp);
+    builder.allocator = temp;
     append_type(*builder, info);
-    return builder_to_string(*builder, temp);
+    return builder_to_string(*builder,, allocator = temp);
 }
 
 // ----------------------------------------------------------- about arrays ---

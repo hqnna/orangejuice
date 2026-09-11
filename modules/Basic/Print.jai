@@ -7,64 +7,17 @@
 // a struct prints its member names without anyone writing that out.
 //
 
-Print_Style :: struct {
-    // How many digits after the point a float gets. Shortest round-tripping
-    // output is what this should eventually be; see the note on
-    // `append_float`.
-    default_float_digits: s64 = 6;
-    // Print an enum's member name rather than its number where one matches.
-    enum_names := true;
-}
-
-#add_context print_style: Print_Style;
-
-// --------------------------------------------------------------- the API ---
-
-print :: (format: string, args: ..Any, to_standard_error := false) -> s64 {
-    builder: String_Builder;
-    init_string_builder(*builder, temp);
-    count := format_to_builder(*builder, format, args);
-    write_builder(*builder, to_standard_error);
-    return count;
-}
-
-// The formatted text in storage the caller owns.
-sprint :: (format: string, args: ..Any, allocator := context.allocator) -> string {
-    builder: String_Builder;
-    init_string_builder(*builder, temp);
-    format_to_builder(*builder, format, args);
-    return builder_to_string(*builder, allocator);
-}
-
-// The formatted text in temporary storage, valid until the next
-// `reset_temporary_storage` (**L§10.4**).
-tprint :: (format: string, args: ..Any) -> string {
-    return sprint(format, ..args, allocator = temp);
-}
-
-// Appends formatted text to a builder the caller already has, which is what
-// code generating source into one wants.
-print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) -> s64 {
-    return format_to_builder(builder, format, args);
-}
-
-// One value, formatted the way `print` would format it.
-to_string :: (value: Any, allocator := context.allocator) -> string {
-    builder: String_Builder;
-    init_string_builder(*builder, temp);
-    append_any(*builder, value);
-    return builder_to_string(*builder, allocator);
-}
-
 // --------------------------------------------------------- the formatters ---
 //
-// A formatter is a value that carries the thing to print *and* how to print
-// it, so it travels through a `%` slot as an ordinary argument:
+// A formatter carries the thing to print *and* how to print it, so it travels
+// through a `%` slot as an ordinary argument:
 //
 //     print("%\n", formatInt(x, base = 16, minimum_digits = 4));
 //
-// `append_value` recognises the struct and prints what it describes rather
-// than the struct's own members.
+// `append_value` recognises one by the `Formatter` it begins with and prints
+// what it describes rather than the struct's own members. The same structs,
+// held in `context.print_style`, are what the settings for an *unadorned* `%`
+// come from.
 
 Formatter :: struct {
     value: Any;
@@ -80,8 +33,92 @@ FormatInt :: struct {
 
     // Zero means no commas at all.
     digits_per_comma: u16 = 0;
-    comma_string := "";
+    comma_string     := "";
 }
+
+FormatFloat :: struct {
+    using #as formatter: Formatter;
+
+    // -1 for "as wide as it needs to be".
+    width          := -1;
+    trailing_width := -1;
+
+    Zero_Removal :: enum { YES; NO; ONE_ZERO_AFTER_DECIMAL; }
+    // Also removes the point when it would be the last character left.
+    zero_removal := Zero_Removal.YES;
+
+    Mode :: enum { DECIMAL; SCIENTIFIC; SHORTEST; }
+    mode := Mode.DECIMAL;
+
+    thousand_separators          := false;
+    thousand_separator_character : u8 = #char ",";
+    decimal_separator_character  : u8 = #char ".";
+    exponent_character           : u8 = #char "e";
+
+    Positive_Number_Prefix :: enum { NONE; PLUS; SPACE; }
+    positive_number_prefix := Positive_Number_Prefix.NONE;
+}
+
+FormatStruct :: struct {
+    using #as formatter: Formatter;
+
+    draw_type_name := false;
+
+    // Short form draws values with separators between them: `{1, 3, 5}`. Long
+    // form names each one: `{x = 1; y = 3; z = 5}`.
+    use_long_form_if_more_than_this_many_members := 5;  // -1 for always long.
+    separator_between_name_and_value := " = ";
+
+    short_form_separator_between_fields := ", ";
+    long_form_separator_between_fields  := "; ";
+
+    begin_string := "{";
+    end_string   := "}";
+
+    indentation_width: s32 = 4;
+
+    use_newlines_if_long_form := false;
+}
+
+FormatArray :: struct {
+    using #as formatter: Formatter;
+
+    separator    := ", ";
+    begin_string := "[";
+    end_string   := "]";
+
+    printing_stopped_early_string := "...";
+
+    draw_separator_after_last_element := false;
+    // So that printing a huge array does not fill the terminal. -1 never stops.
+    stop_printing_after_this_many_elements := 100;
+}
+
+// What an unadorned `%` uses. The `Formatter` part of each of these is ignored
+// — only the settings are read.
+Print_Style :: struct {
+    default_format_int:    FormatInt;
+    default_format_float:  FormatFloat;
+    default_format_struct: FormatStruct;
+    default_format_array:  FormatArray;
+
+    default_format_absolute_pointer: FormatInt;
+    default_format_absolute_pointer.base             = 16;
+    default_format_absolute_pointer.digits_per_comma = 4;
+    default_format_absolute_pointer.comma_string     = "_";
+
+    // A program can take struct printing over entirely. Returning false lets
+    // the default printer handle the value after all.
+    struct_printer: (builder: *String_Builder, any: Any, struct_printer_data: *void) -> bool;
+    struct_printer_data: *void;
+
+    // Print's own working state while it descends into a struct.
+    indentation_depth: s32;
+
+    log_runtime_errors := true;
+}
+
+#add_context print_style: Print_Style;
 
 formatInt :: (value: Any, base := 10, minimum_digits := 1, padding: u8 = #char "0", digits_per_comma: u16 = 0, comma_string := "") -> FormatInt {
     result: FormatInt;
@@ -94,10 +131,86 @@ formatInt :: (value: Any, base := 10, minimum_digits := 1, padding: u8 = #char "
     return result;
 }
 
-// ------------------------------------------------------ printing one thing ---
+formatFloat :: (value: Any, width := -1, trailing_width := -1, mode := FormatFloat.Mode.DECIMAL, zero_removal := FormatFloat.Zero_Removal.YES) -> FormatFloat {
+    result: FormatFloat;
+    result.value          = value;
+    result.width          = width;
+    result.trailing_width = trailing_width;
+    result.mode           = mode;
+    result.zero_removal   = zero_removal;
+    return result;
+}
 
-// One value into a builder, formatted the way a `%` slot would format it.
-// `inside_struct_or_array` is what makes a string print with quotes when it is
+formatStruct :: (value: Any, use_long_form_if_more_than_this_many_members := 5, use_newlines_if_long_form := false) -> FormatStruct {
+    result: FormatStruct;
+    result.value = value;
+    result.use_long_form_if_more_than_this_many_members = use_long_form_if_more_than_this_many_members;
+    result.use_newlines_if_long_form = use_newlines_if_long_form;
+    return result;
+}
+
+// The member that makes a struct a formatter, or null.
+isFormatter :: (info: *Type_Info_Struct) -> *Type_Info_Struct_Member {
+    for * info.members {
+        if it.type == type_info(Formatter)  return it;
+    }
+    return null;
+}
+
+
+// --------------------------------------------------------------- the API ---
+
+print :: (format_string: string, args: .. Any, to_standard_error := false) -> (bytes_printed: s64) {
+    builder: String_Builder;
+    print_to_builder(*builder, format_string, ..args);
+    return write_builder(*builder, to_standard_error = to_standard_error);
+}
+
+// The formatted text in storage the caller owns, out of `context.allocator`.
+sprint :: (format_string: string, args: .. Any) -> string #must {
+    builder: String_Builder;
+    print_to_builder(*builder, format_string, ..args);
+    return builder_to_string(*builder);
+}
+
+// The formatted text in temporary storage, valid until the next
+// `reset_temporary_storage` (**L§10.4**). The builder's own buffers come from
+// there too, so a long `tprint` does not touch the context allocator.
+tprint :: (format_string: string, args: .. Any) -> string #must {
+    builder: String_Builder;
+    builder.allocator = temp;
+    print_to_builder(*builder, format_string, ..args);
+    return builder_to_string(*builder,, allocator = temp);
+}
+
+// Appends formatted text to a builder the caller already has, which is what
+// code generating source into one wants.
+print_to_builder :: (builder: *String_Builder, format_string: string, args: .. Any) -> bool {
+    return format_to_builder(builder, format_string, args);
+}
+
+// Several values one after another, with no format string between them.
+print_sequence_to_builder :: (builder: *String_Builder, args: .. Any) {
+    for args  append_any(builder, it);
+}
+
+// One value, formatted the way `print` would format it.
+to_string :: (value: Any, allocator := context.allocator) -> string {
+    builder: String_Builder;
+    append_any(*builder, value);
+    return builder_to_string(*builder,, allocator = allocator);
+}
+
+// --------------------------------------------------------- the formatters ---
+//
+// A formatter is a value that carries the thing to print *and* how to print
+// it, so it travels through a `%` slot as an ordinary argument:
+//
+//     print("%\n", formatInt(x, base = 16, minimum_digits = 4));
+//
+// `append_value` recognises the struct and prints what it describes rather
+// than the struct's own members.
+
 // a member and without them when it is the whole argument.
 print_item_to_builder :: (builder: *String_Builder, item: Any, inside_struct_or_array := false, may_be_uninitialized := false) {
     append_any(builder, item, inside_struct_or_array);
@@ -114,7 +227,7 @@ print_type_to_builder :: (builder: *String_Builder, info: *Type_Info) {
 // asked for is appended at the end, and a `%` with nothing left prints as
 // itself — neither is an error, since a diagnostic here would fire while the
 // program is trying to report something else.
-format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) -> s64 {
+format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) -> bool {
     next := 0;
     at := 0;
     while at < format.count {
@@ -149,7 +262,7 @@ format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) ->
         append_any(builder, args[next]);
         next += 1;
     }
-    return builder_string_length(builder);
+    return true;
 }
 
 // `nested` says the value is a member or an element rather than a whole
@@ -189,20 +302,66 @@ append_value :: (builder: *String_Builder, data: *void, info: *Type_Info, nested
         case .POINTER;   append_pointer(builder, (cast(**void) data).*);
         case .ENUM;      append_enum(builder, data, cast(*Type_Info_Enum) info);
         case .STRUCT;
+            record := cast(*Type_Info_Struct) info;
             // A formatter describes something else; printing its own members
             // would be printing the instructions rather than the value.
-            if info == type_info(FormatInt) {
-                append_format_int(builder, cast(*FormatInt) data);
+            if isFormatter(record) {
+                append_formatter(builder, data, record);
                 return;
             }
-            append_struct(builder, data, cast(*Type_Info_Struct) info);
-        case .ARRAY;     append_array(builder, data, cast(*Type_Info_Array) info);
+            // A program may take struct printing over entirely; returning
+            // false hands the value back to the default printer.
+            if context.print_style.struct_printer {
+                as_any: Any;
+                as_any.type = info;
+                as_any.value_pointer = data;
+                if context.print_style.struct_printer(builder, as_any, context.print_style.struct_printer_data)  return;
+            }
+            append_struct(builder, data, record, context.print_style.default_format_struct);
+        case .ARRAY;     append_array(builder, data, cast(*Type_Info_Array) info, context.print_style.default_format_array);
         case .ANY;       append_any(builder, (cast(*Any) data).*, nested);
         case .VOID;      append(builder, "void");
         case .PROCEDURE; append_pointer(builder, (cast(**void) data).*);
         case .TYPE;      append_type(builder, (cast(**Type_Info) data).*);
         case;            append(builder, "(unprintable)");
     }
+}
+
+// Which kind of formatter a struct is, and printing what it describes. The
+// `Formatter` member is always first, so the struct's own address is the
+// formatter's.
+append_formatter :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct) {
+    if info == type_info(FormatInt) {
+        append_format_int(builder, cast(*FormatInt) data);
+        return;
+    }
+    if info == type_info(FormatFloat) {
+        format := cast(*FormatFloat) data;
+        append_format_float(builder, format.value, format);
+        return;
+    }
+    if info == type_info(FormatStruct) {
+        format := cast(*FormatStruct) data;
+        inner := format.value;
+        if inner.type && inner.type.type == .STRUCT {
+            append_struct(builder, inner.value_pointer, cast(*Type_Info_Struct) inner.type, format.*);
+        } else {
+            append_any(builder, inner);
+        }
+        return;
+    }
+    if info == type_info(FormatArray) {
+        format := cast(*FormatArray) data;
+        inner := format.value;
+        if inner.type && inner.type.type == .ARRAY {
+            append_array(builder, inner.value_pointer, cast(*Type_Info_Array) inner.type, format.*);
+        } else {
+            append_any(builder, inner);
+        }
+        return;
+    }
+    // Some other struct that begins with a Formatter: print what it holds.
+    append_any(builder, (cast(*Formatter) data).value);
 }
 
 // ------------------------------------------------------------- the leaves ---
@@ -379,15 +538,38 @@ append_pointer :: (builder: *String_Builder, pointer: *void) {
 // decimal form always terminates; `Decimal` below gets there by doubling or
 // halving a digit array, which is what lets `1e300` print all three hundred of
 // its digits rather than an approximation of them.
+// A float goes through the same `FormatFloat` an explicit `formatFloat` would
+// use; an unadorned `%` takes the one in `context.print_style`.
 append_float :: (builder: *String_Builder, data: *void, info: *Type_Info) {
+    value: Any;
+    value.type = info;
+    value.value_pointer = data;
+    format := context.print_style.default_format_float;
+    append_format_float(builder, value, *format);
+}
+
+// Plain positional notation, never an exponent, to `trailing_width` decimal
+// places — six when it is -1 — and then the trailing zeros come off unless
+// asked to stay, so `7.25` prints as `7.25` rather than `7.250000`.
+//
+// The expansion is exact. A `float64` is a whole number of halves, so its
+// decimal form always terminates; `Decimal` below gets there by doubling or
+// halving a digit array, which is what lets `1e300` print all three hundred of
+// its digits rather than an approximation of them.
+append_format_float :: (builder: *String_Builder, value: Any, format: *FormatFloat) {
+    if !value.type || value.type.type != .FLOAT {
+        append_any(builder, value);
+        return;
+    }
+
     bits: u64;
-    if info.runtime_size == 4 {
+    if value.type.runtime_size == 4 {
         // The single is widened first; its exact value is a double too, so
         // nothing is lost and one path serves both.
-        wide := cast(float64) (cast(*float32) data).*;
+        wide := cast(float64) (cast(*float32) value.value_pointer).*;
         bits = (cast(*u64) *wide).*;
     } else {
-        bits = (cast(*u64) data).*;
+        bits = (cast(*u64) value.value_pointer).*;
     }
 
     SIGN_BIT      :: 0x8000_0000_0000_0000;
@@ -399,11 +581,23 @@ append_float :: (builder: *String_Builder, data: *void, info: *Type_Info) {
     exponent := cast(s64) ((bits & EXPONENT_MASK) >> MANTISSA_BITS);
     mantissa := bits & MANTISSA_MASK;
 
+    // What is written goes through a builder of its own first, so that `width`
+    // can pad it to a column.
+    inner: String_Builder;
+    inner.allocator = temp;
+
     // The sign is printed for a NaN too, which is what the reference does.
-    if negative  append(builder, #char "-");
+    if negative {
+        append(*inner, #char "-");
+    } else if format.positive_number_prefix == {
+        case .PLUS;  append(*inner, #char "+");
+        case .SPACE; append(*inner, #char " ");
+        case .NONE;  // Nothing.
+    }
 
     if exponent == 0x7ff {
-        append(builder, ifx mantissa then "NaN" else "Inf");
+        append(*inner, ifx mantissa then "NaN" else "Inf");
+        append_padded(builder, *inner, format.width);
         return;
     }
 
@@ -411,7 +605,8 @@ append_float :: (builder: *String_Builder, data: *void, info: *Type_Info) {
         // Subnormal, or zero: no implicit leading one, and the exponent is one
         // above what the stored zero suggests.
         if !mantissa {
-            append(builder, "0");
+            append(*inner, "0");
+            append_padded(builder, *inner, format.width);
             return;
         }
         exponent = 1;
@@ -429,12 +624,32 @@ append_float :: (builder: *String_Builder, data: *void, info: *Type_Info) {
         for 1..-power  decimal_halve(*decimal);
     }
 
-    places := context.print_style.default_float_digits;
-    if places < 0   places = 0;
+    places := ifx format.trailing_width >= 0 then cast(s64) format.trailing_width else 6;
     if places > 17  places = 17;
     decimal_round(*decimal, places);
-    decimal_trim(*decimal);
-    decimal_append(builder, *decimal);
+    decimal_pad(*decimal, places);
+
+    // The column is measured before the zeros come off, so `width` lines up a
+    // set of numbers by where their points sit rather than by their lengths.
+    padding := format.width - (decimal_length(*decimal, format) + builder_string_length(*inner));
+
+    if format.zero_removal == {
+        case .YES;                    decimal_trim(*decimal, 0);
+        case .ONE_ZERO_AFTER_DECIMAL; decimal_trim(*decimal, 1);
+        case .NO;                     // Keep what was asked for.
+    }
+
+    for 1..padding  append(builder, #char " ");
+    append(builder, builder_to_string(*inner,, allocator = temp));
+    decimal_append(builder, *decimal, format);
+}
+
+// Right-aligns what was built into a column `width` wide. A shorter width than
+// the text means the text wins; nothing is ever cut off.
+append_padded :: (builder: *String_Builder, inner: *String_Builder, width: s64) {
+    text := builder_to_string(inner,, allocator = temp);
+    for 1..width - text.count  append(builder, #char " ");
+    append(builder, text);
 }
 
 
@@ -489,17 +704,16 @@ append_enum :: (builder: *String_Builder, data: *void, info: *Type_Info_Enum) {
         }
     }
 
-    if context.print_style.enum_names {
-        for info.values {
-            if it == value {
-                append(builder, info.names[it_index]);
-                return;
-            }
+    for info.values {
+        if it == value {
+            append(builder, info.names[it_index]);
+            return;
         }
-        // A flags enum is usually a combination nobody declared a name for, so
-        // it is written as the names of the bits that are set.
-        if (info.enum_type_flags & .FLAGS) && append_flag_names(builder, value, info)  return;
     }
+    // A flags enum is usually a combination nobody declared a name for, so it
+    // is written as the names of the bits that are set.
+    if (info.enum_type_flags & .FLAGS) && append_flag_names(builder, value, info)  return;
+
     append_s64(builder, value);
 }
 
@@ -531,21 +745,64 @@ append_flag_names :: (builder: *String_Builder, value: s64, info: *Type_Info_Enu
     return written > 0;
 }
 
-append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct) {
-    append(builder, "{");
-    written := 0;
+// Short form runs the values together — `{1, 3, 5}`; long form names each one
+// — `{x = 1; y = 3; z = 5}`. Which is used depends on how many members there
+// are, and long form can put each on its own line.
+append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct, format: FormatStruct) {
+    printable := 0;
     for * member: info.members {
         // A constant has no storage in the value, so there is nothing here to
         // read for it (**L§17**).
         if member.flags & .CONSTANT  continue;
-        if written  append(builder, ", ");
-        written += 1;
-        append_value(builder, cast(*u8) data + member.offset_in_bytes, member.type, true);
+        printable += 1;
     }
-    append(builder, "}");
+
+    long := format.use_long_form_if_more_than_this_many_members < 0
+         || printable > format.use_long_form_if_more_than_this_many_members;
+    newlines := long && format.use_newlines_if_long_form;
+
+    if format.draw_type_name  append(builder, info.name);
+    append(builder, format.begin_string);
+
+    if newlines  context.print_style.indentation_depth += 1;
+
+    written := 0;
+    for * member: info.members {
+        if member.flags & .CONSTANT  continue;
+
+        // Long form puts a separator after every field, the last one included;
+        // short form only between them.
+        if written && !long  append(builder, format.short_form_separator_between_fields);
+        if newlines {
+            append(builder, #char "\n");
+            append_indentation(builder, *format);
+        }
+        written += 1;
+
+        if long {
+            append(builder, member.name);
+            append(builder, format.separator_between_name_and_value);
+        }
+        append_value(builder, cast(*u8) data + member.offset_in_bytes, member.type, true);
+        if long  append(builder, format.long_form_separator_between_fields);
+    }
+
+    if newlines {
+        context.print_style.indentation_depth -= 1;
+        append(builder, #char "\n");
+        append_indentation(builder, *format);
+    }
+    append(builder, format.end_string);
 }
 
-append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array) {
+// As many spaces as the current depth calls for.
+append_indentation :: (builder: *String_Builder, format: *FormatStruct) {
+    total := context.print_style.indentation_depth * format.indentation_width;
+    for 1..total  append(builder, #char " ");
+}
+
+// A long array is cut short rather than filling the terminal; -1 never stops.
+append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array, format: FormatArray) {
     count: s64;
     elements: *u8;
 
@@ -566,15 +823,52 @@ append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array) 
     if !elements  count = 0;
     stride := ifx info.element_type then info.element_type.runtime_size else 0;
 
-    append(builder, "[");
-    index := 0;
-    while index < count {
-        if index  append(builder, ", ");
-        append_value(builder, elements + index * stride, info.element_type, true);
-        index += 1;
+    limit := count;
+    stopped_early := false;
+    if format.stop_printing_after_this_many_elements >= 0 && count > format.stop_printing_after_this_many_elements {
+        limit = format.stop_printing_after_this_many_elements;
+        stopped_early = true;
     }
-    append(builder, "]");
+
+    append(builder, format.begin_string);
+    for 0..limit - 1 {
+        if it  append(builder, format.separator);
+        append_value(builder, elements + it * stride, info.element_type, true);
+    }
+    if limit && format.draw_separator_after_last_element  append(builder, format.separator);
+    if stopped_early  append(builder, format.printing_stopped_early_string);
+    append(builder, format.end_string);
 }
+
+// The public spelling of each, for a caller printing one thing by hand.
+print_array :: (builder: *String_Builder, any: Any, info_array: *Type_Info_Array, format: FormatArray, may_be_uninitialized := false) {
+    append_array(builder, any.value_pointer, info_array, format);
+}
+
+print_integer :: (builder: *String_Builder, any: Any, format: FormatInt) {
+    copy := format;
+    copy.value = any;
+    append_format_int(builder, *copy);
+}
+
+print_float :: (builder: *String_Builder, any: Any, format: FormatFloat) {
+    append_format_float(builder, any, *format);
+}
+
+print_bytes :: (a: *void, length: int, format_string := "% ") {
+    b := cast(*u8) a;
+    for 0..length - 1  print(format_string, formatInt(b[it], base = 16));
+    print("\n");
+}
+
+print_character :: (_c: u8) {
+    c := _c;
+    text: string;
+    text.data = *c;
+    text.count = 1;
+    write_string(text);
+}
+
 
 // ------------------------------------------------------- exact decimals ---
 //
@@ -686,15 +980,16 @@ decimal_round :: (d: *Decimal, places: s64) {
 }
 
 // Trailing zeros after the point carry no information, and neither does a
-// point with nothing after it.
-decimal_trim :: (d: *Decimal) {
-    while d.fraction > 0 && d.digits[d.count - 1] == 0 {
+// point with nothing after it. `keep_at_least` is what leaves `1.0` looking
+// like a float rather than like `1`.
+decimal_trim :: (d: *Decimal, keep_at_least: s64) {
+    while d.fraction > keep_at_least && d.digits[d.count - 1] == 0 {
         d.count -= 1;
         d.fraction -= 1;
     }
 }
 
-decimal_append :: (builder: *String_Builder, d: *Decimal) {
+decimal_append :: (builder: *String_Builder, d: *Decimal, format: *FormatFloat) {
     integer := d.count - d.fraction;
 
     // Leading zeros are dropped, but a number below one keeps the single zero
@@ -702,9 +997,43 @@ decimal_append :: (builder: *String_Builder, d: *Decimal) {
     start := 0;
     while start < integer - 1 && d.digits[start] == 0  start += 1;
 
-    for start..integer - 1  append(builder, cast(u8) (#char "0" + d.digits[it]));
+    written := integer - start;
+    for start..integer - 1 {
+        // Thousands are grouped from the right, so the first separator falls
+        // wherever the leading run leaves it.
+        if format.thousand_separators && it > start && (integer - it) % 3 == 0 {
+            append(builder, format.thousand_separator_character);
+        }
+        append(builder, cast(u8) (#char "0" + d.digits[it]));
+    }
+    if !written  append(builder, #char "0");
     if !d.fraction  return;
 
-    append(builder, #char ".");
+    append(builder, format.decimal_separator_character);
     for integer..d.count - 1  append(builder, cast(u8) (#char "0" + d.digits[it]));
+}
+
+// Fills the fraction out to `places` with zeros, which is what
+// `zero_removal = .NO` asks for.
+decimal_pad :: (d: *Decimal, places: s64) {
+    while d.fraction < places {
+        if d.count >= d.digits.count  return;
+        d.digits[d.count] = 0;
+        d.count += 1;
+        d.fraction += 1;
+    }
+}
+
+// How many characters `decimal_append` would write, so that a column can be
+// measured before the trailing zeros come off.
+decimal_length :: (d: *Decimal, format: *FormatFloat) -> s64 {
+    integer := d.count - d.fraction;
+    start := 0;
+    while start < integer - 1 && d.digits[start] == 0  start += 1;
+
+    total := integer - start;
+    if total <= 0  total = 1;
+    if format.thousand_separators && total > 3  total += (total - 1) / 3;
+    if d.fraction  total += 1 + d.fraction;
+    return total;
 }

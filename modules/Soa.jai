@@ -56,7 +56,7 @@ soa_get :: (soa: *$S, index: s64) -> S.Item {
     result: S.Item;
     #insert -> string {
         builder: String_Builder;
-        init_string_builder(*builder, temp);
+        builder.allocator = temp;
         info := cast(*Type_Info_Struct) S.Item;
         highest := -1;
         for * member: info.members {
@@ -74,7 +74,7 @@ soa_get :: (soa: *$S, index: s64) -> S.Item {
 soa_set :: (soa: *$S, index: s64, value: S.Item) {
     #insert -> string {
         builder: String_Builder;
-        init_string_builder(*builder, temp);
+        builder.allocator = temp;
         info := cast(*Type_Info_Struct) S.Item;
         highest := -1;
         for * member: info.members {

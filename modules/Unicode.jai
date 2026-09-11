@@ -173,7 +173,7 @@ to_code_points :: (s: string, allocator := context.allocator) -> [] u32 {
 // The string those code points encode.
 from_code_points :: (points: [] u32, allocator := context.allocator) -> string {
     builder: String_Builder;
-    init_string_builder(*builder, temp);
+    builder.allocator = temp;
     buffer: [4] u8;
     for points {
         used := encode(buffer.data, it);
@@ -183,7 +183,7 @@ from_code_points :: (points: [] u32, allocator := context.allocator) -> string {
         piece.count = used;
         append(*builder, piece);
     }
-    return builder_to_string(*builder, allocator);
+    return builder_to_string(*builder,, allocator = allocator);
 }
 
 // `for characters(s)` walks code points where `for s` walks bytes.

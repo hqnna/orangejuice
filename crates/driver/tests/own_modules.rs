@@ -111,19 +111,22 @@ fn print_formats_what_the_type_table_describes() {
 #[test]
 fn a_context_member_a_module_added_keeps_the_default_it_declared() {
   // `__jai_runtime_init` builds the context from a declaration without a
+  // `__jai_runtime_init` builds the context from a declaration without a
   // value, so `#add_context` members arrive with their defaults rather than
-  // zeroed (**L§4.6**, **L§10.2**). Printing a float is what shows it: the
-  // digit count lives in `Basic.print_style`.
+  // zeroed (**L§4.6**, **L§10.2**). `Print_Style`'s own defaults are nested
+  // two structs deep, which is what makes this worth checking: the pointer
+  // base of `default_format_absolute_pointer` is set in the declaration.
   let Some(output) = build_and_run(
     "#import \"Basic\";\n\
      main :: () {\n  \
-       print(\"%\\n\", context.print_style.default_float_digits);\n  \
+       print(\"%\\n\", context.print_style.default_format_absolute_pointer.base);\n  \
+       print(\"%\\n\", context.print_style.default_format_array.stop_printing_after_this_many_elements);\n  \
        print(\"%\\n\", 0.5);\n\
      }\n",
   ) else {
     return;
   };
-  assert_eq!(output, "6\n0.5\n");
+  assert_eq!(output, "16\n100\n0.5\n");
 }
 
 #[test]

@@ -291,7 +291,7 @@ make_one_directory :: (path: string) -> bool {
 // under /proc — read until it stops giving anything.
 read_until_end :: (fd: s32, allocator: Allocator, zero_terminated := false) -> (contents: string, ok: bool) {
     builder: String_Builder;
-    init_string_builder(*builder, temp);
+    builder.allocator = temp;
 
     buffer: [4096] u8;
     while true {
@@ -312,7 +312,7 @@ read_until_end :: (fd: s32, allocator: Allocator, zero_terminated := false) -> (
     // count, so it sits in the same allocation without being part of the
     // string.
     if zero_terminated  append(*builder, cast(u8) 0);
-    result := builder_to_string(*builder, allocator);
+    result := builder_to_string(*builder,, allocator = allocator);
     if zero_terminated && result.count  result.count -= 1;
     return result, true;
 }

@@ -159,7 +159,7 @@ receive :: (s: Socket, buffer: [] u8) -> (count: s64, ok: bool) {
 // Everything until the other end closes, in temporary storage.
 receive_all :: (s: Socket) -> (data: string, ok: bool) {
     builder: String_Builder;
-    init_string_builder(*builder, temp);
+    builder.allocator = temp;
 
     buffer: [4096] u8;
     while true {
@@ -171,5 +171,5 @@ receive_all :: (s: Socket) -> (data: string, ok: bool) {
         piece.count = n;
         append(*builder, piece);
     }
-    return builder_to_string(*builder, temp), true;
+    return builder_to_string(*builder,, allocator = temp), true;
 }

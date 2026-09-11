@@ -31,7 +31,7 @@ Is_Set :: struct (T: Type) {
         info := type_info(T);
 
         builder: String_Builder;
-        init_string_builder(*builder, temp);
+        builder.allocator = temp;
         for * member: info.members {
             if should_skip(member)  continue;
             print_to_builder(*builder, "    % := false;\n", member.name);
@@ -173,7 +173,7 @@ show_help :: ($T: Type, flags := Default_Argument_Flags, help_triggers: [] strin
         }
 
         builder: String_Builder;
-        init_string_builder(*builder, temp);
+        builder.allocator = temp;
         print_to_builder(*builder, "-%: ", it);
         // The descriptions line up in a column, so the padding goes after the
         // colon rather than before it.
@@ -181,7 +181,7 @@ show_help :: ($T: Type, flags := Default_Argument_Flags, help_triggers: [] strin
             for 1..widest - it.count  append(*builder, #char " ");
         }
         append(*builder, note);
-        array_add(*lines, builder_to_string(*builder, temp));
+        array_add(*lines, builder_to_string(*builder,, allocator = temp));
     }
 
     if help_triggers.count {
