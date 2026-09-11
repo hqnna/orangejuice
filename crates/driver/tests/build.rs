@@ -5596,3 +5596,45 @@ fn initializer_of_a_type_that_is_all_zeroes_is_null() {
   };
   assert_eq!(built.output, "false true\n0 7\n");
 }
+
+#[test]
+fn no_split_builds_one_object_and_output_ir_writes_the_module() {
+  // `llvm_options.enable_split_modules` and `output_llvm_ir` (**C§4**), which
+  // `-no_split` and `-output_ir` set. Both used to parse and then do nothing.
+  if !linker_is_available() {
+    return;
+  }
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("program.jai");
+  std::fs::write(
+    &path,
+    format!("{PRELUDE}\nmain :: () {{ put(\"ok\\n\"); }}\n"),
+  )
+  .expect("the input should be writable");
+
+  // SAFETY: cargo runs each integration test binary in its own process.
+  unsafe {
+    oj_testsupport::use_own_modules();
+  }
+  let mut options = oj_driver::BuildOptions::new();
+  options.enable_split_modules = false;
+  options.output_llvm_ir = true;
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(
+    !report.failed,
+    "the program should build, but:\n{}",
+    report.diagnostics.join("")
+  );
+
+  let build = directory.path().join(".build");
+  let objects: Vec<_> = std::fs::read_dir(&build)
+    .expect("the build directory should exist")
+    .filter_map(Result::ok)
+    .filter(|entry| entry.path().extension().is_some_and(|kind| kind == "o"))
+    .collect();
+  assert_eq!(objects.len(), 1, "-no_split builds one object");
+
+  let listing = std::fs::read_to_string(build.join("program.ll"))
+    .expect("-output_ir writes the module beside the object");
+  assert!(listing.contains("ModuleID"), "{listing}");
+}

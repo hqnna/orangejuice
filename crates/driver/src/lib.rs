@@ -541,10 +541,28 @@ fn run_workspace_once(
       let object_name = object.display().to_string();
       // An object-file build *is* the object the caller asked for, so there is
       // nothing to split it across; everything else is linked, and may be.
+      // `llvm_options.enable_split_modules` is what `-no_split` turns off
+      // (**C§4**), which is one module for the whole program.
       let units = match options.output_type {
         oj_link::OutputType::ObjectFile => 1,
+        _ if !options.enable_split_modules => 1,
         _ => oj_codegen::default_units(&lowered.program),
       };
+      // `llvm_options.output_llvm_ir` writes the module beside the object, so
+      // that what the back end was given can be read after a build (**C§4**).
+      // One module, whatever the split would have been: a listing is for
+      // reading.
+      if options.output_llvm_ir {
+        match oj_codegen::compile(&lowered.program, &codegen, oj_codegen::Output::LlvmIr) {
+          Ok(listing) => {
+            let path = object.with_extension("ll");
+            if let Err(error) = std::fs::write(&path, listing) {
+              return Report::failure(format!("could not write {}: {error}", path.display()));
+            }
+          }
+          Err(error) => return Report::failure(error),
+        }
+      }
       let objects = match oj_codegen::compile_objects(&lowered.program, &codegen, &object, units) {
         Ok(objects) => objects,
         Err(error) => return Report::failure(error),

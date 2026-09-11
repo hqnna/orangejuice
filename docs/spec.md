@@ -148,11 +148,11 @@ Effects name `Build_Options` fields (**C§4**) on the target workspace unless st
 | `-quiet` | — | `text_output_flags = 0` |
 | `-x64` | — | `backend = .X64`; orangejuice says the back end is not one it has and uses LLVM (§2) |
 | `-llvm` | — | `backend = .LLVM` |
-| `-no_cwd` | — | skip the initial `set_working_directory` to the first file's directory |
-| `-no_dce` | — | `dead_code_elimination = .NONE` |
+| `-no_cwd` | — | skip the initial `set_working_directory` to the first file's directory; orangejuice never changes directory, so this is a no-op and the compiler behaves as if it were always given |
+| `-no_dce` | — | `dead_code_elimination = .NONE`; accepted no-op — orangejuice lowers from the entry point outwards (§10), so there is no pass to turn off |
 | `-no_split` | — | `llvm_options.enable_split_modules = false` |
-| `-output_ir` | — | `llvm_options.output_llvm_ir` and `output_llvm_ir_before_optimizations` |
-| `-debug_for` | — | `debug_for_expansions = true` |
+| `-output_ir` | — | `llvm_options.output_llvm_ir`: the module is written beside the object as `<name>.ll`, in one piece whatever the split would have been |
+| `-debug_for` | — | `debug_for_expansions = true`; accepted no-op, since a `for_expansion` is spliced into its caller and already carries that code's own line numbers |
 | `-msvc_format` | — | `use_visual_studio_message_format = true`: `path(line,col): severity: message` (**C§12**) |
 | `-natvis` | — | `use_natvis_compatible_types = true` (accepted no-op, §2) |
 | `-no_backtrace_on_crash` | — | `backtrace_on_crash = .OFF` |
@@ -166,7 +166,7 @@ Effects name `Build_Options` fields (**C§4**) on the target workspace unless st
 | `-run EXPR` | required | `add_build_string("#run EXPR;")` |
 | `-import_dir DIR` | required | prepended to `import_path`, relative to the first file's directory |
 | `-context_size N` | required | `context_size_max`; must be ≥ `size_of(Context_Base)` and ≤ `0x4_0000` |
-| `-debugger` | — | reference: interactive bytecode debugger; orangejuice: recorded, and a compile-time failure prints its stack trace (§2) |
+| `-debugger` | — | reference: interactive bytecode debugger; orangejuice has no interpreter to stop, and a compile-time failure prints its stack trace whether or not this is given (§2) |
 | anything else | — | offered to each plugin's `handle_one_option`, then `Unknown argument '%'.` and exit 1 |
 
 Missing arguments are reported as `Command line: Missing argument to <option>.` and exit 1; the other command-line diagnostics (`-context_size` out of range, plugin lists disagreeing between the two passes, no input files) are quoted in **C§2.1** and each gets a negative test.
