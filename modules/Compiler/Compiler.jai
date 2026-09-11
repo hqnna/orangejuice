@@ -1221,6 +1221,17 @@ compiler_get_nodes :: (code: Code) -> (root: *Code_Node, expressions: [] *Code_N
 compiler_get_code  :: (node: *Code_Node) -> Code #compiler;
 
 compiler_report :: (message: string, loc := #caller_location, mode := Report.ERROR) #compiler;
+
+// The same by filename and position, for a plugin reporting about a node
+// rather than about where it stands itself.
+compiler_report :: (filename: string, line_number: s64, character_number: s64, error_text: string, mode := Report.ERROR) {
+    loc: Source_Code_Location;
+    loc.fully_pathed_filename = filename;
+    loc.line_number           = line_number;
+    loc.character_number      = character_number;
+
+    compiler_report(error_text, loc, mode);
+}
 compiler_report_errors_for_unresolved_identifiers :: (w: Workspace) #compiler;
 compiler_report_errors_for_untyped_declarations_with_these_notes :: (w: Workspace, notes: [] string) #compiler;
 

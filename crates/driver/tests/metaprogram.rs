@@ -1830,3 +1830,56 @@ fn a_warning_in_a_watched_workspace_is_not_reported_as_an_error() {
   };
   assert_built(&report, &fixture.path("warned"));
 }
+
+#[test]
+fn a_plain_error_report_stops_the_metaprogram() {
+  // `Report.ERROR` stops the workspace at the next opportunity, so nothing a
+  // metaprogram says after one is ever printed (**C§3.3**). That is why the
+  // reference reports one bad format string rather than every one in a file,
+  // and it is what `ERROR_CONTINUABLE` exists to opt out of.
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#run {\n  \
+       compiler_report(\"the first complaint\");\n  \
+       compiler_report(\"the second complaint\");\n  \
+       compiler_report(\"an afterthought\", mode = .WARNING);\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(report.failed);
+  let reported = report.diagnostics.join("");
+  assert!(
+    reported.contains("Error: the first complaint"),
+    "{reported}"
+  );
+  assert!(!reported.contains("the second complaint"), "{reported}");
+  assert!(!reported.contains("an afterthought"), "{reported}");
+}
+
+#[test]
+fn error_continuable_lets_the_next_report_through() {
+  let fixture = Fixture::new();
+  let Some(report) = build(
+    &fixture,
+    "#run {\n  \
+       compiler_report(\"the first complaint\", mode = .ERROR_CONTINUABLE);\n  \
+       compiler_report(\"the second complaint\", mode = .ERROR_CONTINUABLE);\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(report.failed);
+  let reported = report.diagnostics.join("");
+  assert!(
+    reported.contains("Error: the first complaint"),
+    "{reported}"
+  );
+  assert!(
+    reported.contains("Error: the second complaint"),
+    "{reported}"
+  );
+}

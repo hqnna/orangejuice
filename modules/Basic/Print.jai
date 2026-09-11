@@ -164,14 +164,14 @@ print :: (format_string: string, args: .. Any, to_standard_error := false) -> (b
     builder: String_Builder;
     print_to_builder(*builder, format_string, ..args);
     return write_builder(*builder, to_standard_error = to_standard_error);
-}
+} @PrintLike
 
 // The formatted text in storage the caller owns, out of `context.allocator`.
 sprint :: (format_string: string, args: .. Any) -> string #must {
     builder: String_Builder;
     print_to_builder(*builder, format_string, ..args);
     return builder_to_string(*builder);
-}
+} @PrintLike
 
 // The formatted text in temporary storage, valid until the next
 // `reset_temporary_storage` (**L§10.4**). The builder's own buffers come from
@@ -181,7 +181,7 @@ tprint :: (format_string: string, args: .. Any) -> string #must {
     builder.allocator = temp;
     print_to_builder(*builder, format_string, ..args);
     return builder_to_string(*builder,, allocator = temp);
-}
+} @PrintLike
 
 // Appends formatted text to a builder the caller already has, which is what
 // code generating source into one wants.

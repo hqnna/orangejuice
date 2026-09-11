@@ -1159,6 +1159,17 @@ impl Meta {
   }
 
   pub fn report(&mut self, report: Report) {
+    // A plain `ERROR` stops the workspace, so nothing a metaprogram says after
+    // one is ever printed (**C§3.3**) — which is why the reference reports one
+    // bad format string and not every one in the file. `ERROR_CONTINUABLE` is
+    // the mode for a report that means to be followed by another.
+    if self
+      .reports
+      .iter()
+      .any(|earlier| earlier.mode == ReportMode::Error)
+    {
+      return;
+    }
     self.reports.push(report);
   }
 

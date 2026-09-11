@@ -566,11 +566,11 @@ log :: (format: string, args: ..Any, loc := #caller_location, flags := Log_Flags
     info.user_flags = user_flags;
     info.section = section;
     if context.logger  context.logger(message, context.logger_data, info);
-}
+} @PrintLike
 
 log_error :: (format: string, args: ..Any, loc := #caller_location) {
     log(format, ..args, loc = loc, flags = .ERROR);
-}
+} @PrintLike
 
 // ------------------------------------------------------------ assertions ---
 
