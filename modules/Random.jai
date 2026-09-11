@@ -1,120 +1,176 @@
 //
-// Random numbers from a generator the program shares.
+// A 128-bit multiplicative congruential generator.
 //
-// The state is a global rather than something threaded through every call, so
-// `random_get()` reads like the convenience it is. A program that wants
-// reproducibility calls `random_seed` at the start; a program that wants two
-// independent streams uses `PCG` directly.
+// The state is one 128-bit odd number, multiplied by a fixed 128-bit factor at
+// every step; what comes out is the top half. An MCG's low bits are poor — the
+// bottom bit never changes at all — which is exactly why the *high* word is
+// what is returned and why the float conversions take bits from the top.
 //
-// xoshiro256**: four 64-bit words, a period of 2^256-1, and better spread than
-// the linear congruential generators it replaces. Not cryptographic.
+// It is the "today's 64-bit minimal standard" generator: small, fast, and good
+// enough for anything that is not cryptography. It is not cryptography.
+//
+// The state lives in the context, so two threads each get their own and a
+// program that wants a reproducible stream can hold one of its own instead.
 //
 
-#import "PCG";
-
-#scope_module
+#import "Basic";
+#import "Bit_Operations";
 
 Random_State :: struct {
-    s: [4] u64;
+    low:  u64;
+    high: u64;
 }
 
-// Seeded to something arbitrary but fixed, so a program that never calls
-// `random_seed` still gets the same run twice — which is what makes a failure
-// reproducible.
-global_state: Random_State = .{.[
-    0x853c_49e6_748f_ea9b,
-    0xda3e_39cb_94b9_5bdb,
-    0x9e37_79b9_7f4a_7c15,
-    0xbf58_476d_1ce4_e5b9,
-]};
+// One step, and the high half of the new state.
+random_get :: (state: *Random_State) -> u64 {
+    FACTOR_HIGH : u64 : 0x0fc9_4e3b_f4e9_ab32;
+    FACTOR_LOW  : u64 : 0x8664_58cd_56f5_e605;
 
-#scope_export
+    // `state = state * FACTOR` over 128 bits. The product of the two high
+    // halves would land entirely above the top and is dropped.
+    product_high, product_low := multiply_64bits_with_overflow(state.low, FACTOR_LOW);
 
-// Spreads one number over the four words with SplitMix64, so that seeding with
-// 0 or 1 does not leave most of the state empty.
-random_seed :: (seed: u64) {
-    z := seed;
-    for 0..3 {
-        z += 0x9e37_79b9_7f4a_7c15;
-        x := z;
-        x = (x ^ (x >> 30)) * 0xbf58_476d_1ce4_e5b9;
-        x = (x ^ (x >> 27)) * 0x94d0_49bb_1331_11eb;
-        global_state.s[it] = x ^ (x >> 31);
+    // The old `low` is needed here, so the high word is computed first.
+    state.high = product_high + (state.high * FACTOR_LOW) + (state.low * FACTOR_HIGH);
+    state.low = product_low;
+    return state.high;
+}
+
+random_get :: inline () -> u64 {
+    return random_get(*context.random_state);
+}
+
+// The state must be odd to have full period, so the seed goes in the high word
+// and the low one is set to 1.
+random_seed :: inline (state: *Random_State, new_seed: u64) {
+    state.low = 1;
+    state.high = new_seed;
+}
+
+random_seed :: inline (new_seed: u64) {
+    random_seed(*context.random_state, new_seed);
+}
+
+random_seed :: inline (state: *Random_State, new_seed: Random_State) {
+    state.* = new_seed;
+}
+
+random_seed :: inline (new_seed: Random_State) {
+    random_seed(*context.random_state, new_seed);
+}
+
+// ------------------------------------------------------------ as a float ---
+//
+// These take 24 bits rather than all 64: a `float` cannot represent every
+// integer past 2^24, so dividing by a bigger range would introduce a bias the
+// generator does not have.
+
+random_get_zero_to_one :: inline (state: *Random_State) -> float {
+    randint := random_get(state) & MASK;
+    return randint / cast(float) MASK;
+}
+
+random_get_zero_to_one :: inline () -> float {
+    return random_get_zero_to_one(*context.random_state);
+}
+
+// Half-open: dividing by the range rather than by the largest value in it
+// means 1.0 is never produced.
+random_get_zero_to_one_open :: inline (state: *Random_State) -> float {
+    randint := random_get(state) & MASK;
+    return randint / cast(float) RANDRANGE;
+}
+
+random_get_zero_to_one_open :: inline () -> float {
+    return random_get_zero_to_one_open(*context.random_state);
+}
+
+// The full-precision versions. This one builds the double's bits directly, so
+// that every representable value in [0, 1] can come out — including the very
+// small ones a plain divide can never reach.
+random_get_zero_to_one_new :: (state: *Random_State) -> float64 {
+    Bits :: union {
+        d: float64;
+        x: u64;
     }
+
+    // The number of low zero bits, which is how the exponent is chosen.
+    ctz :: inline (x: u64) -> s32 {
+        result := bit_scan_forward(x);
+        if result == 0  return 64;
+        return cast(s32) (result - 1);
+    }
+
+    bits: Bits;
+    bits.x = random_get(state);
+    e := ctz(bits.x) - 11;
+    // A mantissa with room to spare means the exponent needs another draw to
+    // decide how far down it goes.
+    if e >= 0  e = ctz(random_get(state));
+
+    bits.x = (((bits.x >> 11) + 1) >> 1) - ((cast,no_check(u64) e - 1011) << 52);
+    return bits.d;
 }
 
-random_get :: () -> u64 {
-    s := *global_state.s;
+random_get_zero_to_one_new :: inline () -> float64 {
+    return random_get_zero_to_one_new(*context.random_state);
+}
 
-    result := rotate_left(s.*[1] * 5, 7) * 9;
-    t := s.*[1] << 17;
+random_get_zero_to_one_open_new :: (state: *Random_State) -> float64 {
+    u := random_get(state) >> 11;
+    return u * 0h3ca0_0000_0000_0000;  // 2^-53.
+}
 
-    s.*[2] ^= s.*[0];
-    s.*[3] ^= s.*[1];
-    s.*[1] ^= s.*[2];
-    s.*[0] ^= s.*[3];
-    s.*[2] ^= t;
-    s.*[3] = rotate_left(s.*[3], 45);
+random_get_zero_to_one_open_new :: inline () -> float64 {
+    return random_get_zero_to_one_open_new(*context.random_state);
+}
 
+// Anywhere in [min, max]. The two may be given either way round.
+random_get_within_range :: inline (state: *Random_State, min: float, max: float) -> float {
+    randint := random_get(state) & MASK;
+    result := min + (randint / cast(float) MASK) * (max - min);
+
+    // The multiply can land a hair outside the range it was scaled into.
+    if result > max  result = max;
+    if result < min  result = min;
     return result;
 }
 
-// In [0, limit). Rejection sampling, so the distribution stays flat however
-// `limit` divides 2^64.
-random_get_within_range :: (limit: u64) -> u64 {
-    if limit == 0  return 0;
-    threshold := (~limit + 1) % limit;   // 2^64 % limit
-    while true {
-        value := random_get();
-        if value >= threshold  return value % limit;
-    }
-    return 0;
+random_get_within_range :: inline (min: float, max: float) -> float {
+    return random_get_within_range(*context.random_state, min, max);
 }
 
-// In [low, high]. An inverted range is treated as the range it names.
-random_get_within_range :: (low: s64, high: s64) -> s64 {
-    lo := low;
-    hi := high;
-    if hi < lo { t := lo; lo = hi; hi = t; }
-    span := cast(u64) (hi - lo) + 1;
-    return lo + cast(s64) random_get_within_range(span);
-}
+// ------------------------------------------------------------- over arrays ---
 
-// In [0, 1). 53 bits is what a float64 holds exactly.
-random_get_zero_to_one :: () -> float64 {
-    return cast(float64) (random_get() >> 11) * (1.0 / 9007199254740992.0);
-}
-
-random_get_zero_to_one_open :: () -> float64 {
-    // Never exactly 0, for callers dividing by it.
-    return (cast(float64) (random_get() >> 11) + 0.5) * (1.0 / 9007199254740992.0);
-}
-
-// Fisher-Yates: every permutation equally likely, in place.
+// Fisher-Yates: each element is swapped with one drawn from the part of the
+// array that has not been placed yet, which makes every permutation equally
+// likely.
 shuffle :: (array: [] $T) {
     if array.count < 2  return;
-    index := array.count - 1;
-    while index > 0 {
-        pick := cast(s64) random_get_within_range(cast(u64) (index + 1));
-        temporary := array[index];
-        array[index] = array[pick];
-        array[pick] = temporary;
-        index -= 1;
+    at := array.count - 1;
+    while at > 0 {
+        pick := cast(s64) (random_get() % cast(u64) (at + 1));
+        array[at], array[pick] = array[pick], array[at];
+        at -= 1;
     }
 }
 
 random_choice :: (array: [] $T) -> (value: T, ok: bool) {
-    if !array.count {
-        empty: T;
-        return empty, false;
-    }
-    return array[random_get_within_range(cast(u64) array.count)], true;
+    empty: T;
+    if !array.count  return empty, false;
+    return array[cast(s64) (random_get() % cast(u64) array.count)], true;
 }
 
-#scope_module
+#scope_file
 
-rotate_left :: (value: u64, amount: u64) -> u64 {
-    shift := amount & 63;
-    if shift == 0  return value;
-    return (value << shift) | (value >> (64 - shift));
-}
+// A float cannot represent every integer past 2^24, so the float conversions
+// draw from that range rather than from all 64 bits.
+RANDRANGE : u32 : 1 << 24;
+MASK :: RANDRANGE - 1;
+#assert (RANDRANGE & MASK) == 0;
+
+#scope_export
+
+// The state every argument-less call uses. Starting it at an arbitrary odd
+// number means a program that never seeds still gets a usable stream.
+#add_context random_state := Random_State.{1, 0};

@@ -14,7 +14,8 @@ intro_sort :: (array: [] $T, compare: (T, T) -> $R) {
     if array.count < 2  return;
     // 2·floor(log2(n)) is the usual limit: deep enough that a well-behaved
     // input never reaches it, shallow enough to cap the damage.
-    limit := 2 * bit_scan_reverse(cast(u64) array.count);
+    // `bit_scan_reverse` is one past the top bit, so this is 2*floor(log2 n).
+    limit := 2 * (bit_scan_reverse(cast(u64) array.count) - 1);
     sort_range(array, 0, array.count - 1, limit, compare);
 }
 
@@ -145,4 +146,24 @@ intro_sort :: (array: [] $T, begin: s64, end: s64, compare: (T, T) -> $R) {
     if last > array.count  last = array.count;
     if last - first < 2  return;
     intro_sort(array_view(array, first, last - first), compare);
+}
+
+// Straight insertion sort. Quadratic, and the fastest thing there is on a
+// nearly-sorted or very short run — which is why `intro_sort` finishes with it.
+insertion_sort :: inline (array: [] $T, f: (T, T) -> int) {
+    insertion_sort(array, 0, array.count, f);
+}
+
+insertion_sort :: (array: [] $T, begin: int, end: int, f: (T, T) -> int) {
+    first := max(begin, 0);
+    last := min(end, array.count);
+    for index: first + 1..last - 1 {
+        value := array[index];
+        at := index - 1;
+        while at >= first && f(array[at], value) > 0 {
+            array[at + 1] = array[at];
+            at -= 1;
+        }
+        array[at + 1] = value;
+    }
 }

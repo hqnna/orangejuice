@@ -71,3 +71,32 @@ crc_table :: () -> [] u32 {
     result.count = table_storage.count;
     return result;
 }
+
+// The 64-bit variant, ECMA-182's polynomial. The same shift-and-xor as the
+// 32-bit one, over a table built the same way.
+crc64 :: (s: string) -> u64 {
+    crc: u64 = 0xffff_ffff_ffff_ffff;
+    for 0..s.count - 1 {
+        crc = CRC64_TABLE[(crc ^ s[it]) & 0xff] ^ (crc >> 8);
+    }
+    return crc ^ 0xffff_ffff_ffff_ffff;
+}
+
+#scope_module
+
+CRC64_POLYNOMIAL :: 0xC96C_5795_D787_0F42;
+
+CRC64_TABLE :: #run -> [256] u64 {
+    table: [256] u64;
+    for byte: 0..255 {
+        remainder := cast(u64) byte;
+        for 1..8 {
+            if remainder & 1  remainder = (remainder >> 1) ^ CRC64_POLYNOMIAL;
+            else              remainder = remainder >> 1;
+        }
+        table[byte] = remainder;
+    }
+    return table;
+};
+
+#scope_export

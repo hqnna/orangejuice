@@ -166,3 +166,11 @@ pool_advance :: (pool: *Flat_Pool, wanted: s64) -> bool {
     pool.allocator = pool_allocator(pool);
     return true;
 }
+
+// The name this module answers to when an allocator is asked what it is.
+CAPS_VERSION_STRING :: "modules/Flat_Pool";
+
+// The older spelling of `deinit`.
+fini :: (pool: *Flat_Pool) {
+    deinit(pool);
+}

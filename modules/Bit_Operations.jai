@@ -50,16 +50,18 @@ count_trailing_zeros :: (value: u64) -> s64 {
     return count;
 }
 
-// The index of the highest set bit, or -1 for zero.
-bit_scan_reverse :: (value: u64) -> s64 {
-    if value == 0  return -1;
-    return 63 - count_leading_zeros(value);
+// One *plus* the index of the highest set bit, searching from the top down.
+// Zero means the input had no bits set, which is what leaves every real answer
+// positive and needs no sentinel.
+bit_scan_reverse :: (value: u64) -> s32 {
+    if value == 0  return 0;
+    return cast(s32) (64 - count_leading_zeros(value));
 }
 
-// The index of the lowest set bit, or -1 for zero.
-bit_scan_forward :: (value: u64) -> s64 {
-    if value == 0  return -1;
-    return count_trailing_zeros(value);
+// One plus the index of the lowest set bit, searching from the bottom up.
+bit_scan_forward :: (value: u64) -> s32 {
+    if value == 0  return 0;
+    return cast(s32) (count_trailing_zeros(value) + 1);
 }
 
 rotate_left :: (value: u64, amount: u64) -> u64 {
@@ -99,4 +101,28 @@ is_power_of_two :: (value: u64) -> bool {
 next_power_of_two :: (value: u64) -> u64 {
     if value <= 1  return 1;
     return cast(u64) 1 << cast(u64) (64 - count_leading_zeros(value - 1));
+}
+
+// Whether two runs of bytes are the same.
+bits_equal :: inline (a: *void, b: *void, length_in_bytes: s64) -> bool #deprecated "Do this directly; this is too trivial to burden the Bit_Operations module with." {
+    return memcmp(a, b, length_in_bytes) == 0;
+}
+
+bits_equal :: inline (a: *$T, b: *T) -> bool #deprecated "Do this directly; this is too trivial to burden the Bit_Operations module with." {
+    return memcmp(a, b, size_of(T)) == 0;
+}
+
+// Reverses the bytes of whatever it is given, where it stands.
+byte_swap_in_place :: (input: *$T) #expand {
+    input.* = byte_swap(input.*);
+}
+
+// The offset of the first byte that differs, or `n` when they all match.
+first_different_byte :: (a: *void, b: *void, n: u64) -> u64 #deprecated "Copy this into your own project if you want it; it's going away." {
+    left := cast(*u8) a;
+    right := cast(*u8) b;
+    for 0..cast(s64) n - 1 {
+        if left[it] != right[it]  return cast(u64) it;
+    }
+    return n;
 }

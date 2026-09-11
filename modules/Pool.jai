@@ -241,3 +241,27 @@ pool_free_list :: (pool: *Pool, list: **Memblock) {
     }
     list.* = null;
 }
+
+// The older spelling of the block size, and the overhead a block carries.
+POOL_BUCKET_SIZE_DEFAULT :: POOL_BLOCK_SIZE_DEFAULT;
+HEADER_SIZE :: size_of(Memblock);
+
+// How much the pool is holding: the bytes inside its blocks, and how many
+// oversized allocations sit outside them.
+calculate_used_memory :: (pool: Pool) -> (inband_size: s64, outband_count: s64) {
+    inband := 0;
+    block := pool.used_memblocks;
+    while block {
+        inband += block.total_size;
+        block = block.next;
+    }
+    if pool.current_memblock  inband += pool.current_memblock.total_size;
+
+    outband := 0;
+    extra := pool.out_of_band_allocations;
+    while extra {
+        outband += 1;
+        extra = extra.next;
+    }
+    return inband, outband;
+}

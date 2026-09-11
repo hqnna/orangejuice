@@ -10,6 +10,8 @@
 // recursed into first so the stack stays logarithmic.
 //
 
+#import "Basic";
+
 quick_sort :: (array: [] $T, compare: (T, T) -> $R) {
     if array.count < 2  return;
     sort_range(array, 0, array.count - 1, compare);
@@ -134,4 +136,43 @@ median_of_three :: (array: [] $T, low: s64, high: s64, compare: (T, T) -> $R) ->
     if compare(b, c) > 0 { b = c; }
     if compare(a, b) > 0 { b = a; }
     return b;
+}
+
+// The simplest sort there is: walk the array swapping neighbours until a pass
+// changes nothing. Quadratic, and here for the cases where that does not
+// matter and clarity does.
+bubble_sort :: (array: [] $T, f: (T, T) -> s64) {
+    if array.count < 2  return;
+    last := array.count - 1;
+    while last > 0 {
+        swapped := -1;
+        for 0..last - 1 {
+            if f(array[it], array[it + 1]) > 0 {
+                array[it], array[it + 1] = array[it + 1], array[it];
+                swapped = it;
+            }
+        }
+        if swapped < 0  break;
+        // Everything past the last swap is already in place.
+        last = swapped;
+    }
+}
+
+// The comparison procedures a sort wants for the two commonest element types.
+compare_floats :: (a: float, b: float) -> s64 {
+    if a < b  return -1;
+    if a > b  return 1;
+    return 0;
+}
+
+compare_strings :: (a: string, b: string) -> s64 {
+    // strcmp's semantics: -1, 0 or 1, not the difference.
+    shared := min(a.count, b.count);
+    for 0..shared - 1 {
+        if a[it] > b[it]  return 1;
+        if a[it] < b[it]  return -1;
+    }
+    if a.count > b.count  return 1;
+    if a.count < b.count  return -1;
+    return 0;
 }

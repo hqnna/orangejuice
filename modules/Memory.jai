@@ -66,3 +66,10 @@ find_byte :: (haystack: *u8, count: s64, byte: u8) -> s64 {
     for 0..count - 1  if haystack[it] == byte  return it;
     return -1;
 }
+
+// Bytes from one place to another. The ranges must not overlap; use
+// `memmove`-style copying when they might.
+copy :: (destination: *void, source: *void, count: s64) {
+    if count <= 0  return;
+    memcpy(destination, source, count);
+}
