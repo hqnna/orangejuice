@@ -1961,7 +1961,7 @@ LIO_1 :: enum s32 {
     NOWAIT;
 }
 
-DT :: enum s32 {
+DT :: enum u8 {
     UNKNOWN :: 0;
     FIFO :: 1;
     CHR :: 2;

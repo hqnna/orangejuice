@@ -66,13 +66,12 @@ stat_t :: struct {
     st_size:    s64;
     st_blksize: s64;
     st_blocks:  s64;
-    st_atime:     s64;
-    st_atime_ns:  s64;
-    st_mtime:     s64;
-    st_mtime_ns:  s64;
-    st_ctime:     s64;
-    st_ctime_ns:  s64;
-    __unused:   [3] s64;
+    // Each is a `timespec` — seconds and nanoseconds — laid out the way the
+    // kernel writes it.
+    st_atime:   timespec;
+    st_mtime:   timespec;
+    st_ctime:   timespec;
+    __glibc_reserved: [3] s64;
 }
 
 S_IFMT   :: 0xF000;   // 0o170000
@@ -87,6 +86,10 @@ fstat :: (fd: s32, result: *stat_t) -> s32 #foreign libc;
 // ---------------------------------------------------------- the file tree ---
 
 unlink :: (path: *u8) -> s32 #foreign libc;
+
+// `remove` is a keyword in a `for` body, so the binding takes the name the
+// reference gives it.
+_remove :: (__filename: *u8) -> s32 #foreign libc "remove";
 rmdir  :: (path: *u8) -> s32 #foreign libc;
 mkdir  :: (path: *u8, mode: u32) -> s32 #foreign libc;
 rename :: (from: *u8, to: *u8) -> s32 #foreign libc;
@@ -101,14 +104,9 @@ dirent :: struct {
     d_ino:    u64;
     d_off:    s64;
     d_reclen: u16;
-    d_type:   u8;
+    d_type:   DT;
     d_name:   [256] u8;
 }
-
-DT_UNKNOWN :: 0;
-DT_DIR     :: 4;
-DT_REG     :: 8;
-DT_LNK     :: 10;
 
 DIR :: struct {}   // opaque
 
