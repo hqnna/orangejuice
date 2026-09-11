@@ -895,7 +895,7 @@ fn the_distributions_default_metaprogram_drives_the_build() {
   );
   let report = oj_driver::run_through_metaprogram(
     &metaprogram,
-    &fixture.path("greet.jai"),
+    &[fixture.path("greet.jai")],
     &[],
     &oj_driver::BuildOptions::new(),
     oj_driver::Stage::Executable,
@@ -935,7 +935,7 @@ fn a_program_the_default_metaprogram_cannot_compile_fails_the_build() {
   fixture.write("wrong.jai", "main :: () { x: int = \"no\"; }\n");
   let report = oj_driver::run_through_metaprogram(
     &metaprogram,
-    &fixture.path("wrong.jai"),
+    &[fixture.path("wrong.jai")],
     &[],
     &oj_driver::BuildOptions::new(),
     oj_driver::Stage::Executable,
@@ -1538,7 +1538,7 @@ fn the_check_plugin_reports_a_format_string_that_does_not_match_its_arguments() 
   let build = |arguments: &[String]| {
     oj_driver::run_through_metaprogram(
       &metaprogram,
-      &fixture.path("bad.jai"),
+      &[fixture.path("bad.jai")],
       arguments,
       &oj_driver::BuildOptions::new(),
       oj_driver::Stage::Executable,

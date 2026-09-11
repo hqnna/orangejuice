@@ -106,8 +106,20 @@ pub fn run(root: &Path, options: &BuildOptions, stage: Stage, only: Option<&str>
 /// Where the distribution's own startup metaprogram lives, when there is one
 /// (**C§2.1**).
 pub fn default_metaprogram() -> Option<PathBuf> {
-  let path = jai_dir()?.join("modules").join("Default_Metaprogram.jai");
-  path.is_file().then_some(path)
+  named_metaprogram("Default_Metaprogram")
+}
+
+/// The metaprogram module `-- meta` named, when the distribution has one
+/// (**C§2.1**). A module is either `modules/<Name>.jai` or
+/// `modules/<Name>/module.jai`, the same two shapes an `#import` looks for.
+pub fn named_metaprogram(name: &str) -> Option<PathBuf> {
+  let modules = jai_dir()?.join("modules");
+  let flat = modules.join(format!("{name}.jai"));
+  if flat.is_file() {
+    return Some(flat);
+  }
+  let directory = modules.join(name).join("module.jai");
+  directory.is_file().then_some(directory)
 }
 
 /// Compiles the way the reference does: `Default_Metaprogram` is the program,
@@ -120,19 +132,33 @@ pub fn default_metaprogram() -> Option<PathBuf> {
 /// created produced.
 pub fn run_through_metaprogram(
   metaprogram: &Path,
-  file: &Path,
+  files: &[PathBuf],
   arguments: &[String],
   options: &BuildOptions,
   stage: Stage,
 ) -> Report {
   let mut driver = options.clone();
-  // Absolute, because the metaprogram hands this to `add_build_file` and a
-  // workspace resolves a relative path against the file that created it —
-  // which is the metaprogram, sitting in the distribution's own modules
-  // directory, not wherever the user is standing.
-  let named = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
-  driver.compile_time_command_line = std::iter::once(named.display().to_string())
-    .chain(arguments.iter().cloned())
+  // The command line reaches the metaprogram with its file names made
+  // absolute: it hands them to `add_build_file`, and a workspace resolves a
+  // relative path against the file that created it — which is the
+  // metaprogram, sitting in the distribution's own modules directory, not
+  // wherever the user is standing.
+  let absolute: Vec<PathBuf> = files
+    .iter()
+    .map(|file| std::fs::canonicalize(file).unwrap_or_else(|_| file.clone()))
+    .collect();
+  driver.compile_time_command_line = arguments
+    .iter()
+    .map(|argument| {
+      match absolute
+        .iter()
+        .zip(files)
+        .find(|(_, original)| original.as_os_str() == argument.as_str())
+      {
+        Some((made, _)) => made.display().to_string(),
+        None => argument.clone(),
+      }
+    })
     .collect();
   // The target workspace's output belongs where its own file is, not where the
   // distribution keeps its modules; the metaprogram sets that itself, so the

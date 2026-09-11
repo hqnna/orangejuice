@@ -30,7 +30,6 @@ mimalloc = { version = "0.1", default-features = false }
 rustc-hash = "2"
 boxcar = "0.2"
 cc = "1"
-clap = { version = "4", features = ["derive"] }
 indexmap = "2"
 insta = "1"
 libloading = "0.8"

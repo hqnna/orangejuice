@@ -1,9 +1,28 @@
+//! The `oj` command line, which is `jai`'s.
+//!
+//! ```text
+//! oj <files...> [metaprogram options] [- user args] [-- compiler options]
+//! ```
+//!
+//! A non-dash argument is a source file and the first one names the output
+//! (**C§2.1**). The single-dash options are the reference's, parsed by
+//! `oj-driver` and handed to the metaprogram verbatim, so `jai first.jai -
+//! -android` is `oj first.jai - -android`. A lone `-` ends option processing
+//! and gives the rest to the program.
+//!
+//! Everything after the last `--` or `---` belongs to the *compiler* rather
+//! than to the metaprogram — that is the reference's own rule, and its own
+//! diagnostic says so: "Any command-line option after the last -- is reserved
+//! for the compiler." Those options are bare words, and orangejuice's own go
+//! there: `run`, `dump`, `no_metaprogram`. They cannot be single-dash names of
+//! ours, both because `docs/spec.md` §5.1 reserves that namespace for the
+//! reference and because `-run` is already taken — it means
+//! `add_build_string("#run expr;")`.
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::error::ErrorKind;
-use clap::{ArgAction, Args, Parser, Subcommand};
 use oj_diag::SourceMap;
 use oj_lexer::Interner;
 
@@ -17,118 +36,63 @@ pub const EXIT_SUCCESS: u8 = 0;
 pub const EXIT_FAILURE: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
 
-/// The `oj` command line, mirroring the jai driver so that `jai a.jai - -x`
-/// translates to `oj build a.jai - -x`. The single-dash options of `build` and
-/// `run` are the reference compiler's: `docs/spec.md` §5.1 tables them, and
-/// `vendor/jai/modules/Default_Metaprogram.jai` defines them.
-#[derive(Debug, Parser)]
-#[command(
-  name = "oj",
-  about = "orangejuice: a cleanroom implementation of the Jai programming language",
-  disable_version_flag = true,
-  arg_required_else_help = true
-)]
-pub struct Cli {
-  /// Print the version and exit
-  #[arg(short = 'V', long = "version", action = ArgAction::SetTrue)]
-  pub version: bool,
+/// What the reference says when it was given nothing to do (**C§2.1**).
+const NOTHING_TO_COMPILE: &str = "You need to provide an argument telling the compiler what to compile! Sorry. Pass -help for help.";
 
-  #[command(subcommand)]
-  pub command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum Command {
-  /// Compile a Jai program
-  Build(BuildArgs),
-  /// Compile a Jai program, then execute the produced program
-  #[command(after_help = "Arguments after `--` are passed to the compiled program.")]
-  Run(RunArgs),
-  /// Print intermediate compiler output for a single file
-  Dump {
-    #[command(subcommand)]
-    stage: DumpStage,
-  },
-  /// Print the version
-  Version,
-}
-
-#[derive(Debug, Args)]
-pub struct BuildArgs {
-  /// Compile without the distribution's `Default_Metaprogram` driving the
-  /// build, which is what a distribution-less checkout has to do anyway
-  #[arg(long)]
-  pub no_metaprogram: bool,
-
-  /// The Jai file to compile
-  pub file: PathBuf,
-
-  /// Options forwarded to the metaprogram, in jai syntax
-  #[arg(allow_hyphen_values = true, num_args = 0.., value_name = "JAI_OPTION")]
-  pub options: Vec<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct RunArgs {
-  /// Compile without the distribution's `Default_Metaprogram` driving the
-  /// build
-  #[arg(long)]
-  pub no_metaprogram: bool,
-
-  /// The Jai file to compile and run
-  pub file: PathBuf,
-
-  /// Options forwarded to the metaprogram, in jai syntax
-  #[arg(allow_hyphen_values = true, num_args = 0.., value_name = "JAI_OPTION")]
-  pub options: Vec<String>,
-
-  /// Arguments after `--`, passed to the compiled program
-  #[arg(skip)]
+/// The compiler's own options: the bare words after the last `--`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Compiler {
+  /// Run the program once it is built, passing it whatever followed `run`.
+  pub run: bool,
   pub program_args: Vec<OsString>,
+  /// Stop at a stage and print it instead of building.
+  pub dump: Option<Dump>,
+  /// Drive the pipeline directly rather than through the distribution's
+  /// `Default_Metaprogram`, which is what a checkout with no distribution
+  /// behind it has to do.
+  pub no_metaprogram: bool,
+  /// `import_dir name`, the reference's own.
+  pub import_dirs: Vec<PathBuf>,
+  /// `meta metaprogram_name`, the reference's own.
+  pub meta: Option<String>,
+  pub help: bool,
+  pub version: bool,
 }
 
-#[derive(Debug, Subcommand)]
+/// `dump <stage>` and the words that shape it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Dump {
+  pub stage: DumpStage,
+  /// `tree`: print the tree form of the AST rather than the source form.
+  pub tree: bool,
+  /// `file_only`: resolve the file alone, without its `#load`s and `#import`s.
+  pub file_only: bool,
+  /// `proc NAME`: restrict an IR or assembly listing to one procedure.
+  pub proc: Option<String>,
+  /// `llvm`: print LLVM IR rather than target assembly.
+  pub llvm: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DumpStage {
-  /// The token stream produced by the lexer
-  Tokens { file: PathBuf },
-  /// The parsed syntax tree
-  Ast {
-    file: PathBuf,
-    /// Print the tree form instead of the source form
-    #[arg(long)]
-    tree: bool,
-  },
-  /// The scope tree the file resolves into
-  Scopes {
-    file: PathBuf,
-    /// Resolve this file alone, without following its `#load`s and `#import`s
-    #[arg(long)]
-    file_only: bool,
-  },
-  /// The types the file declares, with their layout
-  Types {
-    file: PathBuf,
-    /// Check this file alone, without following its `#load`s and `#import`s
-    #[arg(long)]
-    file_only: bool,
-  },
-  /// The typed IR of the live procedures
-  Ir {
-    file: PathBuf,
-    /// Restrict the listing to one procedure
-    #[arg(long, value_name = "NAME")]
-    proc: Option<String>,
-  },
-  /// The generated assembly, or LLVM IR with `--llvm`
-  Asm {
-    file: PathBuf,
-    /// Restrict the listing to one procedure
-    #[arg(long, value_name = "NAME")]
-    proc: Option<String>,
-    /// Print LLVM IR instead of target assembly
-    #[arg(long)]
-    llvm: bool,
-  },
+  Tokens,
+  Ast,
+  Scopes,
+  Types,
+  #[default]
+  Ir,
+  Asm,
+}
+
+/// One whole command line, taken apart.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Invocation {
+  /// The source files, first one first.
+  pub files: Vec<PathBuf>,
+  /// What the metaprogram parses, verbatim — every single-dash option, the
+  /// lone `-`, and whatever follows it.
+  pub metaprogram: Vec<String>,
+  pub compiler: Compiler,
 }
 
 pub fn run<I, T>(args: I) -> ExitCode
@@ -144,90 +108,188 @@ where
   I: IntoIterator<Item = T>,
   T: Into<OsString>,
 {
-  let (compiler_args, program_args) =
-    split_program_args(args.into_iter().map(Into::into).collect());
-
-  match Cli::try_parse_from(compiler_args) {
-    Ok(mut cli) => match attach_program_args(&mut cli, program_args) {
-      Ok(()) => execute(&cli),
-      Err(message) => {
-        eprintln!("error: {message}");
-        EXIT_USAGE
-      }
-    },
+  let argv: Vec<OsString> = args.into_iter().map(Into::into).skip(1).collect();
+  match parse(&argv) {
+    Ok(invocation) => execute(&invocation),
     Err(error) => {
-      let _ = error.print();
-      match error.kind() {
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => EXIT_SUCCESS,
-        _ => EXIT_USAGE,
-      }
+      eprintln!("{}", error.message);
+      error.code
     }
   }
 }
 
-/// Splits off the arguments of the compiled program, which clap cannot do
-/// itself: the jai-style option lists accept hyphenated values, so a trailing
-/// `--` would be swallowed as one of them.
-fn split_program_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Option<Vec<OsString>>) {
-  match argv.iter().position(|argument| argument == "--") {
-    Some(index) => {
-      let program_args = argv.split_off(index + 1);
-      argv.pop();
-      (argv, Some(program_args))
+/// A command line that did not parse, and what the compiler exits with because
+/// of it. A metaprogram option the reference would have rejected exits 1, the
+/// way its own `log_error`-then-`exit(1)` does (**C§2.1**); a usage error of
+/// ours — a developer option nobody knows, a stage that is not a stage — exits
+/// 2, which is the CLI's own.
+#[derive(Debug, PartialEq, Eq)]
+pub struct UsageError {
+  pub message: String,
+  pub code: u8,
+}
+
+impl UsageError {
+  fn usage(message: impl Into<String>) -> Self {
+    Self {
+      message: message.into(),
+      code: EXIT_USAGE,
     }
-    None => (argv, None),
+  }
+
+  fn metaprogram(message: impl Into<String>) -> Self {
+    Self {
+      message: message.into(),
+      code: EXIT_FAILURE,
+    }
   }
 }
 
-fn attach_program_args(cli: &mut Cli, program_args: Option<Vec<OsString>>) -> Result<(), String> {
-  let Some(program_args) = program_args else {
-    return Ok(());
+/// Splits a command line into the metaprogram's half and the compiler's.
+///
+/// The compiler's half is whatever follows the *last* `--` or `---`, which is
+/// what the reference does — an earlier one is left where it is, since the
+/// metaprogram ignores `--` and a user argument may be one.
+pub fn parse(argv: &[OsString]) -> Result<Invocation, UsageError> {
+  let split = argv
+    .iter()
+    .rposition(|argument| argument == "--" || argument == "---");
+
+  let (left, right) = match split {
+    Some(index) => (&argv[..index], &argv[index + 1..]),
+    None => (argv, &argv[..0]),
   };
 
-  match &mut cli.command {
-    Some(Command::Run(args)) => {
-      args.program_args = program_args;
-      Ok(())
-    }
-    _ => Err("arguments after `--` are only accepted by `oj run`".to_string()),
-  }
+  let compiler = parse_compiler_options(right)?;
+
+  let metaprogram: Vec<String> = left
+    .iter()
+    .map(|argument| argument.to_string_lossy().into_owned())
+    .collect();
+
+  // The files are picked out by the same parser that knows every option's
+  // arity, so that `-exe out.jai` does not look like a file (**C§2.1**).
+  let files = match oj_driver::parse(&metaprogram) {
+    Ok(parsed) => parsed.files,
+    Err(error) => return Err(UsageError::metaprogram(error.message)),
+  };
+
+  Ok(Invocation {
+    files,
+    metaprogram,
+    compiler,
+  })
 }
 
-fn execute(cli: &Cli) -> u8 {
-  if cli.version {
+fn parse_compiler_options(words: &[OsString]) -> Result<Compiler, UsageError> {
+  let mut compiler = Compiler::default();
+  let mut index = 0;
+  while index < words.len() {
+    let word = words[index].to_string_lossy().into_owned();
+    index += 1;
+
+    let mut take = |option: &str| -> Result<String, UsageError> {
+      let value = words
+        .get(index)
+        .map(|value| value.to_string_lossy().into_owned());
+      index += 1;
+      value.ok_or_else(|| UsageError::usage(format!("Command line: Missing argument to {option}.")))
+    };
+
+    match word.as_str() {
+      // `run` is terminal: what follows it is the program's own arguments,
+      // which may be anything at all.
+      "run" => {
+        compiler.run = true;
+        compiler.program_args = words[index..].to_vec();
+        index = words.len();
+      }
+      "dump" => {
+        let stage = take("dump")?;
+        let stage = match stage.as_str() {
+          "tokens" => DumpStage::Tokens,
+          "ast" => DumpStage::Ast,
+          "scopes" => DumpStage::Scopes,
+          "types" => DumpStage::Types,
+          "ir" => DumpStage::Ir,
+          "asm" => DumpStage::Asm,
+          other => {
+            return Err(UsageError::usage(format!(
+              "Command line: '{other}' is not a stage. The stages are tokens, ast, scopes, types, ir, asm."
+            )));
+          }
+        };
+        compiler.dump.get_or_insert_with(Dump::default).stage = stage;
+      }
+      "tree" => compiler.dump.get_or_insert_with(Dump::default).tree = true,
+      "file_only" => compiler.dump.get_or_insert_with(Dump::default).file_only = true,
+      "llvm" => compiler.dump.get_or_insert_with(Dump::default).llvm = true,
+      "proc" => {
+        let name = take("proc")?;
+        compiler.dump.get_or_insert_with(Dump::default).proc = Some(name);
+      }
+      "no_metaprogram" => compiler.no_metaprogram = true,
+      "import_dir" => {
+        let directory = take("import_dir")?;
+        compiler.import_dirs.push(PathBuf::from(directory));
+      }
+      "meta" => compiler.meta = Some(take("meta")?),
+      "help" => compiler.help = true,
+      "version" => compiler.version = true,
+      other => {
+        return Err(UsageError::usage(format!(
+          "Unknown developer option '{other}'. Use '-- help' for help. Any command-line option after the last -- is reserved for the compiler."
+        )));
+      }
+    }
+  }
+  Ok(compiler)
+}
+
+/// What `-- help` prints. The reference lists its own developer options here;
+/// ours are listed beside them, since this is the namespace they live in.
+const COMPILER_HELP: &str = "\
+Developer options: import_dir name, meta metaprogram_name, help, version.
+orangejuice options: run [program arguments...], dump stage, no_metaprogram.
+  dump stage        one of tokens, ast, scopes, types, ir, asm
+  tree              with `dump ast`, print the tree form
+  file_only         with `dump scopes` or `dump types`, do not follow #load and #import
+  proc NAME         with `dump ir` or `dump asm`, one procedure only
+  llvm              with `dump asm`, print LLVM IR instead of assembly";
+
+fn execute(invocation: &Invocation) -> u8 {
+  let compiler = &invocation.compiler;
+  if compiler.help {
+    println!("{COMPILER_HELP}");
+    return EXIT_SUCCESS;
+  }
+  if compiler.version {
     println!("{VERSION_LINE}");
     return EXIT_SUCCESS;
   }
 
-  match &cli.command {
-    Some(Command::Version) => {
-      println!("{VERSION_LINE}");
-      EXIT_SUCCESS
-    }
-    Some(Command::Build(args)) => build(&args.file, &args.options, None, args.no_metaprogram),
-    Some(Command::Run(args)) => build(
-      &args.file,
-      &args.options,
-      Some(&args.program_args),
-      args.no_metaprogram,
-    ),
-    Some(Command::Dump { stage }) => match stage {
-      DumpStage::Tokens { file } => dump_tokens(file),
-      DumpStage::Ast { file, tree } => dump_ast(file, *tree),
-      DumpStage::Scopes { file, file_only } => dump_scopes(file, *file_only),
-      DumpStage::Types { file, file_only } => dump_types(file, *file_only),
-      DumpStage::Ir { file, proc } => dump(file, oj_driver::Stage::Ir, proc.as_deref()),
-      DumpStage::Asm { file, llvm, proc } => {
-        let stage = if *llvm {
-          oj_driver::Stage::LlvmIr
-        } else {
-          oj_driver::Stage::Assembly
+  if let Some(wanted) = &compiler.dump {
+    let Some(file) = invocation.files.first() else {
+      eprintln!("{NOTHING_TO_COMPILE}");
+      return EXIT_USAGE;
+    };
+    return match wanted.stage {
+      DumpStage::Tokens => dump_tokens(file),
+      DumpStage::Ast => dump_ast(file, wanted.tree),
+      DumpStage::Scopes => dump_scopes(file, wanted.file_only),
+      DumpStage::Types => dump_types(file, wanted.file_only),
+      DumpStage::Ir => dump(file, oj_driver::Stage::Ir, wanted.proc.as_deref()),
+      DumpStage::Asm => {
+        let stage = match wanted.llvm {
+          true => oj_driver::Stage::LlvmIr,
+          false => oj_driver::Stage::Assembly,
         };
-        dump(file, stage, proc.as_deref())
+        dump(file, stage, wanted.proc.as_deref())
       }
-    },
-    None => EXIT_USAGE,
+    };
   }
+
+  build(invocation)
 }
 
 /// `oj dump tokens`: lexes one file and prints its token stream. Diagnostics go
@@ -396,21 +458,17 @@ fn dump(path: &Path, stage: oj_driver::Stage, only: Option<&str>) -> u8 {
   }
 }
 
-/// `oj build`, and `oj run` when `program_args` is given: compile, link, and
-/// then execute what came out.
-fn build(
-  path: &Path,
-  arguments: &[String],
-  program_args: Option<&[OsString]>,
-  no_metaprogram: bool,
-) -> u8 {
-  let parsed = match oj_driver::parse(arguments) {
+/// Compiles, and runs what came out when `-- run` asked for it.
+fn build(invocation: &Invocation) -> u8 {
+  let compiler = &invocation.compiler;
+  let parsed = match oj_driver::parse(&invocation.metaprogram) {
     Ok(parsed) => parsed,
     Err(error) => {
       eprintln!("{}", error.message);
       return EXIT_FAILURE;
     }
   };
+  // `-version` prints and stops, whether or not there was anything to build.
   if parsed.options.print_version {
     println!("{VERSION_LINE}");
     return EXIT_SUCCESS;
@@ -424,23 +482,49 @@ fn build(
   if !parsed.deferred.is_empty() {
     return EXIT_FAILURE;
   }
+  if invocation.files.is_empty() {
+    eprintln!("{NOTHING_TO_COMPILE}");
+    return EXIT_USAGE;
+  }
+
+  let mut options = parsed.options;
+  // `-- import_dir` is the compiler's own, and goes in front of whatever the
+  // metaprogram's `-import_dir` asked for (**C§2.1**).
+  let mut import_dirs = compiler.import_dirs.clone();
+  import_dirs.extend(options.import_dirs.iter().cloned());
+  options.import_dirs = import_dirs;
 
   // The reference compiles `Default_Metaprogram` and lets *it* create the
-  // workspace the program is compiled in (**C§2.1**); a checkout with no
-  // distribution behind it has no metaprogram to run, so the pipeline drives
-  // itself instead.
-  let metaprogram = (!no_metaprogram)
-    .then(oj_driver::default_metaprogram)
-    .flatten();
+  // workspace the program is compiled in (**C§2.1**); `-- meta` names a
+  // different one, and a checkout with no distribution behind it has none, so
+  // the pipeline drives itself instead.
+  let metaprogram = match compiler.no_metaprogram {
+    true => None,
+    false => match &compiler.meta {
+      Some(name) => match oj_driver::named_metaprogram(name) {
+        Some(path) => Some(path),
+        None => {
+          eprintln!("Command line: could not find a metaprogram module named '{name}'.");
+          return EXIT_FAILURE;
+        }
+      },
+      None => oj_driver::default_metaprogram(),
+    },
+  };
+
+  let input = oj_driver::Input {
+    files: invocation.files.clone(),
+    strings: Vec::new(),
+  };
   let report = match metaprogram {
     Some(metaprogram) => oj_driver::run_through_metaprogram(
       &metaprogram,
-      path,
-      arguments,
-      &parsed.options,
+      &invocation.files,
+      &invocation.metaprogram,
+      &options,
       oj_driver::Stage::Executable,
     ),
-    None => oj_driver::run(path, &parsed.options, oj_driver::Stage::Executable, None),
+    None => oj_driver::run_input(&input, &options, oj_driver::Stage::Executable, None),
   };
   for diagnostic in &report.diagnostics {
     eprint!("{diagnostic}");
@@ -451,22 +535,22 @@ fn build(
   let Some(executable) = report.executable else {
     return EXIT_SUCCESS;
   };
-  if parsed.options.verbose
+  if options.verbose
     && let Some(line) = &report.link_line
   {
     eprintln!("{line}");
   }
-  let Some(program_args) = program_args else {
-    if !parsed.options.quiet {
+  if !compiler.run {
+    if !options.quiet {
       println!("{}", executable.display());
     }
     return EXIT_SUCCESS;
-  };
+  }
   // A bare name is looked up on `PATH` rather than in the working directory,
-  // and `oj run x.jai` next to `x.jai` produces exactly that.
+  // and building `x.jai` next to it produces exactly that.
   let program = std::path::absolute(&executable).unwrap_or_else(|_| executable.clone());
   match std::process::Command::new(&program)
-    .args(program_args)
+    .args(&compiler.program_args)
     .status()
   {
     Ok(status) => status.code().unwrap_or(EXIT_FAILURE as i32) as u8,
@@ -480,147 +564,147 @@ fn build(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use clap::CommandFactory;
 
-  fn parse(argv: &[&str]) -> Cli {
-    let (compiler_args, program_args) =
-      split_program_args(argv.iter().map(OsString::from).collect());
-    let mut cli = Cli::try_parse_from(compiler_args).expect("the command line should parse");
-    attach_program_args(&mut cli, program_args).expect("the program arguments should attach");
-    cli
+  fn parse_argv(argv: &[&str]) -> Invocation {
+    let words: Vec<OsString> = argv.iter().map(OsString::from).collect();
+    parse(&words).expect("the command line should parse")
   }
 
-  #[test]
-  fn command_definition_is_valid() {
-    Cli::command().debug_assert();
+  fn code(argv: &[&str]) -> u8 {
+    let mut full = vec!["oj"];
+    full.extend_from_slice(argv);
+    exit_code(full)
   }
 
   #[test]
   fn version_line_names_the_reference_compiler_and_backend() {
+    assert!(VERSION_LINE.contains("jai beta 0.2.009"), "{VERSION_LINE}");
+    assert!(VERSION_LINE.contains("LLVM 19"), "{VERSION_LINE}");
+  }
+
+  #[test]
+  fn a_file_and_the_metaprogram_options_after_it_are_the_metaprograms() {
+    // `jai first.jai - -android` is `oj first.jai - -android`, verbatim.
+    let invocation = parse_argv(&["first.jai", "-", "-android"]);
+    assert_eq!(invocation.files, [PathBuf::from("first.jai")]);
+    assert_eq!(invocation.metaprogram, ["first.jai", "-", "-android"]);
+    assert_eq!(invocation.compiler, Compiler::default());
+  }
+
+  #[test]
+  fn every_non_dash_argument_before_a_lone_dash_is_a_file() {
+    let invocation = parse_argv(&["a.jai", "-quiet", "b.jai", "-", "c.jai"]);
+    // `c.jai` is the program's argument, not a third file.
     assert_eq!(
-      VERSION_LINE,
-      format!(
-        "orangejuice {} (jai beta 0.2.009 compatible, LLVM 19)",
-        env!("CARGO_PKG_VERSION")
-      )
+      invocation.files,
+      [PathBuf::from("a.jai"), PathBuf::from("b.jai")]
     );
   }
 
   #[test]
-  fn version_is_available_as_subcommand_and_flag() {
-    assert_eq!(exit_code(["oj", "version"]), EXIT_SUCCESS);
-    assert_eq!(exit_code(["oj", "--version"]), EXIT_SUCCESS);
-    assert_eq!(exit_code(["oj", "-V"]), EXIT_SUCCESS);
+  fn an_options_value_is_not_mistaken_for_a_file() {
+    let invocation = parse_argv(&["-exe", "out.jai", "real.jai"]);
+    assert_eq!(invocation.files, [PathBuf::from("real.jai")]);
   }
 
   #[test]
-  fn help_succeeds_but_a_missing_file_is_a_usage_error() {
-    assert_eq!(exit_code(["oj", "help"]), EXIT_SUCCESS);
-    assert_eq!(exit_code(["oj", "--help"]), EXIT_SUCCESS);
-    assert_eq!(exit_code(["oj"]), EXIT_USAGE);
-    assert_eq!(exit_code(["oj", "build"]), EXIT_USAGE);
-    assert_eq!(exit_code(["oj", "frobnicate"]), EXIT_USAGE);
-  }
-
-  #[test]
-  fn a_missing_file_fails_rather_than_pretending_to_work() {
-    assert_eq!(exit_code(["oj", "build", "first.jai"]), EXIT_FAILURE);
-    assert_eq!(exit_code(["oj", "dump", "ast", "first.jai"]), EXIT_FAILURE);
-  }
-
-  #[test]
-  fn an_unknown_build_option_is_reported_in_the_reference_wording() {
-    // The option list is rejected before the file is even looked at.
+  fn the_compilers_own_options_follow_the_last_double_dash() {
+    let invocation = parse_argv(&["a.jai", "-quiet", "--", "no_metaprogram", "dump", "ir"]);
+    assert_eq!(invocation.files, [PathBuf::from("a.jai")]);
+    assert_eq!(invocation.metaprogram, ["a.jai", "-quiet"]);
+    assert!(invocation.compiler.no_metaprogram);
     assert_eq!(
-      exit_code(["oj", "build", "first.jai", "-frobnicate"]),
-      EXIT_FAILURE
-    );
-  }
-
-  fn compile_stage(stage: &str, extra: &[&str], source: &str) -> (u8, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    let path = dir.path().join("input.jai");
-    std::fs::write(&path, source).expect("the input should be writable");
-    let mut argv = vec!["oj", "dump", stage, path.to_str().unwrap()];
-    argv.extend_from_slice(extra);
-    (exit_code(argv), dir)
-  }
-
-  #[test]
-  fn the_back_end_stages_run_when_the_distribution_is_present() {
-    if oj_driver::jai_dir().is_none() {
-      return;
-    }
-    let program = "main :: () { n := 1 + 2; }\n";
-    assert_eq!(compile_stage("ir", &[], program).0, EXIT_SUCCESS);
-    assert_eq!(compile_stage("asm", &["--llvm"], program).0, EXIT_SUCCESS);
-    assert_eq!(compile_stage("asm", &[], program).0, EXIT_SUCCESS);
-  }
-
-  #[test]
-  fn a_program_needing_a_later_milestone_fails_the_back_end_stages() {
-    if oj_driver::jai_dir().is_none() {
-      return;
-    }
-    assert_eq!(
-      compile_stage("ir", &[], "main :: () { #asm { frobnicate a:, 1; } }\n").0,
-      EXIT_FAILURE
-    );
-  }
-
-  fn dump_tokens_of(source: &str) -> (u8, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    let path = dir.path().join("input.jai");
-    std::fs::write(&path, source).expect("the input should be writable");
-    (
-      exit_code(["oj", "dump", "tokens", path.to_str().unwrap()]),
-      dir,
-    )
-  }
-
-  #[test]
-  fn dump_tokens_succeeds_on_a_well_formed_file() {
-    assert_eq!(dump_tokens_of("main :: () {}\n").0, EXIT_SUCCESS);
-  }
-
-  #[test]
-  fn dump_tokens_fails_on_a_lexer_error_or_a_missing_file() {
-    assert_eq!(dump_tokens_of("x :: 1.2.3;\n").0, EXIT_FAILURE);
-    assert_eq!(
-      exit_code(["oj", "dump", "tokens", "no/such/file.jai"]),
-      EXIT_FAILURE
+      invocation.compiler.dump.as_ref().map(|dump| dump.stage),
+      Some(DumpStage::Ir)
     );
   }
 
   #[test]
-  fn dump_tokens_tolerates_a_file_that_only_warns() {
-    assert_eq!(dump_tokens_of("x :: \"a\\q\";\n").0, EXIT_SUCCESS);
-  }
-
-  fn dump_ast_of(source: &str, tree: bool) -> (u8, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    let path = dir.path().join("input.jai");
-    std::fs::write(&path, source).expect("the input should be writable");
-    let mut argv = vec!["oj", "dump", "ast", path.to_str().unwrap()];
-    if tree {
-      argv.push("--tree");
-    }
-    (exit_code(argv), dir)
+  fn three_dashes_are_the_same_delimiter() {
+    let invocation = parse_argv(&["a.jai", "---", "import_dir", "modules"]);
+    assert_eq!(invocation.compiler.import_dirs, [PathBuf::from("modules")]);
   }
 
   #[test]
-  fn dump_ast_succeeds_on_a_well_formed_file() {
-    assert_eq!(dump_ast_of("main :: () {\n}\n", false).0, EXIT_SUCCESS);
-    assert_eq!(dump_ast_of("main :: () {\n}\n", true).0, EXIT_SUCCESS);
+  fn the_last_delimiter_is_the_one_that_splits() {
+    // An earlier `--` is a user argument; the metaprogram ignores it.
+    let invocation = parse_argv(&["a.jai", "-", "--", "-x", "--", "run"]);
+    assert_eq!(invocation.metaprogram, ["a.jai", "-", "--", "-x"]);
+    assert!(invocation.compiler.run);
   }
 
   #[test]
-  fn dump_ast_fails_on_a_parse_error_or_a_missing_file() {
-    assert_eq!(dump_ast_of("main :: ( {\n", false).0, EXIT_FAILURE);
-    assert_eq!(
-      exit_code(["oj", "dump", "ast", "no/such/file.jai"]),
-      EXIT_FAILURE
+  fn run_takes_everything_after_it_as_the_programs_arguments() {
+    let invocation = parse_argv(&["a.jai", "--", "run", "--port", "8080", "-x"]);
+    assert!(invocation.compiler.run);
+    assert_eq!(invocation.compiler.program_args, ["--port", "8080", "-x"]);
+  }
+
+  #[test]
+  fn a_dump_carries_the_words_that_shape_it() {
+    let invocation = parse_argv(&["a.jai", "--", "dump", "asm", "llvm", "proc", "main"]);
+    let dump = invocation.compiler.dump.expect("a dump");
+    assert_eq!(dump.stage, DumpStage::Asm);
+    assert!(dump.llvm);
+    assert_eq!(dump.proc.as_deref(), Some("main"));
+  }
+
+  #[test]
+  fn an_unknown_compiler_option_says_what_the_reference_says() {
+    let words: Vec<OsString> = ["a.jai", "--", "frobnicate"]
+      .iter()
+      .map(OsString::from)
+      .collect();
+    let error = parse(&words).expect_err("an unknown developer option");
+    assert!(
+      error
+        .message
+        .contains("Unknown developer option 'frobnicate'"),
+      "{error:?}"
     );
+    assert!(
+      error.message.contains("reserved for the compiler"),
+      "{error:?}"
+    );
+    assert_eq!(error.code, EXIT_USAGE);
+  }
+
+  #[test]
+  fn a_compiler_option_missing_its_value_says_so() {
+    let words: Vec<OsString> = ["a.jai", "--", "import_dir"]
+      .iter()
+      .map(OsString::from)
+      .collect();
+    let error = parse(&words).expect_err("a missing argument");
+    assert_eq!(
+      error.message,
+      "Command line: Missing argument to import_dir."
+    );
+    assert_eq!(error.code, EXIT_USAGE);
+  }
+
+  #[test]
+  fn nothing_to_compile_is_the_references_own_complaint() {
+    assert_eq!(code(&[]), EXIT_USAGE);
+  }
+
+  #[test]
+  fn a_metaprogram_option_the_reference_rejects_exits_one() {
+    // The reference logs the error and exits 1 (**C§2.1**); a usage error of
+    // ours exits 2.
+    let words: Vec<OsString> = ["a.jai", "-frobnicate"]
+      .iter()
+      .map(OsString::from)
+      .collect();
+    let error = parse(&words).expect_err("an unknown argument");
+    assert_eq!(error.message, "Unknown argument '-frobnicate'.\nExiting.");
+    assert_eq!(error.code, EXIT_FAILURE);
+  }
+
+  #[test]
+  fn the_compilers_help_and_version_are_its_own_options() {
+    assert_eq!(code(&["--", "version"]), EXIT_SUCCESS);
+    assert_eq!(code(&["--", "help"]), EXIT_SUCCESS);
   }
 
   fn dump_scopes_of(source: &str) -> (u8, tempfile::TempDir) {
@@ -628,13 +712,7 @@ mod tests {
     let path = dir.path().join("input.jai");
     std::fs::write(&path, source).expect("the input should be writable");
     (
-      exit_code([
-        "oj",
-        "dump",
-        "scopes",
-        "--file-only",
-        path.to_str().unwrap(),
-      ]),
+      code(&[path.to_str().unwrap(), "--", "dump", "scopes", "file_only"]),
       dir,
     )
   }
@@ -651,7 +729,7 @@ mod tests {
   fn dump_scopes_fails_on_a_redeclaration_or_a_missing_file() {
     assert_eq!(dump_scopes_of("x := 1;\nx := 2;\n").0, EXIT_FAILURE);
     assert_eq!(
-      exit_code(["oj", "dump", "scopes", "no/such/file.jai"]),
+      code(&["no/such/file.jai", "--", "dump", "scopes"]),
       EXIT_FAILURE
     );
   }
@@ -661,7 +739,7 @@ mod tests {
     let path = dir.path().join("input.jai");
     std::fs::write(&path, source).expect("the input should be writable");
     (
-      exit_code(["oj", "dump", "types", "--file-only", path.to_str().unwrap()]),
+      code(&[path.to_str().unwrap(), "--", "dump", "types", "file_only"]),
       dir,
     )
   }
@@ -681,7 +759,7 @@ mod tests {
       EXIT_FAILURE
     );
     assert_eq!(
-      exit_code(["oj", "dump", "types", "no/such/file.jai"]),
+      code(&["no/such/file.jai", "--", "dump", "types"]),
       EXIT_FAILURE
     );
   }
@@ -694,80 +772,5 @@ mod tests {
       dump_scopes_of("main :: () { print(\"hi\"); }\n").0,
       EXIT_SUCCESS
     );
-  }
-
-  #[test]
-  fn dump_scopes_carries_its_flag() {
-    let Some(Command::Dump {
-      stage: DumpStage::Scopes { file, file_only },
-    }) = parse(&["oj", "dump", "scopes", "first.jai", "--file-only"]).command
-    else {
-      panic!("expected a scope dump");
-    };
-    assert_eq!(file, PathBuf::from("first.jai"));
-    assert!(file_only);
-  }
-
-  #[test]
-  fn build_forwards_jai_style_options_verbatim() {
-    let Some(Command::Build(args)) = parse(&["oj", "build", "first.jai", "-", "-android"]).command
-    else {
-      panic!("expected a build command");
-    };
-
-    assert_eq!(args.file, PathBuf::from("first.jai"));
-    assert_eq!(args.options, ["-", "-android"]);
-  }
-
-  #[test]
-  fn run_separates_metaprogram_options_from_program_arguments() {
-    let Some(Command::Run(args)) =
-      parse(&["oj", "run", "first.jai", "-quiet", "--", "-x", "42"]).command
-    else {
-      panic!("expected a run command");
-    };
-
-    assert_eq!(args.file, PathBuf::from("first.jai"));
-    assert_eq!(args.options, ["-quiet"]);
-    assert_eq!(args.program_args, ["-x", "42"]);
-  }
-
-  #[test]
-  fn a_program_argument_list_may_itself_contain_a_double_dash() {
-    let Some(Command::Run(args)) = parse(&["oj", "run", "first.jai", "--", "--", "-x"]).command
-    else {
-      panic!("expected a run command");
-    };
-
-    assert_eq!(args.program_args, ["--", "-x"]);
-  }
-
-  #[test]
-  fn only_run_accepts_program_arguments() {
-    assert_eq!(
-      exit_code(["oj", "build", "first.jai", "--", "-x"]),
-      EXIT_USAGE
-    );
-  }
-
-  #[test]
-  fn dump_stages_carry_their_flags() {
-    let Some(Command::Dump {
-      stage: DumpStage::Ast { file, tree },
-    }) = parse(&["oj", "dump", "ast", "first.jai", "--tree"]).command
-    else {
-      panic!("expected an ast dump");
-    };
-    assert_eq!(file, PathBuf::from("first.jai"));
-    assert!(tree);
-
-    let Some(Command::Dump {
-      stage: DumpStage::Asm { llvm, proc, .. },
-    }) = parse(&["oj", "dump", "asm", "first.jai", "--llvm"]).command
-    else {
-      panic!("expected an asm dump");
-    };
-    assert!(llvm);
-    assert_eq!(proc, None);
   }
 }

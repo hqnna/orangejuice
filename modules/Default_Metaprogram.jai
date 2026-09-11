@@ -58,7 +58,7 @@ build :: () {
     if options_from_command_line.output_path.count {
         options.output_path = options_from_command_line.output_path;
     } else {
-        directory := path_strip_filename(options_from_command_line.file);
+        directory := path_strip_filename(first_file(options_from_command_line));
         if directory.count  options.output_path = directory;
     }
     if options_from_command_line.import_paths.count {
@@ -90,7 +90,7 @@ build :: () {
     run_before_intercept(plugins, *intercept_flags);
 
     compiler_begin_intercept(w, intercept_flags);
-    add_build_file(options_from_command_line.file, w);
+    for options_from_command_line.files  add_build_file(it, w);
     run_add_source(plugins);
 
     failed := false;
@@ -125,7 +125,9 @@ build :: () {
 // What this metaprogram takes out of the command line. Everything else has
 // already been handled by the time it runs.
 Command_Line_State :: struct {
-    file:                   string;
+    // Every argument that is not an option, in order. The first one names
+    // the output and the directory it lands in (**C§2.1**).
+    files:                  [..] string;
     output_executable_name: string;
     output_path:            string;
     import_paths:           [..] string;
@@ -138,14 +140,25 @@ Command_Line_State :: struct {
 
 #scope_module
 
-// The first argument is the file; a lone `-` ends the options and sends the
-// rest to the program being compiled (**C§2.1**).
-parse_command_line :: (args: [] string, state: *Command_Line_State) {
-    if args.count  state.file = args[0];
+// The file the output is named after and lands beside.
+first_file :: (state: Command_Line_State) -> string {
+    if state.files.count  return state.files[0];
+    return "";
+}
 
-    at := 1;
+// Any argument that does not begin with `-` is a file to compile; a lone `-`
+// ends the options and sends the rest to the program being compiled
+// (**C§2.1**).
+parse_command_line :: (args: [] string, state: *Command_Line_State) {
+    at := 0;
     while at < args.count {
         argument := args[at];
+
+        if argument.count && argument[0] != #char "-" {
+            array_add(*state.files, argument);
+            at += 1;
+            continue;
+        }
 
         if argument == "-" {
             at += 1;
@@ -197,7 +210,7 @@ parse_command_line :: (args: [] string, state: *Command_Line_State) {
 }
 
 HELP_STRING :: #string DONE
-Usage: oj build [options] <file.jai> [- program arguments]
+Usage: oj <file.jai>... [options] [- program arguments] [-- compiler options]
 
     -exe <name>          Name the executable that gets written.
     -output_path <dir>   Choose where output goes.
@@ -209,4 +222,6 @@ Usage: oj build [options] <file.jai> [- program arguments]
 
     -                    Everything after this goes to the program being
                          compiled rather than to the compiler.
+    --                   Everything after the last one of these is the
+                         compiler's own; `-- help` lists those.
 DONE

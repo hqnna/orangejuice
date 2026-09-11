@@ -180,6 +180,10 @@ pub struct Deferred {
 #[derive(Clone, Debug)]
 pub struct ParsedOptions {
   pub options: BuildOptions,
+  /// The source files, in the order they were written. An argument that does
+  /// not start with `-` is a file (**C§2.1**), and the first one names the
+  /// output and the directory it lands in.
+  pub files: Vec<std::path::PathBuf>,
   /// Options that parsed but whose behaviour needs a later milestone.
   pub deferred: Vec<Deferred>,
 }
@@ -187,6 +191,7 @@ pub struct ParsedOptions {
 /// Parses the jai-style option list that follows the source file.
 pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
   let mut options = BuildOptions::new();
+  let mut files = Vec::new();
   let mut deferred = Vec::new();
   let mut index = 0;
 
@@ -200,8 +205,10 @@ pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
       options.compile_time_command_line = arguments[index..].to_vec();
       break;
     }
+    // Anything that is not an option is a file to compile (**C§2.1**).
     if !argument.starts_with('-') {
-      return Err(unknown(&argument));
+      files.push(std::path::PathBuf::from(argument));
+      continue;
     }
 
     let mut take = |option: &str| -> Result<String, OptionError> {
@@ -283,12 +290,17 @@ pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
     }
   }
 
-  Ok(ParsedOptions { options, deferred })
+  Ok(ParsedOptions {
+    options,
+    files,
+    deferred,
+  })
 }
 
 fn unknown(argument: &str) -> OptionError {
+  // Two lines, the way the reference writes it (**C§2.1**).
   OptionError {
-    message: format!("Unknown argument '{argument}'."),
+    message: format!("Unknown argument '{argument}'.\nExiting."),
   }
 }
 
@@ -339,7 +351,7 @@ mod tests {
   #[test]
   fn an_unknown_option_is_the_reference_wording() {
     let error = parse_of(&["-frobnicate"]).expect_err("the option list should be rejected");
-    assert_eq!(error.message, "Unknown argument '-frobnicate'.");
+    assert_eq!(error.message, "Unknown argument '-frobnicate'.\nExiting.");
   }
 
   #[test]

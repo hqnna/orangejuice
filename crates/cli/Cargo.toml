@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 mimalloc.workspace = true
-clap.workspace = true
+
 oj-diag.workspace = true
 oj-driver.workspace = true
 oj-lexer.workspace = true
