@@ -362,8 +362,7 @@ pthread_cond_signal    :: (cond: *pthread_cond_t) -> s32 #foreign pthread;
 pthread_cond_broadcast :: (cond: *pthread_cond_t) -> s32 #foreign pthread;
 
 // How many cores the process may run on.
-sysconf :: (name: s32) -> s64 #foreign libc;
-_SC_NPROCESSORS_ONLN :: 84;
+sysconf :: (name: _SC_definitions) -> s64 #foreign libc;
 
 #scope_module
 

@@ -2112,7 +2112,7 @@ PC :: enum s32 {
     _PC_2_SYMLINKS;
 }
 
-_SC_definitions :: enum s32 {
+using _SC_definitions :: enum s32 {
     _SC_ARG_MAX;
     _SC_CHILD_MAX;
     _SC_CLK_TCK;

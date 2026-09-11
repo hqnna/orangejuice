@@ -327,6 +327,16 @@ append_value :: (builder: *String_Builder, data: *void, info: *Type_Info, nested
         return;
     }
 
+    // A `#type,isa` variant is the type it is a variant of as far as printing
+    // goes — `Apollo_Time` prints as the 128-bit number it is (**L§3.11**).
+    while info.type == .VARIANT {
+        info = (cast(*Type_Info_Variant) info).variant_of;
+        if !info {
+            append(builder, "(unprintable)");
+            return;
+        }
+    }
+
     if info.type == {
         case .INTEGER;   append_integer(builder, data, cast(*Type_Info_Integer) info);
         case .FLOAT;     append_float(builder, data, info);

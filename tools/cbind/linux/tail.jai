@@ -75,3 +75,11 @@ using IORING_OP_Flags :: enum_flags u32 #specified {
 using IO_URING_OP_Flags :: enum_flags u16 {
     IO_URING_OP_SUPPORTED :: 1 << 0;
 }
+
+// `<sys/prctl.h>`: per-process control. Only the one operation this
+// distribution needs is named.
+prctl :: (option: s32, arg2: u64, arg3: u64, arg4: u64, arg5: u64) -> s32 #foreign libc;
+
+// Deliver this signal to the calling thread when its parent dies, which is how
+// a child is made not to outlive the process that started it.
+PR_SET_PDEATHSIG :: 1;
