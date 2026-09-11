@@ -3625,8 +3625,8 @@ fn a_caller_reads_what_a_macro_left_in_its_block() {
 #[test]
 fn a_compound_assignment_through_a_subscript_operator_reads_first() {
   // `w[x] += 10` is `w[x] = w[x] + 10` with the index evaluated once
-  // (**L§6.7**), which is what `how_to/094`'s own prose says. The reference at
-  // 0.2.009 passes the right-hand side alone (**L§19**).
+  // (**L§6.7**). The reference compiler at 0.2.009 passes the right-hand side
+  // alone (**L§19**).
   assert_output(
     "SIZE :: 4;\n\
      Wrapping :: struct { data: [SIZE] int; }\n\
@@ -4823,17 +4823,29 @@ fn a_library_is_found_from_the_file_the_foreign_header_was_written_in() {
   let module = directory.path().join("modules").join("Native");
   std::fs::create_dir_all(&module).expect("the module directory should be creatable");
 
+  // A static archive rather than a shared object, so that what is being
+  // tested is where the *compiler* looked for the library and not whether the
+  // loader can find it afterwards.
   let c_path = module.join("native.c");
   std::fs::write(&c_path, "int answer(void) { return 42; }\n").expect("the C source is writable");
+  let object = directory.path().join("native.o");
   let compiled = Command::new(oj_link::driver())
-    .arg("-shared")
-    .arg("-fPIC")
+    .arg("-c")
     .arg("-o")
-    .arg(directory.path().join("native.so"))
+    .arg(&object)
     .arg(&c_path)
     .status();
   if !compiled.is_ok_and(|status| status.success()) {
     eprintln!("skipping: the C driver could not build the test library");
+    return;
+  }
+  let archived = Command::new("ar")
+    .arg("rcs")
+    .arg(directory.path().join("native.a"))
+    .arg(&object)
+    .status();
+  if !archived.is_ok_and(|status| status.success()) {
+    eprintln!("skipping: no 'ar' to build the test library with");
     return;
   }
 

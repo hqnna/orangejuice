@@ -400,7 +400,7 @@ mod tests {
   #[test]
   fn the_default_output_name_is_the_stem_of_the_source() {
     assert_eq!(
-      default_output_name(Path::new("/tmp/how_to/001_first.jai")),
+      default_output_name(Path::new("/tmp/programs/001_first.jai")),
       "001_first"
     );
   }

@@ -13,7 +13,8 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
     .map(|entry| entry.into_path())
     .filter(|path| path.extension().is_some_and(|extension| extension == "jai"))
     // A `.build` directory holds what a compiler left beside a program,
-    // not part of the distribution: whoever has built a vendor program has one.
+    // not part of the distribution: whoever has built one of its programs in
+    // place has one.
     .filter(|path| {
       !path
         .components()
@@ -37,7 +38,7 @@ fn rendered_errors(program: &Program<'_>, sources: &SourceMap) -> Vec<String> {
     .collect()
 }
 
-/// **M3**: every file of the vendor distribution resolves into a scope tree
+/// **M3**: every file of the distribution resolves into a scope tree
 /// (`docs/spec.md` §8). Each file is resolved on its own, so nothing is looked
 /// up across an import: what this checks is that the tree builds and that no
 /// file contradicts itself — a redeclaration, a doubled `#load`, an

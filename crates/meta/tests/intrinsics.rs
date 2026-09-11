@@ -1,6 +1,6 @@
 //! Every symbol this compiler answers has to be one the distribution actually
 //! declares `#compiler`, under exactly that name (**C§3.3**). A typo here
-//! would leave the JIT unable to bind a call, so the vendored module is the
+//! would leave the JIT unable to bind a call, so the `Compiler` module is the
 //! test.
 
 use std::collections::HashSet;

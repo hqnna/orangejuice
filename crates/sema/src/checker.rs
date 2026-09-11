@@ -587,8 +587,9 @@ impl<'a> Checker<'a> {
   }
 
   /// The source of a `Code` tree the metaprogram wrote to, when it did.
-  /// `compiler_get_nodes` hands out a tree that may be edited in place — how_to
-  /// 630 uppercases the string literals in one — so what an `#insert` splices
+  /// `compiler_get_nodes` hands out a tree that may be edited in place — a
+  /// plugin may uppercase every string literal in one — so what an `#insert`
+  /// splices
   /// has to be what the metaprogram left there rather than the program the
   /// address was exported from (**C§3.3**). A tree nothing touched has no
   /// source of its own: it is spliced as the nodes it already is.

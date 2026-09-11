@@ -16,7 +16,8 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
     .map(|entry| entry.into_path())
     .filter(|path| path.extension().is_some_and(|extension| extension == "jai"))
     // A `.build` directory holds what a compiler left beside a program,
-    // not part of the distribution: whoever has built a vendor program has one.
+    // not part of the distribution: whoever has built one of its programs in
+    // place has one.
     .filter(|path| {
       !path
         .components()

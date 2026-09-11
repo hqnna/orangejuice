@@ -1,6 +1,6 @@
 //! The `Compiler` module's half of the compiler (**C§3**).
 //!
-//! `vendor/jai/modules/Compiler/Compiler.jai` declares its procedures
+//! `modules/Compiler/Compiler.jai` declares its procedures
 //! `#compiler`: they have no body, and the compiler is what answers them. This
 //! crate is those answers. Each one is an `extern "C"` procedure built to the
 //! calling convention `oj_ir::abi_of` describes — a value that does not fit a

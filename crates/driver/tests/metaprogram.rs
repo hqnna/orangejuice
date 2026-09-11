@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 /// The `Compiler` declarations these tests use, spelled exactly as
-/// `vendor/jai/modules/Compiler/Compiler.jai` spells them.
+/// `modules/Compiler/Compiler.jai` spells them.
 const COMPILER: &str = "\
 Workspace :: s64;
 
@@ -1678,7 +1678,7 @@ fn an_insert_splices_the_code_a_metaprogram_wrote_to() {
   // `compiler_get_nodes` hands out a tree the metaprogram may edit in place,
   // and what the `#insert` splices is what it left there rather than the
   // program the address was exported from (**C§3.3**) — which is what
-  // `how_to/630` uppercases its literals with.
+  // a plugin uppercases a string literal with.
   let fixture = Fixture::new();
   let Some(report) = build(
     &fixture,

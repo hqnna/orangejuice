@@ -14,7 +14,8 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
     .map(|entry| entry.into_path())
     .filter(|path| path.extension().is_some_and(|extension| extension == "jai"))
     // A `.build` directory holds what a compiler left beside a program,
-    // not part of the distribution: whoever has built a vendor program has one.
+    // not part of the distribution: whoever has built one of its programs in
+    // place has one.
     .filter(|path| {
       !path
         .components()
@@ -38,7 +39,7 @@ fn rendered_errors(checker: &Checker<'_>, sources: &SourceMap) -> Vec<String> {
     .collect()
 }
 
-/// **M4**: every file of the vendor distribution types on its own
+/// **M4**: every file of the distribution types on its own
 /// (`docs/spec.md` §8). Resolved without its imports, most of a file's names
 /// are unknown, so what this checks is that the typechecker itself never
 /// contradicts the file — a circular dependency, a struct that cannot be laid

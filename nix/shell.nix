@@ -29,10 +29,8 @@ pkgs.mkShell {
     pkgs.ncurses
     pkgs.gdb
     pkgs.valgrind
-    # What the vendor tree's graphical programs link against: `invaders`,
-    # `treemap`, `skeletal-animation` and `codex_view` name `libGL`, `libX11`,
-    # `libasound` and `freetype` with `#library,system`, which the linker has to
-    # be able to find.
+    # What a graphical program links against: a `#library,system "libGL"` and
+    # its neighbours have to be findable by the linker `oj` drives.
     pkgs.libGL
     pkgs.libx11
     pkgs.alsa-lib
@@ -44,8 +42,4 @@ pkgs.mkShell {
     RUST_BACKTRACE = "1";
     RUSTFLAGS = "-C link-arg=-Wl,-rpath,${pkgs.lib.makeLibraryPath runtimeLibraries}";
   };
-
-  shellHook = ''
-    export OJ_JAI_DIR="''${OJ_JAI_DIR:-$PWD/vendor/jai}"
-  '';
 }

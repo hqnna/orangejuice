@@ -2,7 +2,7 @@
 //!
 //! The single-dash options are the reference compiler's, not ours: their
 //! names, arity, order and error wording come from **C§2.1** and from
-//! `vendor/jai/modules/Default_Metaprogram.jai`, which `docs/spec.md` §5.1
+//! `modules/Default_Metaprogram.jai`, which `docs/spec.md` §5.1
 //! tables. Nothing here may be invented.
 
 use std::path::PathBuf;
@@ -136,7 +136,7 @@ pub struct BuildOptions {
   pub modified_bodies: Vec<oj_scope::ModifiedBody>,
   /// `-version`, which prints the version and stops when no file follows.
   pub print_version: bool,
-  /// `-help` / `-?`, which prints the vendored metaprogram's help text.
+  /// `-help` / `-?`, which prints the metaprogram's own help text.
   pub print_help: bool,
   /// The number this compilation's own workspace takes (**C§3.1**). The
   /// reference numbers them once for the whole compiler, so a workspace a

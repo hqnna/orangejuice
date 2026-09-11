@@ -12,7 +12,8 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
     .map(|entry| entry.into_path())
     .filter(|path| path.extension().is_some_and(|extension| extension == "jai"))
     // A `.build` directory holds what a compiler left beside a program,
-    // not part of the distribution: whoever has built a vendor program has one.
+    // not part of the distribution: whoever has built one of its programs in
+    // place has one.
     .filter(|path| {
       !path
         .components()
@@ -23,7 +24,7 @@ fn jai_files(root: &Path) -> Vec<PathBuf> {
   files
 }
 
-/// **M2**: every file of the vendor distribution parses, and the printed form
+/// **M2**: every file of the distribution parses, and the printed form
 /// of its tree parses back to the same tree (`docs/spec.md` §8).
 #[test]
 fn every_file_of_the_distribution_parses_and_round_trips() {
