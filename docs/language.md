@@ -641,7 +641,7 @@ x := ifx renderer.sample_count == renderer.max_sample_count
         else renderer.max_sample_count;   // multi-line
 ```
 
-An `ifx` used as an expression is not followed by its own semicolon (it is part of the enclosing statement). `return ifx ...;` is fine. Branches of `void`/zero-sized type are allowed. `ifx` with an unknown-enum branch resolves against the other branch. Exported as `Code_If` with `if_flags.IS_IFX`.
+An `ifx` used as an expression is not followed by its own semicolon (it is part of the enclosing statement). `return ifx ...;` is fine. Branches of `void`/zero-sized type are allowed. `ifx` with an unknown-enum branch resolves against the other branch, and so does one written `null`, `xx e`, or an undesignated `.{…}`/`.[…]` — none of which names a type of its own (§5.10 downward flow). Exported as `Code_If` with `if_flags.IS_IFX`.
 
 ### 5.14 Compile-time query expressions
 

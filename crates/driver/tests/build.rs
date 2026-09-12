@@ -5887,3 +5887,23 @@ fn a_family_parameter_handed_on_inside_the_generic_body_is_not_an_instantiation(
     "41\n",
   );
 }
+
+#[test]
+fn an_ifx_branch_written_as_a_bare_literal_takes_the_other_branchs_type() {
+  // `.{}` names no type of its own, so what it is is whatever the branch
+  // beside it says — the same rule `null` and `xx e` follow there
+  // (**L§5.7**, **L§5.13**).
+  assert_output(
+    "Token :: struct { kind: int; value: int; }\n\
+     main :: () {\n  \
+       tokens: [2] Token;\n  \
+       tokens[0] = .{3, 4};\n  \
+       count := 1;\n  \
+       taken := ifx count then tokens[0] else .{};\n  \
+       missing := ifx count == 0 then tokens[0] else .{};\n  \
+       put_number(taken.kind + taken.value);\n  \
+       put_number(missing.kind + missing.value);\n\
+     }\n",
+    "7\n0\n",
+  );
+}

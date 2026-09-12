@@ -1685,9 +1685,14 @@ impl Checker<'_> {
     match (then_value, else_value) {
       // A branch written `xx e` takes the other one's type (**L§5.6**), and
       // so does one that is `null`, which names no type of its own
-      // (**L§3.2**).
-      (Some(left), Some(right)) if left.autocast || is_null(&left) => Expr::value(right.type_id),
-      (Some(left), Some(right)) if right.autocast || is_null(&right) => Expr::value(left.type_id),
+      // (**L§3.2**), and one written `.{…}` or `.[…]`, which is whatever the
+      // other branch says it is (**L§5.7**, **L§5.8**).
+      (Some(left), Some(right)) if left.autocast || is_null(&left) || is_untyped(&left) => {
+        Expr::value(right.type_id)
+      }
+      (Some(left), Some(right)) if right.autocast || is_null(&right) || is_untyped(&right) => {
+        Expr::value(left.type_id)
+      }
       (Some(left), Some(right)) => Expr::value(self.unify(left.type_id, right.type_id)),
       (Some(only), None) | (None, Some(only)) => Expr::value(self.harden(only.type_id)),
       (None, None) => Expr::value(TypeId::VOID),
@@ -1739,6 +1744,12 @@ impl Checker<'_> {
     let name = self.interned().intern(b"Source_Code_Location");
     self.preload_type(name)
   }
+}
+
+/// Whether a branch was written `.{…}` or `.[…]`, which has no type until
+/// something says what it is (**L§5.7**, **L§5.8**).
+fn is_untyped(value: &Expr) -> bool {
+  value.type_id == TypeId::UNTYPED_LITERAL
 }
 
 fn is_null(value: &Expr) -> bool {
