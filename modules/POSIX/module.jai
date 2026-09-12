@@ -3,12 +3,20 @@
 //
 // The reference vendors a generated binding of the whole of POSIX — 25,000
 // lines. This is the part programs actually call, declared by hand against
-// the documented signatures. Layouts that the kernel fixes (`stat`, `dirent`)
-// are written for x86-64 Linux and marked, because they are wrong everywhere
-// else.
+// the documented signatures.
+//
+// What is *here* is what every Unix agrees on, which is most of it: the
+// signatures are POSIX's and do not vary. What does vary — the numbers a
+// kernel gives its flags, the layouts it fixes for `stat` and `dirent`, the
+// size of an opaque pthread object, the spelling of the thread-local `errno`
+// — lives in the file for the system being compiled for.
 //
 
-#load "generated.jai";
+#if OS == .MACOS {
+    #load "macos.jai";
+} else {
+    #load "linux.jai";
+}
 
 #scope_export
 
@@ -24,16 +32,6 @@ free    :: (memory: *void) #foreign libc;
 STDIN_FILENO  :: 0;
 STDOUT_FILENO :: 1;
 STDERR_FILENO :: 2;
-
-O_RDONLY   :: 0x0;
-O_WRONLY   :: 0x1;
-O_RDWR     :: 0x2;
-O_CREAT    :: 0x40;
-O_EXCL     :: 0x80;
-O_TRUNC    :: 0x200;
-O_APPEND   :: 0x400;
-O_NONBLOCK :: 0x800;
-O_DIRECTORY :: 0x10000;
 
 SEEK_SET :: 0;
 SEEK_CUR :: 1;
@@ -51,28 +49,6 @@ pipe  :: (fds: *[2] s32) -> s32 #foreign libc;
 dup2  :: (old: s32, new: s32) -> s32 #foreign libc;
 
 // ------------------------------------------------------------ file facts ---
-
-// @Volatile: x86-64 Linux. `struct stat` is arranged by the kernel and this
-// mirrors it field for field; the padding is part of the layout.
-stat_t :: struct {
-    st_dev:     u64;
-    st_ino:     u64;
-    st_nlink:   u64;
-    st_mode:    u32;
-    st_uid:     u32;
-    st_gid:     u32;
-    __pad0:     u32;
-    st_rdev:    u64;
-    st_size:    s64;
-    st_blksize: s64;
-    st_blocks:  s64;
-    // Each is a `timespec` — seconds and nanoseconds — laid out the way the
-    // kernel writes it.
-    st_atime:   timespec;
-    st_mtime:   timespec;
-    st_ctime:   timespec;
-    __glibc_reserved: [3] s64;
-}
 
 S_IFMT   :: 0xF000;   // 0o170000
 S_IFDIR  :: 0x4000;   // 0o040000
@@ -98,15 +74,6 @@ chdir  :: (path: *u8) -> s32 #foreign libc;
 getcwd   :: (buffer: *u8, size: u64) -> *u8 #foreign libc;
 readlink :: (path: *u8, buffer: *u8, size: u64) -> s64 #foreign libc;
 realpath :: (path: *u8, resolved: *u8) -> *u8 #foreign libc;
-
-// @Volatile: x86-64 Linux.
-dirent :: struct {
-    d_ino:    u64;
-    d_off:    s64;
-    d_reclen: u16;
-    d_type:   DT;
-    d_name:   [256] u8;
-}
 
 DIR :: struct {}   // opaque
 
@@ -167,25 +134,10 @@ F_SETFL :: 4;
 
 // --------------------------------------------------------------- errors ---
 
-EPERM  :: 1;
-ENOENT :: 2;
-EINTR  :: 4;
-EIO    :: 5;
-EBADF  :: 9;
-EAGAIN :: 11;
-ENOMEM :: 12;
-EACCES :: 13;
-EEXIST :: 17;
-ENOTDIR :: 20;
-EISDIR :: 21;
-EINVAL :: 22;
-
-// glibc keeps `errno` thread-local behind a function, so it cannot simply be
-// declared as a global here.
-__errno_location :: () -> *s32 #foreign libc;
-
+// The numbers, and the thread-local `errno` itself, are the system's; what is
+// the same everywhere is that reading it goes through a function.
 errno :: inline () -> OS_Error_Code #no_context {
-    return (cast(*OS_Error_Code) __errno_location()).*;
+    return (cast(*OS_Error_Code) errno_location()).*;
 }
 
 strerror :: (code: s32) -> *u8 #foreign libc;
@@ -234,9 +186,6 @@ timelocal :: (parts: *tm) -> time_t #foreign libc;
 PROT_READ  :: 0x1;
 PROT_WRITE :: 0x2;
 
-MAP_PRIVATE   :: 0x02;
-MAP_ANONYMOUS :: 0x20;
-
 mmap   :: (address: *void, length: u64, protection: s32, flags: s32, fd: s32, offset: s64) -> *void #foreign libc;
 munmap :: (address: *void, length: u64) -> s32 #foreign libc;
 
@@ -249,25 +198,12 @@ libc :: #library,system "libc";
 // ---------------------------------------------------------- sockets ---
 
 AF_INET     :: 2;
-AF_INET6    :: 10;
 SOCK_STREAM :: 1;
 SOCK_DGRAM  :: 2;
-
-SOL_SOCKET   :: 1;
-SO_REUSEADDR :: 2;
 
 SHUT_RD   :: 0;
 SHUT_WR   :: 1;
 SHUT_RDWR :: 2;
-
-// @Volatile: `sockaddr_in` is fixed by the kernel. The address and port are
-// network byte order, which is big-endian whatever the machine is.
-sockaddr_in :: struct {
-    sin_family: u16;
-    sin_port:   u16;
-    sin_addr:   u32;
-    sin_zero:   [8] u8;
-}
 
 socket   :: (domain: s32, kind: s32, protocol: s32) -> s32 #foreign libc;
 bind     :: (fd: s32, address: *sockaddr_in, length: u32) -> s32 #foreign libc;
@@ -292,8 +228,6 @@ shm_open   :: (name: *u8, flags: s32, mode: u32) -> s32 #foreign librt;
 shm_unlink :: (name: *u8) -> s32 #foreign librt;
 ftruncate  :: (fd: s32, length: s64) -> s32 #foreign libc;
 
-MAP_SHARED :: 0x01;
-
 #scope_module
 
 // glibc folded librt into libc; naming libc works on a modern system.
@@ -302,15 +236,6 @@ librt :: #library,system "libc";
 #scope_export
 
 // ----------------------------------------------------------- threads ---
-
-// `pthread_t` is a pointer-sized handle on Linux. The attribute and mutex
-// types are opaque blocks the library sizes; these are the x86-64 sizes and
-// are @Volatile with glibc.
-pthread_t :: u64;
-
-pthread_attr_t :: struct { opaque: [56] u8; }
-pthread_mutex_t :: struct { opaque: [40] u8; }
-pthread_cond_t :: struct { opaque: [48] u8; }
 
 pthread_create  :: (thread: *pthread_t, attributes: *pthread_attr_t, start: (*void) -> *void #c_call, argument: *void) -> s32 #foreign pthread;
 pthread_join    :: (thread: pthread_t, result: **void) -> s32 #foreign pthread;

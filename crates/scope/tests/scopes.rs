@@ -34,10 +34,22 @@ fn resolve<R>(
   root: &str,
   check: impl FnOnce(&Program<'_>, &Interner) -> R,
 ) -> R {
+  resolve_for(fixture, root, oj_types::Target::HOST, check)
+}
+
+/// The same, for a compilation aimed at a named target, which is what decides
+/// the `OS` and `CPU` a `#if` folds against (**L§17**).
+fn resolve_for<R>(
+  fixture: &Fixture,
+  root: &str,
+  target: oj_types::Target,
+  check: impl FnOnce(&Program<'_>, &Interner) -> R,
+) -> R {
   let sources = SourceMap::new();
   let interner = Interner::new();
   let options = Options {
     load_preload: false,
+    target,
     ..Options::default()
   };
   let program = Program::build(&sources, &interner, &fixture.path(root), options);
@@ -235,18 +247,25 @@ fn a_static_switch_takes_the_matching_case() {
     "#if OS == {\n  case .WINDOWS; A :: 1;\n  case .LINUX;   B :: 2;\n  case;          C :: 3;\n}\n",
   );
 
-  resolve(&fixture, "main.jai", |program, interner| {
-    let tree = program.tree();
-    let declared = |name: &str| {
-      matches!(
-        tree.lookup(program.main_scope(), interner.intern(name.as_bytes())),
-        Resolution::Found(_)
-      )
-    };
-    assert!(declared("B"));
-    assert!(!declared("A"));
-    assert!(!declared("C"));
-  });
+  // Built for Linux whatever the machine is, so that the case the switch takes
+  // is the test's own business rather than the host's.
+  resolve_for(
+    &fixture,
+    "main.jai",
+    oj_types::Target::LINUX_X64,
+    |program, interner| {
+      let tree = program.tree();
+      let declared = |name: &str| {
+        matches!(
+          tree.lookup(program.main_scope(), interner.intern(name.as_bytes())),
+          Resolution::Found(_)
+        )
+      };
+      assert!(declared("B"));
+      assert!(!declared("A"));
+      assert!(!declared("C"));
+    },
+  );
 }
 
 #[test]

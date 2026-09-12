@@ -155,8 +155,19 @@ Thread_Os_Specific :: struct {
     is_done: bool;
 }
 
-Semaphore :: struct {
-    semaphore: sem_t;
+// Darwin has no unnamed POSIX semaphores: `sem_init` answers ENOSYS and
+// `sem_timedwait` is not in libSystem at all. A count behind a mutex and a
+// condition variable is the same object, built out of what is there.
+#if OS == .MACOS {
+    Semaphore :: struct {
+        mutex:     pthread_mutex_t;
+        condition: pthread_cond_t;
+        count:     s32;
+    }
+} else {
+    Semaphore :: struct {
+        semaphore: sem_t;
+    }
 }
 
 // ------------------------------------------------------------ running them ---
@@ -274,21 +285,70 @@ cvariable_wake_all :: (condition_variable: *Per_OS_Condition_Variable_Type) {
 
 init :: (s: *Semaphore, initial_value: s32 = 0) {
     assert(initial_value >= 0);
-    result := sem_init(*s.semaphore, 0, cast(u32) initial_value);
-    assert(result == 0);
+    #if OS == .MACOS {
+        assert(pthread_mutex_init(*s.mutex, null) == 0);
+        assert(pthread_cond_init(*s.condition, null) == 0);
+        s.count = initial_value;
+    } else {
+        result := sem_init(*s.semaphore, 0, cast(u32) initial_value);
+        assert(result == 0);
+    }
 }
 
 destroy :: (s: *Semaphore) {
-    sem_destroy(*s.semaphore);
+    #if OS == .MACOS {
+        pthread_cond_destroy(*s.condition);
+        pthread_mutex_destroy(*s.mutex);
+    } else {
+        sem_destroy(*s.semaphore);
+    }
 }
 
 signal :: (s: *Semaphore) {
-    sem_post(*s.semaphore);
+    #if OS == .MACOS {
+        pthread_mutex_lock(*s.mutex);
+        s.count += 1;
+        pthread_cond_signal(*s.condition);
+        pthread_mutex_unlock(*s.mutex);
+    } else {
+        sem_post(*s.semaphore);
+    }
 }
 
 // Waits for a count. Negative waits forever; otherwise the answer says whether
 // the count arrived or the time ran out.
 wait_for :: (s: *Semaphore, milliseconds: s32 = -1) -> Wait_For_Result #no_context {
+#if OS == .MACOS {
+    pthread_mutex_lock(*s.mutex);
+    answer := Wait_For_Result.SUCCESS;
+    if milliseconds < 0 {
+        // A condition variable may wake without the count having arrived, so
+        // the test is a loop rather than an `if` whichever way it waits.
+        while s.count <= 0  pthread_cond_wait(*s.condition, *s.mutex);
+    } else {
+        now: timespec;
+        if clock_gettime(.REALTIME, *now) == -1 {
+            pthread_mutex_unlock(*s.mutex);
+            return .ERROR;
+        }
+        nanoseconds := cast(s64) now.tv_nsec + 1_000_000 * cast(s64) milliseconds;
+        deadline := timespec.{
+            tv_sec  = now.tv_sec + nanoseconds / 1_000_000_000,
+            tv_nsec = nanoseconds % 1_000_000_000,
+        };
+        while s.count <= 0 {
+            if pthread_cond_timedwait(*s.condition, *s.mutex, *deadline) != 0 {
+                // The deadline passed. The count may still have arrived on the
+                // way out, which is a wait that succeeded.
+                if s.count <= 0  answer = .TIMEOUT;
+                break;
+            }
+        }
+    }
+    if answer == .SUCCESS  s.count -= 1;
+    pthread_mutex_unlock(*s.mutex);
+    return answer;
+} else {
     result: s32 = ---;
     if milliseconds < 0 {
         result = sem_wait(*s.semaphore);
@@ -317,4 +377,5 @@ wait_for :: (s: *Semaphore, milliseconds: s32 = -1) -> Wait_For_Result #no_conte
     }
 
     return .SUCCESS;
+}
 }
