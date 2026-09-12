@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-orangejuice (`oj`) is a cleanroom reimplementation of the **Jai** programming language (reference beta 0.2.009) in Rust nightly, targeting **Linux x86_64 only**, with a single LLVM 19 backend via `inkwell` and LLVM ORC JIT for compile-time execution.
+orangejuice (`oj`) is a cleanroom reimplementation of the **Jai** programming language (reference beta 0.2.009) in Rust nightly, with a single LLVM 19 backend via `inkwell` and LLVM ORC JIT for compile-time execution. It builds and runs on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`, and emits code for **`x86_64-linux` only** — see "Platforms" below, which is the difference that matters most when working on it.
 
 **Current state: M11 is in — orangejuice ships a distribution of its own and depends on no other.** `modules/` is the standard library and `docs/examples/` the acceptance suite; there is no vendored reference compiler anywhere in the tree. The nix flake, the cargo workspace and the sixteen crates of `docs/spec.md` §4 exist. `oj -version`, `oj -help`, every `oj dump` stage and `oj <file>` work: a typechecked program is lowered to `oj-ir`, compiled through inkwell/LLVM 19 and linked into a native executable that runs, and its `#run`s and `#modify`s execute along the way. Filled in so far: `crates/cli` (the hand-parsed CLI), `crates/testsupport` (vendor discovery), `crates/diag` (spans, source map, diagnostics and their reference-format rendering), `crates/source` (memory-mapped loading, module and `#load` path resolution), `crates/lexer` (tokens, the lexer, the name interner, the token dump), `crates/syntax` (the AST arena, the parser, the source and tree printers), `crates/scope` (the scope tree, the program loader, the `#if` constant folder, name resolution and the scope dump), `crates/types` (the type table, layout and type printing), `crates/sema` (declaration types, struct/enum/variant construction, constants, Match, overload resolution, polymorph solving and instantiation, macro expansion, `for_expansion`, bakes, body checking, `#run`/`#assert`/`#modify`, and the query API the back end asks its questions through), `crates/ir` (the typed IR, lowering, the type table image and the `oj <file> -- dump ir` listing), `crates/codegen` (the LLVM module, target machine and object emission), `crates/runtime` (the compile-time data segments), `crates/jit` (the ORC `LLJIT` and the engine that runs a `#run` or a `#modify`), `crates/link` (library resolution and the link line), `crates/driver` (build options, the pipeline and the workspaces a metaprogram creates) and `crates/meta` (the `#compiler` procedures, the message structs and the compile-time state a metaprogram works on).
 
@@ -67,7 +67,7 @@ Together they are the corpus too: the lexer, parser, scope and sema corpus tests
 
 ## Build and test workflow
 
-Rust toolchain, LLVM and every tool come from the nix flake; `cargo`/`rustc` are not on `PATH` outside it. The dev shell sets `RUSTFLAGS` to an rpath over LLVM's dynamic dependencies (libffi, zlib, libxml2, ncurses, libstdc++), because nothing else puts them on a runtime search path and `oj` links `llvm-sys`; that is what lets `./target/release/oj` run outside the shell too. Linking a compiled program needs a C driver on `PATH`, which the shell provides.
+Rust toolchain, LLVM and every tool come from the nix flake; `cargo`/`rustc` are not on `PATH` outside it. On Linux the dev shell sets `RUSTFLAGS` to an rpath over LLVM's dynamic dependencies (libffi, zlib, libxml2, ncurses, libstdc++), because nothing else puts them on a runtime search path and `oj` links `llvm-sys`; that is what lets `./target/release/oj` run outside the shell too. On Darwin it sets none: a nix dylib there carries its own absolute store path as its install name, so the link records it and there is nothing to search for. Linking a compiled program needs a C driver on `PATH`, which the shell provides.
 
 ```
 nix develop                 # dev shell: fenix nightly, LLVM 19, clang, pkg-config, LLVM_SYS_191_PREFIX
@@ -85,6 +85,41 @@ Running one test: `cargo test -p oj-<crate> <test_name>`, or `cargo test -p oj-l
 Timing a build: `tools/bench/generate.sh <dir>` writes three programs at scale and `tools/bench/run.sh <dir>` times them, best of four; `docs/spec.md` §7.1 records what the numbers were and where the time goes. LLVM is about 45% of the wall clock and runs on every core; the front end is serial.
 
 Nix files are exactly three and no more: `flake.nix`, `nix/shell.nix` and `nix/package.nix`. There is no Nix formatter.
+
+## Platforms
+
+**Host and target are different questions here, and they are at different stages.**
+
+- **The host** is where `oj` itself builds and runs. Three of them work: `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`. The flake builds a dev shell for each, and the Rust is architecture-clean — nothing in it is conditional on the machine it runs on.
+- **The target** is what `oj` emits and links. One of them works: `x86_64-linux`. `oj_codegen::DEFAULT_TRIPLE`, the System V classification in `oj-types`' `abi` module and the whole of `crates/ir/src/lower/asm.rs` are x86-64, and a metaprogram that sets `os_target`/`cpu_target` to anything else is told so by `unsupported_target`.
+
+So on an aarch64 host everything up to and including LLVM works — the front end runs, and `oj-codegen` still emits x86_64-linux objects with its own tests passing, because LLVM cross-compiles. What fails is everything that *executes* target code: compile-time execution JITs x86-64 instructions into an arm64 process, and a `#run` is how an ordinary build starts.
+
+That boundary is measured rather than assumed. `cargo test --workspace --no-fail-fast` is **693 passed and nothing failing** on `x86_64-linux`, and **350 passed with five test binaries failing** on both aarch64 hosts — `oj-jit`'s unit tests and `oj-driver`'s `build`, `distribution`, `examples` and `metaprogram`. The two aarch64 hosts agree exactly, which is what says the remaining gap is the target and not the machine. Treat 350 as the porting scoreboard, not as a regression; it does not move until the back end learns a second target.
+
+### macOS (`aarch64-darwin`)
+
+`nix develop` works directly on the Mac. The shell differs from the Linux one in three ways, all in `nix/shell.nix`: `lldb` instead of `gdb` and `valgrind`, which do not support Apple silicon; no `libGL`/`libx11`/`alsa-lib`/`freetype`, which are the Linux graphics stack a `#library,system "libGL"` has to link against; and no `RUSTFLAGS` rpath, for the install-name reason above.
+
+Everything through `oj-codegen` can be developed and tested here, which is most of the compiler — the lexer, parser, scopes, types, sema, IR and LLVM module all pass.
+
+### Linux, from the Mac (`tools/container/shell.sh`)
+
+Apple's `container` CLI runs Linux VMs on this machine, so both Linux platforms are reachable from it:
+
+```
+tools/container/shell.sh                    # aarch64 Linux, interactive shell
+tools/container/shell.sh scripts/check.sh   # run the commit gate in it
+OJ_ARCH=amd64 tools/container/shell.sh      # x86_64 Linux, under Rosetta
+```
+
+It creates one long-lived container per architecture from the `nixos/nix` image, bind-mounts the repository at `/work` and runs `nix develop` inside it. The container is not disposable on purpose: it holds the nix store, so only the first run pays for LLVM and the toolchain.
+
+`CARGO_TARGET_DIR` is `target-<arch>/` — per architecture, so the host's Mach-O build tree and each guest's ELF one do not evict each other, but still **inside the checkout**, which matters more than it looks: `oj` finds the modules it ships by walking up from its own binary, so a build tree outside the repository has no `modules/` above it. Put it outside and `the_distribution_is_found_without_being_pointed_at` fails — or worse, passes only when a sibling test happened to call `use_own_modules()` first, since that sets `OJ_MODULES` for the whole process and sends the lookup down its other branch.
+
+`OJ_ARCH=amd64` is the only way on this machine to exercise the supported target end to end, with Rosetta translating x86-64 — and it genuinely does: the whole suite is green there, **693 passed, nothing failing**, the JIT and the linker included. It needs `filter-syscalls = false` in the container's `nix.conf`, which the script writes: the seccomp BPF program nix installs around a build does not load under translation. It is the slow path — use it to confirm a change, not to iterate on one.
+
+`container` state is worth knowing about when something looks stuck: `container list --all`, `container stop <name>`, `container delete <name>` to start over (which throws away the nix store with it).
 
 ## CLI surface
 

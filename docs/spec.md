@@ -1,6 +1,6 @@
 # orangejuice — Project Specification
 
-orangejuice (`oj`) is a cleanroom implementation of the Jai programming language (beta 0.2.009 semantics) written in Rust nightly, targeting Linux x86_64 with a single LLVM backend (via `inkwell`) and LLVM ORC JIT for compile-time execution. It is built and developed with a Nix flake (flake-parts + fenix + crane). This document defines goals, constraints, architecture, the CLI, the build/test workflow, and the milestone plan. The language it implements is specified in `docs/language.md` (**L**); the behavior of the reference compiler it must be compatible with is specified in `docs/compiler.md` (**C**).
+orangejuice (`oj`) is a cleanroom implementation of the Jai programming language (beta 0.2.009 semantics) written in Rust nightly, with a single LLVM backend (via `inkwell`) and LLVM ORC JIT for compile-time execution. It builds and runs on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`, and emits code for `x86_64-linux` (§2.1). It is built and developed with a Nix flake (flake-parts + fenix + crane). This document defines goals, constraints, architecture, the CLI, the build/test workflow, and the milestone plan. The language it implements is specified in `docs/language.md` (**L**); the behavior of the reference compiler it must be compatible with is specified in `docs/compiler.md` (**C**).
 
 ---
 
@@ -14,13 +14,36 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 
 ## 2. Non-goals (for now)
 
-- Targets other than Linux x86_64 (no Windows/macOS/Android/iOS/WASM/ARM64 output; `Build_Options.os_target`/`cpu_target` other than LINUX/X64 produce a clear error). The `OS`/`CPU` constants are `.LINUX`/`.X64`.
+- Targets beyond the three of §2.1 — no Windows, Android, iOS, WASM or PlayStation output. `Build_Options.os_target`/`cpu_target` naming anything the compiler does not produce output for is a clear error rather than a wrong executable.
 - The native x64 backend (`backend = .X64` is accepted and mapped to LLVM with a warning).
 - A bytecode interpreter; compile-time execution uses ORC JIT (see §6.5 for the consequences).
 - The interactive bytecode debugger (`-debugger` prints a stack trace and exits).
 - CodeView debug info; `natvis` is an accepted no-op. `use_visual_studio_message_format` does switch the diagnostic layout (**C§12**); what is *not* implemented is ANSI colour, so `-no_color` is a no-op because nothing is coloured to begin with.
 - `#dynamic_specialize`, `#cpp_method`/`#cpp_return_type_is_non_pod` beyond Itanium-ABI passthrough, relative pointers (removed from the language anyway).
 - Performance parity with the reference compiler in the first releases (correctness first; architecture must not preclude it).
+
+### 2.1 Hosts and targets
+
+A *host* is a machine `oj` builds and runs on; a *target* is a machine it emits and links code for. Three of each are in scope, and they are not at the same stage.
+
+| Platform | Host | Target |
+|---|---|---|
+| `x86_64-linux` | works | works |
+| `aarch64-linux` | works | not yet |
+| `aarch64-darwin` | works | not yet |
+
+All three hosts build: the flake's `systems` names them, `cargo check --workspace` passes on each, and none of the Rust is conditional on the machine it runs on. What is x86-64 is the *output*: `oj_codegen::DEFAULT_TRIPLE`, the System V eightbyte classification in `oj-types`' `abi` module (**L§7.11**), the link line in `oj-link`, the `OS`/`CPU` constants the checker injects, and all of `crates/ir/src/lower/asm.rs` — `#asm` is an x86-64 feature of the language itself (**L§15**), so on another target it is a construct the compiler reports rather than an encoding it invents.
+
+On an aarch64 host everything through LLVM therefore works, because LLVM cross-compiles; what fails is executing target code, and compile-time execution does exactly that. `cargo test --workspace --no-fail-fast` is 693 tests passed and nothing failing on `x86_64-linux`; on either aarch64 host it is 350 passed with five test binaries failing — `oj-jit`'s unit tests and `oj-driver`'s `build`, `distribution`, `examples` and `metaprogram`. The two aarch64 hosts agree exactly, which is what says the gap is the target rather than the machine, and 350 is the measured size of what is left.
+
+What a second target needs, in the order the dependencies run:
+
+1. **A target, rather than a constant.** One value carrying os and cpu, built from `Build_Options.os_target`/`cpu_target` and defaulting to the host, threaded through `oj-codegen` (triple, cpu, `Target::initialize_*`), `oj-link` (driver and link line) and `oj-sema` (the `OS`/`CPU` constants and `IS_CROSS_COMPILING`). `unsupported_target` in `oj-driver` then rejects what is genuinely left rather than everything.
+2. **AAPCS64 beside System V.** `oj-types`' `abi` module answers one question — how an aggregate crosses a `#c_call` boundary — with the System V algorithm. AArch64 answers it differently (homogeneous float aggregates in vector registers, anything over 16 bytes indirect), and Darwin varies it again for varargs and narrow integers.
+3. **The distribution's x86-64 corners.** `Atomics` already branches on `#if CPU == .X64` with a compare-and-swap loop for everything else; `Machine_X64`, `meow_hash` (AES-NI) and the crash handler's register context do not, and need the same treatment. The `POSIX`/`Linux` bindings are generated (`tools/cbind`) and their struct layouts are per-architecture.
+4. **Mach-O and libSystem**, for `aarch64-darwin` alone: object format, the `ld64` link line, and a libc surface that is not glibc.
+
+Porting work is done on the host it targets. `docs/spec.md` §7.2 is how a Linux host is reached from a Mac.
 
 ## 3. Project constraints
 
@@ -44,6 +67,7 @@ flake.nix  flake.lock  nix/shell.nix  nix/package.nix
 Cargo.toml  Cargo.lock  rustfmt.toml  clippy.toml  LICENSE  README.md
 docs/language.md  docs/compiler.md  docs/spec.md
 scripts/check.sh
+tools/bench/  tools/cbind/  tools/container/shell.sh
 crates/
   cli/        oj           hand-parsed CLI: jai's own command line, with ours after `--`
   driver/     oj-driver    workspaces, Build_Options, default metaprogram bootstrap, link step, message loop plumbing
@@ -230,10 +254,28 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 
 ## 7. Nix and build workflow
 
-- `flake.nix`: `flake-parts` `mkFlake`; inputs `nixpkgs`, `flake-parts`, `fenix`, `crane`; `perSystem` for `x86_64-linux`: `packages.default = import ./nix/package.nix { inherit pkgs craneLib llvm; }`, `devShells.default = import ./nix/shell.nix { ... }`, `checks` (crane `cargoClippy`, `cargoFmt`, `cargoTest`, `cargoDoc`), `apps.default` running `oj`. No `formatter` output.
-- `nix/shell.nix`: the fenix nightly toolchain (`rustc`, `cargo`, `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`), `llvmPackages_19.llvm`/`libllvm`/`lld` and `clang` (link driver), `pkg-config`, `zlib`, `libffi`, `libxml2`, `ncurses` (LLVM link deps), `gdb`, `valgrind`; environment: `LLVM_SYS_191_PREFIX`, `RUST_BACKTRACE=1`.
+- `flake.nix`: `flake-parts` `mkFlake`; inputs `nixpkgs`, `flake-parts`, `fenix`, `crane`; `perSystem` for `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (§2.1). `devShells.default = import ./nix/shell.nix { ... }` on all three; `packages.default = import ./nix/package.nix { inherit pkgs craneLib llvm; }`, `packages.portable`, `checks` (crane `cargoClippy`, `cargoFmt`, `cargoTest`, `cargoDoc`) and `apps.default` only where the host is also a target, since each of them builds and runs real programs. The `perSystem` body stays one attribute set with `lib.optionalAttrs` inside it rather than a `//` merge, which is what lets flake-parts see statically that there is no `formatter` output.
+- `nix/shell.nix`: the fenix nightly toolchain (`rustc`, `cargo`, `rustfmt`, `clippy`, `rust-src`, `rust-analyzer`), `llvmPackages_19.llvm`/`libllvm`/`lld` and `clang` (link driver), `pkg-config`, `zlib`, `libffi`, `libxml2`, `ncurses` (LLVM link deps), and a debugger — `gdb` and `valgrind` on Linux, `lldb` on Darwin, which is what Apple silicon supports. The Linux graphics packages a `#library,system "libGL"` links against are Linux-only. Environment: `LLVM_SYS_191_PREFIX`, `RUST_BACKTRACE=1`, and on Linux a `RUSTFLAGS` rpath over LLVM's dynamic dependencies — on Darwin a nix dylib's install name is its absolute store path, so there is nothing to search for.
 - `nix/package.nix`: crane `buildPackage` with `src` = the cargo sources plus `rustfmt.toml`/`clippy.toml` (the fmt and clippy checks need the style rules, which `cleanCargoSource` filters out) and `modules/`/`docs/examples/` (nothing compiles without a Preload), and a `postInstall` that copies `modules/` next to the binary so an installed `oj` finds its own distribution, `buildInputs` LLVM + zlib + libffi + ncurses + libxml2, `nativeBuildInputs` pkg-config, `cargoArtifacts` from `buildDepsOnly`, `doCheck = true`, `meta.license = mit`, `meta.mainProgram = "oj"`.
 - Developer loop: `nix develop` → `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (also exposed as `scripts/check.sh` and as `nix flake check`). `cargo test` includes integration tests that build and run real programs; those need a C driver on `PATH` to link with, and skip with a clear message when there is none.
+
+### 7.2 Working on Linux from a Mac
+
+`aarch64-darwin` is a host but not a target (§2.1), so a change to the back end, the JIT or the link has to be run on Linux. Apple's `container` CLI runs Linux VMs on an Apple silicon Mac, and `tools/container/shell.sh` is the loop:
+
+```
+tools/container/shell.sh                    # aarch64 Linux, interactive shell
+tools/container/shell.sh scripts/check.sh   # the commit gate, in it
+OJ_ARCH=amd64 tools/container/shell.sh      # x86_64 Linux, under Rosetta
+```
+
+One long-lived container per architecture, from the `nixos/nix` image, with the repository bind-mounted at `/work` and `nix develop` run inside it. It is deliberately not disposable: the container holds the nix store, so only the first run pays for LLVM and the toolchain.
+
+`CARGO_TARGET_DIR` is `target-<arch>/`: per architecture, so that the host's Mach-O build tree and each guest's ELF one do not evict each other, and inside the checkout, because `oj` finds its own distribution by walking up from its binary (§10.1) and a build tree outside the repository has no `modules/` above it.
+
+Two settings the image does not come with, both written by the script: `experimental-features = nix-command flakes`, since `nix develop` is a flake command; and, for `amd64` only, `filter-syscalls = false`, because the seccomp BPF program nix installs around a build does not load under Rosetta translation.
+
+`OJ_ARCH=amd64` is the only way on such a machine to exercise the supported target end to end, and it does: the whole suite passes under translation, the JIT and the link included. It is the slow path, so it confirms a change rather than iterating on one.
 
 ### 7.1 Where a build's time goes
 

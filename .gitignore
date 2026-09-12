@@ -1,4 +1,8 @@
 /target/
+# The container dev shells build here: a tree per guest architecture, in the
+# checkout because `oj` finds its modules by walking up from its own binary.
+/target-arm64/
+/target-amd64/
 /result
 /result-*
 .build/
