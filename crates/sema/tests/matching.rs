@@ -751,3 +751,32 @@ fn a_member_of_a_type_the_checker_has_not_worked_out_is_not_reported() {
     ",
   );
 }
+
+#[test]
+fn a_member_a_type_does_not_have_is_reported_the_same_way() {
+  // `Point.z` reaches the type rather than a value, and a nested name is
+  // looked up in the body's own scope (**L§8.3**) — which is no more able to
+  // search outward than a member is.
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; }
+      f :: () { v := Point.z; }
+      "
+    ),
+    vec!["'z' is not a member of 'Point'.".to_string()]
+  );
+}
+
+#[test]
+fn an_enum_member_that_does_not_exist_is_reported() {
+  assert_eq!(
+    errors(
+      "
+      Colour :: enum { RED; GREEN; }
+      f :: () { c := Colour.MAUVE; }
+      "
+    ),
+    vec!["'MAUVE' is not a member of 'Colour'.".to_string()]
+  );
+}

@@ -49,7 +49,11 @@ impl Checker<'_> {
 
     let base = self.expression_type(scope, source, left);
     if let Some(denoted) = base.denoted {
-      return self.member_of_type(denoted, name);
+      let found = self.member_of_type(denoted, name);
+      if !found.is_unknown() {
+        return found;
+      }
+      return self.unknown_member(source, right, denoted, name);
     }
     if base.is_unknown() {
       return Expr::UNKNOWN;
