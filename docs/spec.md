@@ -259,9 +259,11 @@ on 28 threads, so LLVM is around 45% of the wall clock and most of the machine.
 One unit takes 1317ms for the same program, which is what the split buys.
 
 Two consequences worth knowing before optimizing anything here. Compiling
-`Default_Metaprogram` costs about 200ms on every build, whatever the program —
-that is the gap between the two columns, and it is the whole cost of a small
-build. And no single front-end function is worth surgery: a callgrind profile
+`Default_Metaprogram` costs 190-250ms on every build, whatever the program —
+that is the gap between the two columns, and it is most of the cost of a small
+build. It is not the `Check` plugin: `-no_check` measures the same, so what is
+being paid for is parsing, typechecking and JIT-compiling the metaprogram and
+the `Compiler` module behind it. And no single front-end function is worth surgery: a callgrind profile
 of the front end alone puts `ScopeTree::lookup` at 9.8% and
 `Program::is_uninstantiated` at 5.8%, but the walk each does is a handful of
 instructions and memoizing the second one measured *slower* than repeating it.
