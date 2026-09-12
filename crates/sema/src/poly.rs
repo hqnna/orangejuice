@@ -1603,10 +1603,15 @@ impl Checker<'_> {
   }
 
   /// Whether `actual` has the same shape as `pattern` with every family in it
-  /// replaced by one of its instantiations (**L§8.5**).
+  /// replaced by one of its instantiations (**L§8.5**). The family *itself* is
+  /// not one of them: `parse(parser)` written inside a body whose own `parser`
+  /// is still `*Parser` is the generic body reading itself, not a call that
+  /// specializes anything, and taking it for one bakes an instantiation whose
+  /// parameters are the family — a body the checker would then report every
+  /// call in.
   fn family_matches(&self, pattern: TypeId, actual: TypeId) -> bool {
     if pattern == actual {
-      return true;
+      return !self.mentions_family(pattern);
     }
     match (
       self.types().kind(pattern).clone(),

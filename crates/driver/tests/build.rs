@@ -5856,3 +5856,34 @@ fn meow_hash_says_it_is_x86_64_rather_than_failing_from_the_inside() {
     "it should not also report every block inside it:\n{text}"
   );
 }
+
+#[test]
+fn a_family_parameter_handed_on_inside_the_generic_body_is_not_an_instantiation() {
+  // A module whose procedures all take the family and whose calls all hand
+  // that same parameter on has nothing to specialize: reading one of those
+  // calls as a call that passes an instantiation bakes a specialization whose
+  // parameters are the family itself, and then reports every call in the body
+  // it went on to check (**L§7.8**, **L§8.5**).
+  assert_output_with_module(
+    "Parser :: struct (User_Data: Type) {\n  \
+       value: int;\n  \
+       user_data: User_Data;\n\
+     }\n\
+     #scope_export\n\
+     parse :: (parser: *Parser) -> int {\n  \
+       total := doubled(parser);\n  \
+       return total + 1;\n\
+     }\n\
+     #scope_module\n\
+     doubled :: (parser: *Parser) -> int {\n  \
+       return parser.value * 2;\n\
+     }\n",
+    "Given :: #import \"Parameterized\";\n\
+     main :: () {\n  \
+       parser: Given.Parser(string);\n  \
+       parser.value = 20;\n  \
+       put_number(Given.parse(*parser));\n\
+     }\n",
+    "41\n",
+  );
+}

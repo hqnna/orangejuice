@@ -279,3 +279,31 @@ fn a_polymorphic_struct_is_baked_per_argument_set() {
     },
   );
 }
+
+#[test]
+fn handing_a_family_parameter_on_inside_the_generic_body_instantiates_nothing() {
+  // A module whose procedures all take the family and hand that same parameter
+  // on to each other has nothing to specialize with: the argument is the
+  // family itself rather than one of its instantiations. Reading such a call
+  // as a specialization bakes one whose parameters are the family, and the
+  // body the checker then goes on to check under it is the generic body with
+  // none of its types bound — every call in it reported (**L§7.8**,
+  // **L§8.5**).
+  build(
+    "Parser :: struct (User_Data: Type) {\n\
+     \x20 value: int;\n\
+     \x20 user_data: User_Data;\n\
+     }\n\
+     step :: (parser: *Parser) -> int {\n\
+     \x20 total := handed_on(parser);\n\
+     \x20 return total;\n\
+     }\n\
+     handed_on :: (parser: *Parser) -> int {\n\
+     \x20 return parser.value;\n\
+     }\n",
+    |checker| {
+      assert_eq!(checker.instance_count(), 0);
+      assert!(errors(checker).is_empty(), "{:?}", errors(checker));
+    },
+  );
+}
