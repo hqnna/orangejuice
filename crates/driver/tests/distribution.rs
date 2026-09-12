@@ -353,28 +353,25 @@ fn a_module_reached_two_ways_is_one_module() {
   assert_eq!(String::from_utf8_lossy(&output.stdout), "one module\n");
 }
 
-/// Every layout *and every constant* `POSIX/macos.jai` and the crash handler
-/// fix for Darwin, measured against the system's own headers.
+/// Every layout and every constant `POSIX` and the crash handler fix, measured
+/// against the system's own headers, on whichever machine this runs on.
 ///
-/// The Linux side of `POSIX` has a generated binding behind it: a struct's
-/// layout there is whatever the C compiler laid out, because the C compiler is
-/// what produced the file (`tools/cbind/README.md`). Darwin has no generated
-/// binding, so these were written from the manual pages — and a hand-written
-/// `struct stat` is exactly the kind of thing that is wrong by eight bytes and
-/// says nothing about it until a crash handler prints the wrong address.
+/// Most of `POSIX` is hand-written: `module.jai` for what every Unix agrees
+/// on, `linux.jai` and `macos.jai` for what a kernel decides. Only the glibc
+/// half has a generated binding behind it, and even that is generated on *one*
+/// architecture — `struct stat` is arranged differently on arm64 than on
+/// x86-64, glibc sizes its opaque pthread objects differently, and arm64
+/// overrides `O_DIRECTORY`.
 ///
-/// So the two are compared directly: a C program prints what `<sys/stat.h>`
-/// and the rest say, a Jai program prints what the front end made of our
-/// declarations, and the two outputs have to be the same text. The constants
-/// matter as much as the layouts and are easier to get wrong quietly — a
-/// `struct stat` that is eight bytes off announces itself, where an
-/// `SO_REUSEADDR` that is wrong by two just stops working.
+/// So they are compared directly: a C program prints what `<sys/stat.h>` and
+/// the rest say, a Jai program prints what the front end made of our
+/// declarations, and every fact has to agree. The constants matter as much as
+/// the layouts and are easier to get wrong quietly — a `struct stat` that is
+/// eight bytes off announces itself, where an `SO_REUSEADDR` that is wrong by
+/// two just stops working, and `_SC_GETPW_R_SIZE_MAX` written as 70 where
+/// Darwin says 71 only sizes a buffer wrong.
 #[test]
-fn a_darwin_layout_is_what_the_c_compiler_says() {
-  if !oj_types::Target::HOST.is_darwin() {
-    eprintln!("skipping: these are Darwin's layouts and this is not Darwin");
-    return;
-  }
+fn the_posix_declarations_match_the_system_headers() {
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to measure with");
     return;
@@ -382,7 +379,7 @@ fn a_darwin_layout_is_what_the_c_compiler_says() {
 
   let directory = tempfile::tempdir().expect("a temporary directory");
   let c_path = directory.path().join("measure.c");
-  std::fs::write(&c_path, DARWIN_LAYOUT_C).expect("the C source is writable");
+  std::fs::write(&c_path, LAYOUT_C).expect("the C source is writable");
   let measure = directory.path().join("measure");
   let built = Command::new(oj_link::driver(oj_types::Target::HOST))
     .arg("-o")
@@ -402,7 +399,7 @@ fn a_darwin_layout_is_what_the_c_compiler_says() {
     .expect("the measuring program should run");
   let from_c = String::from_utf8_lossy(&from_c.stdout).into_owned();
 
-  let from_jai = build_and_run(DARWIN_LAYOUT_JAI).expect("the Jai side should build and run");
+  let from_jai = build_and_run(LAYOUT_JAI).expect("the Jai side should build and run");
 
   assert!(
     from_c.lines().count() > 20,
@@ -427,19 +424,23 @@ fn a_darwin_layout_is_what_the_c_compiler_says() {
   }
   assert!(
     wrong.is_empty(),
-    "{} of {} Darwin facts do not match the system headers:\n{}",
+    "{} of {} facts do not match the system headers:\n{}",
     wrong.len(),
     from_c.lines().count(),
     wrong.join("\n")
   );
 }
 
-const DARWIN_LAYOUT_C: &str = r#"
-/* `<ucontext.h>` is XSI, and `_DARWIN_C_SOURCE` puts back the BSD members
-   that asking for XSI alone would hide — `d_namlen`, `pw_change` and the
-   rest. Both together are what the modules are written against. */
-#define _XOPEN_SOURCE 700
-#define _DARWIN_C_SOURCE 1
+const LAYOUT_C: &str = r##"
+/* `<ucontext.h>` is XSI on Darwin, and `_DARWIN_C_SOURCE` puts back the BSD
+   members that asking for XSI alone would hide — `d_namlen`, `pw_change` and
+   the rest. `_GNU_SOURCE` is glibc's equivalent, and is what `REG_RIP` needs. */
+#ifdef __APPLE__
+  #define _XOPEN_SOURCE 700
+  #define _DARWIN_C_SOURCE 1
+#else
+  #define _GNU_SOURCE 1
+#endif
 #include <stdio.h>
 #include <stddef.h>
 #include <dirent.h>
@@ -449,9 +450,9 @@ const DARWIN_LAYOUT_C: &str = r#"
 #include <pthread.h>
 #include <pwd.h>
 #include <signal.h>
-#include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -507,7 +508,7 @@ int main(void) {
   VAL("PROT_WRITE", PROT_WRITE);
   VAL("MAP_SHARED", MAP_SHARED);
   VAL("MAP_PRIVATE", MAP_PRIVATE);
-  VAL("MAP_ANON", MAP_ANON);
+  VAL("MAP_ANONYMOUS", MAP_ANONYMOUS);
 
   VAL("AF_INET", AF_INET);
   VAL("AF_INET6", AF_INET6);
@@ -532,8 +533,11 @@ int main(void) {
   VAL("CLOCK.MONOTONIC", CLOCK_MONOTONIC);
   VAL("CLOCK.MONOTONIC_RAW", CLOCK_MONOTONIC_RAW);
 
-  VAL("PTHREAD_MUTEX.RECURSIVE", PTHREAD_MUTEX_RECURSIVE);
-  VAL("PTHREAD_MUTEX.ERRORCHECK", PTHREAD_MUTEX_ERRORCHECK);
+#ifdef __APPLE__
+  VAL("PTHREAD_MUTEX.RECURSIVE_NP", PTHREAD_MUTEX_RECURSIVE);
+#else
+  VAL("PTHREAD_MUTEX.RECURSIVE_NP", PTHREAD_MUTEX_RECURSIVE_NP);
+#endif
 
   VAL("_SC_NPROCESSORS_ONLN", _SC_NPROCESSORS_ONLN);
   VAL("_SC_NPROCESSORS_CONF", _SC_NPROCESSORS_CONF);
@@ -561,7 +565,11 @@ int main(void) {
   SIZE("stat_t", struct stat);
   OFF("stat_t.st_mode", struct stat, st_mode);
   OFF("stat_t.st_ino", struct stat, st_ino);
+#ifdef __APPLE__
   OFF("stat_t.st_mtime", struct stat, st_mtimespec);
+#else
+  OFF("stat_t.st_mtime", struct stat, st_mtim);
+#endif
   OFF("stat_t.st_size", struct stat, st_size);
   OFF("stat_t.st_blocks", struct stat, st_blocks);
 
@@ -602,21 +610,27 @@ int main(void) {
   SIZE("pthread_mutex_t", pthread_mutex_t);
   SIZE("pthread_cond_t", pthread_cond_t);
   SIZE("pthread_attr_t", pthread_attr_t);
-  SIZE("pthread_mutexattr_t", pthread_mutexattr_t);
 
-  /* The three the crash handler reads a saved register out of. */
-  printf("UC_MCONTEXT %zu\n", offsetof(ucontext_t, uc_mcontext));
-  printf("MCONTEXT_FP %zu\n",
-    offsetof(struct __darwin_mcontext64, __ss)
-      + offsetof(struct __darwin_arm_thread_state64, __fp));
-  printf("MCONTEXT_PC %zu\n",
-    offsetof(struct __darwin_mcontext64, __ss)
-      + offsetof(struct __darwin_arm_thread_state64, __pc));
+  /* Where the crash handler reads the saved program counter from. Darwin
+     keeps a pointer to the machine state in the `ucontext_t`; Linux keeps the
+     state inline, and both numbers are the architecture's. */
+  VAL("UC_MCONTEXT", offsetof(ucontext_t, uc_mcontext));
+#if defined(__APPLE__)
+  VAL("MCONTEXT_FP", offsetof(struct __darwin_mcontext64, __ss)
+                       + offsetof(struct __darwin_arm_thread_state64, __fp));
+  VAL("MCONTEXT_PC", offsetof(struct __darwin_mcontext64, __ss)
+                       + offsetof(struct __darwin_arm_thread_state64, __pc));
+#elif defined(__aarch64__)
+  VAL("MCONTEXT_FP", offsetof(struct sigcontext, regs) + 29 * 8);
+  VAL("MCONTEXT_PC", offsetof(struct sigcontext, pc));
+#else
+  VAL("MCONTEXT_PC", offsetof(mcontext_t, gregs) + REG_RIP * 8);
+#endif
   return 0;
 }
-"#;
+"##;
 
-const DARWIN_LAYOUT_JAI: &str = r#"
+const LAYOUT_JAI: &str = r##"
 #import "Basic";
 #import "POSIX";
 Crash :: #import "Runtime_Support_Crash_Handler";
@@ -667,7 +681,7 @@ main :: () {
     print("PROT_WRITE %\n", PROT_WRITE);
     print("MAP_SHARED %\n", MAP_SHARED);
     print("MAP_PRIVATE %\n", MAP_PRIVATE);
-    print("MAP_ANON %\n", MAP_ANON);
+    print("MAP_ANONYMOUS %\n", MAP_ANONYMOUS);
 
     print("AF_INET %\n", AF_INET);
     print("AF_INET6 %\n", AF_INET6);
@@ -692,8 +706,7 @@ main :: () {
     print("CLOCK.MONOTONIC %\n", cast(s64) clockid_t.MONOTONIC);
     print("CLOCK.MONOTONIC_RAW %\n", cast(s64) clockid_t.MONOTONIC_RAW);
 
-    print("PTHREAD_MUTEX.RECURSIVE %\n", cast(s64) PTHREAD_MUTEX.RECURSIVE);
-    print("PTHREAD_MUTEX.ERRORCHECK %\n", cast(s64) PTHREAD_MUTEX.ERRORCHECK);
+    print("PTHREAD_MUTEX.RECURSIVE_NP %\n", cast(s64) PTHREAD_MUTEX.RECURSIVE_NP);
 
     print("_SC_NPROCESSORS_ONLN %\n", cast(s64) _SC_NPROCESSORS_ONLN);
     print("_SC_NPROCESSORS_CONF %\n", cast(s64) _SC_NPROCESSORS_CONF);
@@ -771,10 +784,11 @@ main :: () {
     print("pthread_mutex_t %\n", size_of(pthread_mutex_t));
     print("pthread_cond_t %\n", size_of(pthread_cond_t));
     print("pthread_attr_t %\n", size_of(pthread_attr_t));
-    print("pthread_mutexattr_t %\n", size_of(pthread_mutexattr_t));
 
     print("UC_MCONTEXT %\n", Crash.UC_MCONTEXT);
-    print("MCONTEXT_FP %\n", Crash.MCONTEXT_FP);
+    #if OS == .MACOS || CPU == .ARM64 {
+        print("MCONTEXT_FP %\n", Crash.MCONTEXT_FP);
+    }
     print("MCONTEXT_PC %\n", Crash.MCONTEXT_PC);
 }
-"#;
+"##;

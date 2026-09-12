@@ -139,20 +139,20 @@ segv_code_name :: (code: s32) -> string #no_context {
 
 // The instruction pointer the kernel saved when it delivered the signal. The
 // third handler argument is a `ucontext_t`, and where the saved program
-// counter sits inside one is the system's own business.
+// counter sits inside one is the system's *and* the architecture's business —
+// the three offsets below are what says where.
 caller_address :: (secret: *void) -> *void #no_context {
     if !secret  return null;
     #if OS == .MACOS {
+        // Darwin's `ucontext_t` holds a pointer to the machine state rather
+        // than the state itself.
         machine := (cast(**u8) (cast(*u8) secret + UC_MCONTEXT)).*;
         if !machine  return null;
         return cast,no_check(*void) (cast(*u64) (machine + MCONTEXT_PC)).*;
     } else {
-        // On x86-64 Linux the saved general registers begin at offset 40 and
-        // `rip` is the seventeenth of them.
-        UC_MCONTEXT_GREGS :: 40;
-        REG_RIP           :: 16;
-        gregs := cast(*u64) (cast(*u8) secret + UC_MCONTEXT_GREGS);
-        return cast,no_check(*void) gregs[REG_RIP];
+        // Linux's holds it inline.
+        machine := cast(*u8) secret + UC_MCONTEXT;
+        return cast,no_check(*void) (cast(*u64) (machine + MCONTEXT_PC)).*;
     }
 }
 
@@ -318,6 +318,25 @@ SIG_DFL :: null;
 } else {
     SIGBUS :: 7;
 
+    // Where the machine state the kernel saved is, and where the saved program
+    // counter sits inside it. Linux keeps the state inline in the
+    // `ucontext_t`, and both numbers are the architecture's.
+    //
+    // @Volatile: `the_posix_declarations_match_the_system_headers` measures
+    // these against the system's own headers.
+    #if CPU == .ARM64 {
+        // `uc_mcontext` is a `struct sigcontext`: a fault address, then
+        // `regs[31]`, then `sp` and `pc`.
+        UC_MCONTEXT :: 176;
+        MCONTEXT_FP :: 8 + 29 * 8;
+        MCONTEXT_PC :: 8 + 31 * 8 + 8;
+    } else {
+        // `uc_mcontext` is an `mcontext_t`, whose `gregs` come first; `rip` is
+        // the seventeenth of them.
+        UC_MCONTEXT :: 40;
+        MCONTEXT_PC :: 16 * 8;
+    }
+
     SA_SIGINFO :: 0x4;
     SA_ONSTACK  :: 0x08000000;
     SA_RESTART  :: 0x10000000;
@@ -327,14 +346,16 @@ SIG_DFL :: null;
 
     // glibc's `siginfo_t`. Only the first three words and `si_addr` are read;
     // the rest is the union the kernel fills per signal, kept as padding so
-    // the struct is the size the kernel writes.
+    // the struct is the size the kernel writes — which is 128 bytes, not the
+    // 136 this said before `the_posix_declarations_match_the_system_headers`
+    // measured it.
     siginfo_t :: struct {
         si_signo: s32;
         si_errno: s32;
         si_code:  s32;
         _pad0:    s32;
         si_addr:  *void;
-        _rest:    [112] u8;
+        _rest:    [104] u8;
     }
 
     // glibc's `struct sigaction`. `sa_handler` and `sa_sigaction` are a union,

@@ -2,6 +2,13 @@
 // What POSIX is on Linux: the flags the kernel numbers, the layouts it fixes,
 // and the sizes glibc gives its opaque objects.
 //
+// Some of that is per *architecture* rather than per system. `struct stat` is
+// arranged differently on arm64 than on x86-64, glibc sizes its opaque pthread
+// objects differently, and arm64 overrides `O_DIRECTORY` — so those branch on
+// `CPU` below. `the_posix_declarations_match_the_system_headers` in
+// `crates/driver/tests/distribution.rs` measures every one of them against the
+// system's own headers, on whichever machine it runs.
+//
 // The generated binding sits behind this — `generated.jai` is produced from
 // glibc's own headers by `tools/cbind`, which is where everything not
 // declared by hand comes from.
@@ -21,30 +28,59 @@ O_EXCL      :: 0x80;
 O_TRUNC     :: 0x200;
 O_APPEND    :: 0x400;
 O_NONBLOCK  :: 0x800;
-O_DIRECTORY :: 0x10000;
+
+// arm64 is one of the architectures that overrides the generic value.
+#if CPU == .ARM64 {
+    O_DIRECTORY :: 0x4000;
+} else {
+    O_DIRECTORY :: 0x10000;
+}
 
 // ------------------------------------------------------------ file facts ---
 
-// @Volatile: x86-64 Linux. `struct stat` is arranged by the kernel and this
-// mirrors it field for field; the padding is part of the layout.
-stat_t :: struct {
-    st_dev:     u64;
-    st_ino:     u64;
-    st_nlink:   u64;
-    st_mode:    u32;
-    st_uid:     u32;
-    st_gid:     u32;
-    __pad0:     u32;
-    st_rdev:    u64;
-    st_size:    s64;
-    st_blksize: s64;
-    st_blocks:  s64;
-    // Each is a `timespec` — seconds and nanoseconds — laid out the way the
-    // kernel writes it.
-    st_atime:   timespec;
-    st_mtime:   timespec;
-    st_ctime:   timespec;
-    __glibc_reserved: [3] s64;
+// @Volatile: `struct stat` is arranged by the kernel and this mirrors it field
+// for field; the padding is part of the layout. The two architectures do not
+// arrange it the same way — x86-64 puts `st_nlink` before `st_mode` and gives
+// the whole thing 144 bytes, where arm64 takes the asm-generic shape and 128.
+#if CPU == .ARM64 {
+    stat_t :: struct {
+        st_dev:     u64;
+        st_ino:     u64;
+        st_mode:    u32;
+        st_nlink:   u32;
+        st_uid:     u32;
+        st_gid:     u32;
+        st_rdev:    u64;
+        __pad1:     u64;
+        st_size:    s64;
+        st_blksize: s32;
+        __pad2:     s32;
+        st_blocks:  s64;
+        // Each is a `timespec` — seconds and nanoseconds — laid out the way
+        // the kernel writes it.
+        st_atime:   timespec;
+        st_mtime:   timespec;
+        st_ctime:   timespec;
+        __unused:   [2] s32;
+    }
+} else {
+    stat_t :: struct {
+        st_dev:     u64;
+        st_ino:     u64;
+        st_nlink:   u64;
+        st_mode:    u32;
+        st_uid:     u32;
+        st_gid:     u32;
+        __pad0:     u32;
+        st_rdev:    u64;
+        st_size:    s64;
+        st_blksize: s64;
+        st_blocks:  s64;
+        st_atime:   timespec;
+        st_mtime:   timespec;
+        st_ctime:   timespec;
+        __glibc_reserved: [3] s64;
+    }
 }
 
 // @Volatile: x86-64 Linux.
@@ -104,10 +140,17 @@ sockaddr_in :: struct {
 // --------------------------------------------------------------- threads ---
 
 // `pthread_t` is a pointer-sized handle on Linux. The attribute and mutex
-// types are opaque blocks the library sizes; these are the x86-64 sizes and
-// are @Volatile with glibc.
+// types are opaque blocks the library sizes, and glibc does not size them the
+// same on both architectures — `__SIZEOF_PTHREAD_MUTEX_T` is 40 on x86-64 and
+// 48 on arm64. @Volatile with glibc.
 pthread_t :: u64;
 
-pthread_attr_t  :: struct { opaque: [56] u8; }
-pthread_mutex_t :: struct { opaque: [40] u8; }
-pthread_cond_t  :: struct { opaque: [48] u8; }
+pthread_cond_t :: struct { opaque: [48] u8; }
+
+#if CPU == .ARM64 {
+    pthread_attr_t  :: struct { opaque: [64] u8; }
+    pthread_mutex_t :: struct { opaque: [48] u8; }
+} else {
+    pthread_attr_t  :: struct { opaque: [56] u8; }
+    pthread_mutex_t :: struct { opaque: [40] u8; }
+}

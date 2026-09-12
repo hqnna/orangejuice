@@ -1,6 +1,6 @@
 # orangejuice — Project Specification
 
-orangejuice (`oj`) is a cleanroom implementation of the Jai programming language (beta 0.2.009 semantics) written in Rust nightly, with a single LLVM backend (via `inkwell`) and LLVM ORC JIT for compile-time execution. It builds and runs on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`, and emits code for `x86_64-linux` (§2.1). It is built and developed with a Nix flake (flake-parts + fenix + crane). This document defines goals, constraints, architecture, the CLI, the build/test workflow, and the milestone plan. The language it implements is specified in `docs/language.md` (**L**); the behavior of the reference compiler it must be compatible with is specified in `docs/compiler.md` (**C**).
+orangejuice (`oj`) is a cleanroom implementation of the Jai programming language (beta 0.2.009 semantics) written in Rust nightly, with a single LLVM backend (via `inkwell`) and LLVM ORC JIT for compile-time execution. It builds, runs and emits code for `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (§2.1). It is built and developed with a Nix flake (flake-parts + fenix + crane). This document defines goals, constraints, architecture, the CLI, the build/test workflow, and the milestone plan. The language it implements is specified in `docs/language.md` (**L**); the behavior of the reference compiler it must be compatible with is specified in `docs/compiler.md` (**C**).
 
 ---
 
@@ -24,28 +24,29 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 
 ### 2.1 Hosts and targets
 
-A *host* is a machine `oj` builds and runs on; a *target* is a machine it emits and links code for. Three of each are in scope, and they are not at the same stage.
+A *host* is a machine `oj` builds and runs on; a *target* is a machine it emits and links code for. Three of each are in scope, and all three now work as both.
 
 | Platform | Host | Target |
 |---|---|---|
 | `x86_64-linux` | works | works |
 | `aarch64-darwin` | works | works |
-| `aarch64-linux` | works | not yet |
+| `aarch64-linux` | works | works |
 
 A target is not a constant anywhere any more: `oj_types::Target` is one value carrying an `Os` and a `Cpu`, it defaults to the host, and it reaches the triple `oj-codegen` builds a machine from, the convention `oj-types` classifies a `#c_call` with, the flags `oj-link` spells, and the `OS`/`CPU`/`IS_CROSS_COMPILING` constants both `#if` folders read. `Build_Options.os_target`/`cpu_target` choose it per workspace, and a pair the back end produces no output for is what `unsupported_target` reports.
 
 The one thing that is still x86-64 is the language itself: `#asm` is an x86-64 feature (**L§15**), so on another target a program that writes one gets a diagnostic naming the construct rather than an encoding the compiler invented. The distribution's own `#asm`es are behind `#if CPU == .X64` with a portable path beside them.
 
-`cargo test --workspace --no-fail-fast` is 693 passed and nothing failing on `x86_64-linux`, and 705 passed and nothing failing on `aarch64-darwin` — the twelve extra are the checks the port added. `aarch64-linux` has not been worked yet.
+`cargo test --workspace --no-fail-fast` is **705 passed and nothing failing on all three**, which is the same suite on each: the port added twelve checks to the 693 that were there.
 
-What a second target needs, in the order the dependencies run:
+What the second and third targets took, in the order the dependencies run:
 
 1. **A target, rather than a constant.** *Done.* `oj_types::Target` is one value carrying an `Os` and a `Cpu`, numbered the way `Operating_System_Tag` and `CPU_Tag` number them (**L§17**). It defaults to the host and is threaded through `oj-codegen` (triple, cpu name, `Target::initialize_*`), `oj-link` (the driver, the runtime search path and the flags that only one linker has), `oj-sema` (the `OS`, `CPU` and `IS_CROSS_COMPILING` constants) and `oj-types` itself, whose type table carries the target every layout and classification was made for. `Build_Options.os_target`/`cpu_target` choose it per workspace, and a pair the back end has no output for is the error `unsupported_target` reports.
 2. **AAPCS64 beside System V.** *Done.* `oj-types`' `abi` module answers how an aggregate crosses a `#c_call` boundary with whichever algorithm the table's target asks for: System V's eightbyte classification, or AAPCS64's — a homogeneous float aggregate of at most four elements in that many vector registers, anything else of at most sixteen bytes in general-purpose ones, and anything larger indirectly. Darwin varies it once more, making the caller widen a narrow integer argument, which is the `signext`/`zeroext` the back end puts on a `#c_call` parameter there.
-3. **The distribution's x86-64 corners.** *Done for Darwin.* `Atomics` already branched on `#if CPU == .X64`; `Runtime_Support.debug_break` now does too, raising the signal `int3` would have raised. `Machine_X64` and `meow_hash` (AES-NI) are still x86-64 only, and nothing imports them on another target. The crash handler's register context, the `POSIX` bindings and `System`'s `/proc` reads are per-system rather than per-architecture, and each has a Darwin branch.
+3. **The distribution's x86-64 corners.** *Done.* `Atomics` already branched on `#if CPU == .X64`; `Runtime_Support.debug_break` now does too, raising the signal `int3` would have raised. `Machine_X64` and `meow_hash` (AES-NI) are still x86-64 only, and nothing imports them on another target. The crash handler's register context branches on both the system and the architecture; `System`'s `/proc` reads and the `POSIX` bindings branch on the system, and part of the Linux binding branches again on the architecture (§5 below).
 4. **Mach-O and libSystem**, for `aarch64-darwin` alone. *Done.* LLVM emits Mach-O from the triple, so the object format needed nothing; what needed writing was the `ld64` link line (`@loader_path`, `-export_dynamic`, no `--build-id`, no `-l:` spelling), `POSIX/macos.jai` in place of a generated glibc binding, `MacOS` beside `Linux` as the thin libc shim, a semaphore built out of a mutex and a condition variable because Darwin has no unnamed POSIX ones, and `"frame-pointer"="all"` on every procedure, which Apple's arm64 ABI requires and which is what makes a stack walk possible.
+5. **Per-architecture Linux**, for `aarch64-linux`. *Done*, and much smaller than the other three: everything above was already shared, so what was left was that some of `linux.jai` is per *architecture* rather than per system. `struct stat` takes the asm-generic shape on arm64 — 128 bytes with `st_mode` at 16, against x86-64's 144 with it at 24 — glibc sizes `pthread_mutex_t` 48 and `pthread_attr_t` 64 there rather than 40 and 56, arm64 overrides `O_DIRECTORY` to `0x4000`, and the saved registers sit in an inline `struct sigcontext` at offset 176 rather than an `mcontext_t` at 40.
 
-What `aarch64-linux` still needs, given all of the above: the ELF/glibc half of the same work. The `POSIX` split already has a `linux.jai`, so what is left is the arm64 pieces of it — glibc's opaque pthread sizes and its `struct stat` are per-architecture, not just per-system — and whatever `Runtime_Support` and the crash handler read out of an arm64 `ucontext_t`, which is a different shape from Darwin's.
+**The measurement is what found all of it.** `the_posix_declarations_match_the_system_headers` in `crates/driver/tests/distribution.rs` compiles a C program against the system's own headers and asserts every size, offset and constant `POSIX` and the crash handler declare — 116 facts on Linux, 118 on Darwin, on whichever machine it runs. It is what caught `_SC_GETPW_R_SIZE_MAX` written as 70 where Darwin says 71, and a `siginfo_t` eight bytes too long that had been wrong on x86-64 Linux all along. A declaration whose layout or value a kernel fixes goes into that test in the same commit; a `struct stat` that is wrong by eight bytes announces itself, and a constant that is wrong by one does not.
 
 Porting work is done on the host it targets. `docs/spec.md` §7.2 is how a Linux host is reached from a Mac.
 
