@@ -37,6 +37,12 @@ impl Checker<'_> {
   /// A run inside a declaration has already been reached by whoever asked for
   /// that declaration's type; these belong to nobody, so the checker walks
   /// them itself, in the order they were written.
+  ///
+  /// A `#run,stallable` says it may be waiting for a declaration nothing has
+  /// produced yet (**L§12.1**). orangejuice has no interpreter to suspend
+  /// (`docs/spec.md` §6.5), so what the marker buys instead is *order*: every
+  /// run that cannot wait goes first, and the ones that said they could go
+  /// after, by which time whatever the others declared is there.
   pub(crate) fn check_file_runs(&mut self) {
     let units: Vec<(SourceId, ScopeId, NodeId)> = self
       .program()
@@ -45,9 +51,13 @@ impl Checker<'_> {
       .iter()
       .map(|unit| (unit.source, unit.scope, unit.parsed.root))
       .collect();
-    for (source, scope, root) in units {
-      self.check_runs_in(source, scope, root);
+    for stallable in [false, true] {
+      self.stallable_runs = stallable;
+      for (source, scope, root) in &units {
+        self.check_runs_in(*source, *scope, *root);
+      }
     }
+    self.stallable_runs = false;
   }
 
   fn check_runs_in(&mut self, source: SourceId, scope: ScopeId, node: NodeId) {
@@ -68,7 +78,13 @@ impl Checker<'_> {
           self.check_runs_in(source, scope, statement);
         }
       }
-      NodeData::DirectiveRun(_) => {
+      NodeData::DirectiveRun(run) => {
+        // This pass is either the one that runs what cannot wait or the one
+        // that runs what can; the other pass takes the rest.
+        let stallable = run.flags.contains(oj_syntax::ast::RunFlags::STALLABLE);
+        if stallable != self.stallable_runs {
+          return;
+        }
         let scope = self.scope_at(source, node, scope);
         self.expression_type(scope, source, node);
       }

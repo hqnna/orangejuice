@@ -57,6 +57,59 @@ fn out_line(text: &str) {
   out("\n");
 }
 
+/// Changes to the first file's directory, the way the reference does before it
+/// compiles (**C§2.1**), and gives back the file list and the metaprogram's
+/// command line with every path made absolute — a relative one would name a
+/// different file, or none, from the directory just moved to. `-no_cwd` leaves
+/// the directory alone, and so does a command line with no files at all:
+/// `-add` and `-run` name no directory to move to.
+fn enter_first_files_directory(
+  invocation: &Invocation,
+  options: &oj_driver::BuildOptions,
+) -> Result<(Vec<PathBuf>, Vec<String>), u8> {
+  let absolute: Vec<PathBuf> = invocation
+    .files
+    .iter()
+    .map(|file| std::path::absolute(file).unwrap_or_else(|_| file.clone()))
+    .collect();
+  // The metaprogram is handed the command line rather than the file list, so
+  // the words in it that *are* files have to move with them.
+  let arguments: Vec<String> = invocation
+    .metaprogram
+    .iter()
+    .map(|argument| {
+      match invocation
+        .files
+        .iter()
+        .position(|file| file.as_os_str() == argument.as_str())
+      {
+        Some(index) => absolute[index].display().to_string(),
+        None => argument.clone(),
+      }
+    })
+    .collect();
+
+  if !options.set_working_directory {
+    return Ok((absolute, arguments));
+  }
+  let Some(directory) = absolute.first().and_then(|file| file.parent()) else {
+    return Ok((absolute, arguments));
+  };
+  // A directory that is already the working one needs no move, which is what
+  // keeps the common `oj main.jai` from touching the process at all.
+  if std::env::current_dir().is_ok_and(|current| current == directory) {
+    return Ok((absolute, arguments));
+  }
+  if let Err(error) = std::env::set_current_dir(directory) {
+    eprintln!(
+      "error: could not change to {}: {error}",
+      directory.display()
+    );
+    return Err(EXIT_FAILURE);
+  }
+  Ok((absolute, arguments))
+}
+
 pub const EXIT_SUCCESS: u8 = 0;
 pub const EXIT_FAILURE: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
@@ -512,6 +565,17 @@ fn build(invocation: &Invocation) -> u8 {
   import_dirs.extend(options.import_dirs.iter().cloned());
   options.import_dirs = import_dirs;
 
+  // The compiler compiles from the first file's directory unless `-no_cwd`
+  // (**C§2.1**), so a `#run` doing relative file I/O reads what is next to the
+  // program rather than what is next to whoever invoked the compiler. The
+  // reference has `Default_Metaprogram` call `set_working_directory`;
+  // orangejuice does it here, because `oj-driver` is a library and a working
+  // directory belongs to a whole process rather than to one compilation.
+  let (files, arguments) = match enter_first_files_directory(invocation, &options) {
+    Ok(moved) => moved,
+    Err(code) => return code,
+  };
+
   // The reference compiles `Default_Metaprogram` and lets *it* create the
   // workspace the program is compiled in (**C§2.1**); `-- meta` names a
   // different one, and a checkout with no distribution behind it has none, so
@@ -531,14 +595,14 @@ fn build(invocation: &Invocation) -> u8 {
   };
 
   let input = oj_driver::Input {
-    files: invocation.files.clone(),
-    strings: oj_driver::command_line_strings(&invocation.files, &options),
+    files: files.clone(),
+    strings: oj_driver::command_line_strings(&files, &options),
   };
   let report = match metaprogram {
     Some(metaprogram) => oj_driver::run_through_metaprogram(
       &metaprogram,
-      &invocation.files,
-      &invocation.metaprogram,
+      &files,
+      &arguments,
       &options,
       oj_driver::Stage::Executable,
     ),
@@ -799,6 +863,31 @@ mod tests {
       code(&["no/such/file.jai", "--", "dump", "types"]),
       EXIT_FAILURE
     );
+  }
+
+  #[test]
+  fn the_first_file_s_directory_is_where_the_compiler_works_from() {
+    // **C§2.1**: the compiler moves to the first file's directory before it
+    // compiles, unless `-no_cwd`, and the file list comes back absolute so it
+    // still names the same files from there. The move itself is not exercised
+    // here — a working directory belongs to the whole test process — only the
+    // paths it hands on.
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let path = directory.path().join("main.jai");
+    std::fs::write(&path, "main :: () {}\n").expect("the fixture should be writable");
+
+    let invocation = Invocation {
+      files: vec![path.clone()],
+      metaprogram: vec![path.display().to_string(), String::from("-quiet")],
+      compiler: Compiler::default(),
+    };
+    let mut options = oj_driver::BuildOptions::new();
+    options.set_working_directory = false;
+    let (files, arguments) =
+      enter_first_files_directory(&invocation, &options).expect("nothing to move to");
+    assert_eq!(files, [path.clone()].as_slice());
+    assert_eq!(arguments[0], path.display().to_string());
+    assert_eq!(arguments[1], "-quiet");
   }
 
   #[test]

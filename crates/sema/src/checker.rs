@@ -281,6 +281,10 @@ pub struct Checker<'a> {
   /// to, so that its size does not depend on which modules a program imports
   /// (**L§10.1**). `-context_size` is what changes it.
   context_size_max: u64,
+  /// Which pass over the file-scope runs this is: the one that executes what
+  /// cannot wait, or the one that executes the `#run,stallable`s afterwards
+  /// (**L§12.1**, `docs/spec.md` §6.5).
+  pub(crate) stallable_runs: bool,
   /// How deep inside `check_procedure_body` this checker is. A declaration
   /// resolved on demand from somewhere else is read with whatever the
   /// instantiation it belongs to has bound so far, which is not a place to
@@ -485,6 +489,7 @@ impl<'a> Checker<'a> {
       units_seen: 0,
       context_size_max: crate::aggregate::DEFAULT_CONTEXT_SIZE,
       checking_bodies: 0,
+      stallable_runs: false,
     };
     checker.refresh_units();
     checker

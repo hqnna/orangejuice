@@ -5638,3 +5638,25 @@ fn no_split_builds_one_object_and_output_ir_writes_the_module() {
     .expect("-output_ir writes the module beside the object");
   assert!(listing.contains("ModuleID"), "{listing}");
 }
+
+#[test]
+fn a_stallable_run_goes_after_the_ones_that_cannot_wait() {
+  // `#run,stallable` says the run may be waiting for a declaration nothing has
+  // produced yet (**L§12.1**). orangejuice has no interpreter to suspend
+  // (`docs/spec.md` §6.5), so the marker buys order instead: it runs after
+  // every run that cannot wait, whichever was written first.
+  // The order the two ran in is read back through `#no_reset` globals, which
+  // keep whatever compile time wrote into them (**L§4.7**).
+  let Some(built) = build_and_run(
+    "#import \"Basic\";\n\
+     #no_reset STEP: int;\n\
+     #no_reset EAGER_AT: int;\n\
+     #no_reset STALLABLE_AT: int;\n\
+     #run,stallable { STEP += 1; STALLABLE_AT = STEP; }\n\
+     #run           { STEP += 1; EAGER_AT = STEP; }\n\
+     main :: () { print(\"eager % stallable %\\n\", EAGER_AT, STALLABLE_AT); }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.output, "eager 1 stallable 2\n");
+}

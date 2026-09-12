@@ -17,7 +17,7 @@
 #import "Metaprogram_Plugins";
 #import "String";
 
-#run build();
+#run,stallable build();
 
 build :: () {
     // This metaprogram produces nothing itself.
