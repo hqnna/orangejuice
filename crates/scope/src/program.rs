@@ -659,6 +659,12 @@ impl<'a> Program<'a> {
     self.diagnostics.borrow()
   }
 
+  /// What this program was resolved for, which is what `OS` and `CPU` folded
+  /// to here — and what the checker has to fold them to as well.
+  pub fn target(&self) -> oj_types::Target {
+    self.options.target
+  }
+
   pub fn interner(&self) -> &'a Interner {
     self.interner
   }

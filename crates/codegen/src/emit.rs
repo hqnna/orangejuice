@@ -464,9 +464,23 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       for (position, attribute) in self.memory_attributes(&procedure.abi) {
         function.add_attribute(AttributeLoc::Param(position), attribute);
       }
+      if let Some(attribute) = self.frame_pointer_attribute() {
+        function.add_attribute(AttributeLoc::Function, attribute);
+      }
       self.functions.push(function);
     }
   }
+  /// Apple's arm64 ABI requires every procedure to keep a valid frame record,
+  /// so that a walker — a crash handler's, a profiler's, a debugger's — can
+  /// follow the chain from any instruction. LLVM omits the frame pointer
+  /// where it can unless the function says otherwise, which is what this says.
+  fn frame_pointer_attribute(&self) -> Option<inkwell::attributes::Attribute> {
+    if !self.target().is_darwin() {
+      return None;
+    }
+    Some(self.context.create_string_attribute("frame-pointer", "all"))
+  }
+
   /// The attributes a `#c_call` needs on the parameters the C convention
   /// passes through memory: `byval` copies an argument into the caller's
   /// argument area, `sret` says the first parameter is where the return goes

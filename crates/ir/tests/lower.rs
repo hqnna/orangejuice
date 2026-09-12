@@ -34,11 +34,13 @@ fn lower_file_for(path: &Path, target: oj_types::Target) -> Lowered {
   let interner = Interner::new();
   let options = oj_scope::Options {
     distribution: Some(oj_testsupport::distribution().to_path_buf()),
+    // The same target the checker is given: the two `#if` folders have to
+    // agree about `OS` and `CPU` or they take different branches (**L§5.11**).
+    target,
     ..oj_scope::Options::default()
   };
   let program = oj_scope::Program::build(&sources, &interner, path, options);
   let mut checker = oj_sema::Checker::new(&program);
-  checker.set_target(target);
   checker.check();
   let lowered = oj_ir::lower(&mut checker);
   Lowered {

@@ -1,6 +1,10 @@
 //
 // The glibc surface: the types, constants, procedures and globals that
-// `POSIX/module.jai` does not declare by hand.
+// `POSIX/module.jai` and `POSIX/linux.jai` do not declare by hand.
+//
+// This file is Linux's alone. `POSIX/module.jai` loads it only under
+// `#if OS == .LINUX`, beside `linux.jai`; the Darwin side of the module is
+// `macos.jai`, which has no generated binding behind it.
 //
 // Generated from the system's own C headers rather than typed out, the way the
 // reference generates its bindings — a constant's value is whatever

@@ -15,6 +15,27 @@ anyone's source.
 | `linux`  | epoll, inotify, input, statx, io_uring | `modules/Linux/generated.jai` |
 | `lz4`    | lz4, lz4hc, lz4frame | `modules/lz4/generated.jai` |
 
+**Every one of these is a Linux binding, and the generator has to be run on
+Linux.** `posix/headers.c` includes `<sys/epoll.h>`, `<sys/inotify.h>` and a
+dozen more that exist nowhere else, so the preparation step fails outright on
+a Mac rather than producing something wrong. `docs/spec.md` §7.2 is how a
+Linux host is reached from one.
+
+That matters most for `posix`, which is the one module with a second system
+behind it. `POSIX/module.jai` holds what every Unix agrees on and loads one of
+two files beside it:
+
+| File | What it is |
+|---|---|
+| `POSIX/linux.jai` | hand-written: the flag numbers, kernel layouts and glibc object sizes Linux fixes — and it is what `#load`s `generated.jai` |
+| `POSIX/macos.jai` | hand-written: the same for Darwin, plus the C library entry points the Linux side takes from the generated file |
+
+There is no generated Darwin binding. What the standard library calls on a Mac
+is small enough to declare, and `a_darwin_layout_is_what_the_c_compiler_says`
+in `crates/driver/tests/distribution.rs` measures every layout in `macos.jai`
+against the system's own headers, which is the check a generated file would
+otherwise be standing in for.
+
 ## Running it
 
 Inside `nix develop`:

@@ -123,19 +123,33 @@ get_machinename :: () -> string {
 get_path_of_running_executable :: () -> string {
     buffer: [4096] u8;
 
-    length := readlink("/proc/self/exe", buffer.data, cast(u64) buffer.count);
-    if length < 0  return "";
+    #if OS == .MACOS {
+        // Darwin has no `/proc`. The loader knows where it loaded the image
+        // from, and `_NSGetExecutablePath` is how it says so — as written on
+        // the command line, which is why the answer is resolved afterwards.
+        size := cast(u32) buffer.count;
+        if _NSGetExecutablePath(buffer.data, *size) != 0  return "";
 
-    result: string = ---;
-    result.data  = alloc(length,, temp);
-    result.count = length;
-    memcpy(result.data, buffer.data, length);
-    return result;
+        resolved: [PATH_MAX] u8;
+        path := realpath(buffer.data, resolved.data);
+        if !path  path = buffer.data;
+        return copy_temporary_string(to_string(path));
+    } else {
+        length := readlink("/proc/self/exe", buffer.data, cast(u64) buffer.count);
+        if length < 0  return "";
+
+        result: string = ---;
+        result.data  = alloc(length,, temp);
+        result.count = length;
+        memcpy(result.data, buffer.data, length);
+        return result;
+    }
 }
 
 // Which count of processors is wanted. Linux has no way to tell a performance
 // core from an efficiency one, so the performance queries answer as the
-// corresponding `ALL_` one does.
+// corresponding `ALL_` one does. Darwin does: `hw.perflevel0` is the fast
+// cluster on a machine with two of them.
 Processor_Query_Type :: enum u8 {
     ALL_PHYSICAL;
     ALL_LOGICAL;
@@ -150,7 +164,24 @@ get_number_of_processors :: ($type: Processor_Query_Type = .PERFORMANCE_LOGICAL)
     if type == .PERFORMANCE_LOGICAL   type = .ALL_LOGICAL;
     return true;
 } {
-    #if type == .ALL_LOGICAL {
+    #if OS == .MACOS {
+        // `sysctl` answers all four directly, so there is nothing to count.
+        // A machine with one kind of core has no `perflevel0`, and then the
+        // question is the whole-machine one.
+        name :: #run -> string {
+            if type == .ALL_PHYSICAL          return "hw.physicalcpu";
+            if type == .ALL_LOGICAL           return "hw.logicalcpu";
+            if type == .PERFORMANCE_PHYSICAL  return "hw.perflevel0.physicalcpu";
+            return "hw.perflevel0.logicalcpu";
+        };
+        count: s32;
+        size: u64 = size_of(s32);
+        if sysctlbyname(name.data, *count, *size, null, 0) == 0 && count > 0  return count;
+
+        #if type == .PERFORMANCE_PHYSICAL  return get_number_of_processors(.ALL_PHYSICAL);
+        #if type == .PERFORMANCE_LOGICAL   return get_number_of_processors(.ALL_LOGICAL);
+        return 1;
+    } else #if type == .ALL_LOGICAL {
         return get_nprocs();
     } else {
         // Physical cores have to be counted out of `/proc/cpuinfo`: one entry
@@ -198,14 +229,24 @@ get_error_value :: errno;
 get_error_string :: (error_code: OS_Error_Code) -> string {
     buffer: [1024] u8;
 
-    result := strerror_r(cast(s32) error_code, buffer.data, cast(s32) buffer.count);
-    if !result {
-        // glibc's `strerror_r` sets `errno` itself when it fails, so the code
-        // reported here is that one rather than the one asked about.
-        return sprint("OS did not return us a valid string for error %. Returned error was %", error_code, errno());
-    }
+    #if OS == .MACOS {
+        // Darwin's is the XSI `strerror_r`: it writes into the buffer and
+        // answers zero, where glibc's answers the string and may not have used
+        // the buffer at all.
+        if strerror_r(cast(s32) error_code, buffer.data, cast(u64) buffer.count) != 0 {
+            return sprint("OS did not return us a valid string for error %. Returned error was %", error_code, errno());
+        }
+        return copy_temporary_string(to_string(buffer.data));
+    } else {
+        result := strerror_r(cast(s32) error_code, buffer.data, cast(s32) buffer.count);
+        if !result {
+            // glibc's `strerror_r` sets `errno` itself when it fails, so the
+            // code reported here is that one rather than the one asked about.
+            return sprint("OS did not return us a valid string for error %. Returned error was %", error_code, errno());
+        }
 
-    return copy_temporary_string(to_string(result));
+        return copy_temporary_string(to_string(result));
+    }
 }
 
 get_error_value_and_string :: () -> (error_code: OS_Error_Code, description: string) {
@@ -296,7 +337,15 @@ read_special_file :: (path: string) -> (contents: string, ok: bool) {
 
 libc_nprocs :: #library,system "libc";
 
-get_nprocs :: () -> s32 #foreign libc_nprocs;
-strerror_r :: (errnum: s32, buffer: *u8, length: s32) -> *u8 #foreign libc_nprocs;
+#if OS == .MACOS {
+    PATH_MAX :: 1024;
+
+    _NSGetExecutablePath :: (buffer: *u8, size: *u32) -> s32 #foreign libc_nprocs;
+    sysctlbyname :: (name: *u8, value: *void, size: *u64, new_value: *void, new_size: u64) -> s32 #foreign libc_nprocs;
+    strerror_r :: (errnum: s32, buffer: *u8, length: u64) -> s32 #foreign libc_nprocs;
+} else {
+    get_nprocs :: () -> s32 #foreign libc_nprocs;
+    strerror_r :: (errnum: s32, buffer: *u8, length: s32) -> *u8 #foreign libc_nprocs;
+}
 
 #scope_export

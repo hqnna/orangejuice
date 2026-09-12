@@ -491,10 +491,14 @@ impl<'a> Checker<'a> {
       argument_instances: HashMap::default(),
       units_seen: 0,
       context_size_max: crate::aggregate::DEFAULT_CONTEXT_SIZE,
-      target: oj_types::Target::HOST,
+      // The program's, not the host's: the scope pass has already folded every
+      // `#if OS ==` against it, and a checker that folded them differently
+      // would type a branch whose declarations are not in the scope tree.
+      target: program.target(),
       checking_bodies: 0,
       stallable_runs: false,
     };
+    checker.types.set_target(checker.target);
     checker.refresh_units();
     checker
   }
@@ -506,13 +510,9 @@ impl<'a> Checker<'a> {
   }
 
   /// What `Build_Options.os_target`/`cpu_target` asked this compilation to be
-  /// built for (**C§4**). It has to be set before anything reads `OS`, since
-  /// the constant is recorded the first time it is looked up.
-  pub fn set_target(&mut self, target: oj_types::Target) {
-    self.target = target;
-    self.types.set_target(target);
-  }
-
+  /// built for (**C§4**). It comes from the program rather than being set
+  /// here: the scope pass has already folded every `#if OS ==` against it, and
+  /// there is no second answer to give.
   pub fn target(&self) -> oj_types::Target {
     self.target
   }

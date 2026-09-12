@@ -18,6 +18,19 @@ fn linker_is_available() -> bool {
     .is_ok_and(|output| output.status.success())
 }
 
+/// The examples whose subject is `#asm`, which the language has on x86-64 and
+/// nowhere else (**L§15**). On another target they are not a failure and not a
+/// thing to rewrite: there is no program there to run, the way there is no
+/// Windows example to run on Linux.
+const X64_ONLY: &[&str] = &["220_inline_assembly"];
+
+fn is_x64_only(program: &Path) -> bool {
+  program
+    .file_stem()
+    .and_then(|stem| stem.to_str())
+    .is_some_and(|stem| X64_ONLY.contains(&stem))
+}
+
 fn programs() -> Vec<PathBuf> {
   let mut found: Vec<PathBuf> = std::fs::read_dir(oj_testsupport::examples())
     .expect("the examples directory should be readable")
@@ -71,7 +84,12 @@ fn every_example_prints_what_its_golden_says() {
 
   let directory = tempfile::tempdir().expect("a temporary directory");
   let mut failures = Vec::new();
+  let mut skipped = Vec::new();
   for program in &programs {
+    if is_x64_only(program) && !oj_types::Target::HOST.is_x64() {
+      skipped.push(program.display().to_string());
+      continue;
+    }
     let name = program.file_stem().expect("a named file");
     let output = directory.path().join(name);
     std::fs::create_dir_all(&output).expect("the output directory should be creatable");
@@ -107,11 +125,14 @@ fn every_example_prints_what_its_golden_says() {
     }
   }
 
+  for program in &skipped {
+    eprintln!("skipping {program}: its subject is '#asm', which this target has none of");
+  }
   assert!(
     failures.is_empty(),
     "{} of {} examples did not print what they should:\n\n{}",
     failures.len(),
-    programs.len(),
+    programs.len() - skipped.len(),
     failures.join("\n\n")
   );
 }

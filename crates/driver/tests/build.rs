@@ -102,6 +102,18 @@ fn assert_output(body: &str, expected: &str) {
   assert_eq!(built.output, expected);
 }
 
+/// Whether the language has an `#asm` for the machine these tests run on.
+/// Inline assembly is x86-64's (**L§15**), so on another target a program that
+/// writes one is a diagnostic rather than something to run — which is what
+/// `oj-ir`'s own test asserts, and what leaves nothing here to execute.
+fn skip_without_asm() -> bool {
+  if oj_types::Target::HOST.is_x64() {
+    return false;
+  }
+  eprintln!("skipping: the language's '#asm' is x86-64 and this machine is not");
+  true
+}
+
 #[test]
 fn the_scope_folder_and_the_checker_agree_about_which_branch_of_a_static_if_ran() {
   // Two `#if` folders read `OS` and `CPU`: the scope pass decides which branch
@@ -335,10 +347,14 @@ fn a_program_the_back_end_cannot_build_names_what_stopped_it() {
   );
   assert!(report.failed);
   let text = report.diagnostics.join("");
-  assert!(
-    text.contains("no encoding for the '#asm' instruction 'frobnicate'"),
-    "{text}"
-  );
+  // On a target the language has no `#asm` for it is the block that is named,
+  // and on x86-64 it is the mnemonic inside it. Either way what stopped the
+  // build is in the message (**L§15**).
+  let expected = match oj_types::Target::HOST.is_x64() {
+    true => "no encoding for the '#asm' instruction 'frobnicate'",
+    false => "no '#asm' for arm64",
+  };
+  assert!(text.contains(expected), "{text}");
 }
 
 #[test]
@@ -1503,6 +1519,9 @@ fn an_inserted_string_can_stand_where_an_expression_goes() {
 
 #[test]
 fn an_asm_block_computes_with_the_registers_it_names() {
+  if skip_without_asm() {
+    return;
+  }
   assert_output(
     "main :: () {\n\
        count := 10;\n\
@@ -1521,6 +1540,9 @@ fn an_asm_block_computes_with_the_registers_it_names() {
 
 #[test]
 fn an_asm_register_outlives_the_block_that_declared_it() {
+  if skip_without_asm() {
+    return;
+  }
   assert_output(
     "main :: () {\n\
        #asm { mov a:, 12; mov b:, 18; }\n\
@@ -1535,6 +1557,9 @@ fn an_asm_register_outlives_the_block_that_declared_it() {
 
 #[test]
 fn an_asm_block_reaches_memory_through_a_base_and_an_index() {
+  if skip_without_asm() {
+    return;
+  }
   assert_output(
     "main :: () {\n\
        values: [4] s64;\n\
@@ -1555,6 +1580,9 @@ fn an_asm_block_reaches_memory_through_a_base_and_an_index() {
 
 #[test]
 fn a_syscall_block_reaches_the_kernel() {
+  if skip_without_asm() {
+    return;
+  }
   assert_output(
     "write_directly :: (text: string) -> s64 {\n\
        result: s64 = ---;\n\
@@ -1580,6 +1608,9 @@ fn a_syscall_block_reaches_the_kernel() {
 
 #[test]
 fn an_asm_block_runs_at_compile_time_too() {
+  if skip_without_asm() {
+    return;
+  }
   assert_output(
     "add_them :: (a: int, b: int) -> int {\n\
        x := a;\n\
@@ -1889,6 +1920,9 @@ fn the_file_module_writes_and_reads_a_file() {
 
 #[test]
 fn a_macro_takes_the_registers_it_is_given() {
+  if skip_without_asm() {
+    return;
+  }
   assert_output(
     "reg :: __reg;\n\
      add_the_two_regs :: (left: reg, right: reg) #expand {\n\
@@ -1907,6 +1941,9 @@ fn a_macro_takes_the_registers_it_is_given() {
 
 #[test]
 fn an_asm_block_gathers_through_a_vector_index() {
+  if skip_without_asm() {
+    return;
+  }
   assert_output(
     "Machine :: #import \"Machine_X64\";\n\
      main :: () {\n\
@@ -4229,6 +4266,9 @@ fn a_forced_cast_between_two_aggregates_reinterprets_the_bytes() {
 
 #[test]
 fn an_asm_instruction_with_nothing_but_slots_narrows_them_to_registers() {
+  if skip_without_asm() {
+    return;
+  }
   // `imul [rsp + 48]` is ambiguous where `imul rcx` is not, and a shift count
   // is `cl` whatever the instruction works at (**L§15**) — both of which
   // `Basic`'s 128-bit arithmetic writes.
@@ -5124,6 +5164,9 @@ fn a_cast_to_a_fixed_array_reads_the_array_at_the_pointer() {
 
 #[test]
 fn a_macro_passes_on_a_register_it_declared_itself() {
+  if skip_without_asm() {
+    return;
+  }
   // A macro taking a `__reg` binds the name to the caller's register
   // (**L§15**). Handing that name to *another* macro means the argument
   // resolves to the parameter, which is an alias rather than a register — so

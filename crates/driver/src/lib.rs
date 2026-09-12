@@ -279,6 +279,9 @@ fn run_workspace_once(
     distribution: distribution(),
     ..oj_scope::Options::default()
   };
+  // `OS`, `CPU` and `IS_CROSS_COMPILING` are what the workspace is built for
+  // (**L§17**). The checker reads them back off the program, so this is the
+  // one place a compilation is told what it is for.
   scope_options.target = options.target;
   scope_options.import_dirs = options.import_dirs.clone();
   scope_options.import_remaps = options.import_remaps.clone();
@@ -347,10 +350,6 @@ fn run_workspace_once(
 
   let mut checker = oj_sema::Checker::new(&program);
   checker.set_context_size_max(options.context_size_max);
-  // `OS`, `CPU` and `IS_CROSS_COMPILING` are what the workspace is built for
-  // (**L§17**), so they have to be in place before the first `#if OS ==` is
-  // folded.
-  checker.set_target(options.target);
   // Compile-time execution is part of typechecking: a `#run` produces the
   // constant a declaration was waiting for (**L§12.1**).
   let engine = match oj_jit::Engine::new() {

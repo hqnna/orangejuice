@@ -42,5 +42,8 @@ main :: () {
     again := read_entire_file(path,, allocator = temp);
     print("now % bytes\n", again.count);
 
-    reset_temporary_storage();
+    // No `reset_temporary_storage` here: `path` and `directory` are temporary
+    // strings, and the two `defer`s above run after this line. Resetting the
+    // storage they live in would hand the deletes whatever was written over
+    // them next.
 }
