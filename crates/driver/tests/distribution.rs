@@ -353,8 +353,8 @@ fn a_module_reached_two_ways_is_one_module() {
   assert_eq!(String::from_utf8_lossy(&output.stdout), "one module\n");
 }
 
-/// Every layout `POSIX/macos.jai` and the crash handler fix for Darwin,
-/// measured against the system's own headers.
+/// Every layout *and every constant* `POSIX/macos.jai` and the crash handler
+/// fix for Darwin, measured against the system's own headers.
 ///
 /// The Linux side of `POSIX` has a generated binding behind it: a struct's
 /// layout there is whatever the C compiler laid out, because the C compiler is
@@ -365,7 +365,10 @@ fn a_module_reached_two_ways_is_one_module() {
 ///
 /// So the two are compared directly: a C program prints what `<sys/stat.h>`
 /// and the rest say, a Jai program prints what the front end made of our
-/// declarations, and the two outputs have to be the same text.
+/// declarations, and the two outputs have to be the same text. The constants
+/// matter as much as the layouts and are easier to get wrong quietly — a
+/// `struct stat` that is eight bytes off announces itself, where an
+/// `SO_REUSEADDR` that is wrong by two just stops working.
 #[test]
 fn a_darwin_layout_is_what_the_c_compiler_says() {
   if !oj_types::Target::HOST.is_darwin() {
@@ -405,17 +408,29 @@ fn a_darwin_layout_is_what_the_c_compiler_says() {
     from_c.lines().count() > 20,
     "the C side measured nothing:\n{from_c}"
   );
-  // Line by line, so a mismatch names the member rather than the file.
-  for (c, jai) in from_c.lines().zip(from_jai.lines()) {
-    assert_eq!(
-      c, jai,
-      "\n--- C said ---\n{from_c}\n--- we say ---\n{from_jai}"
-    );
+  // Every difference at once, named: fixing these one panic at a time is a
+  // recompile per constant.
+  let ours: std::collections::BTreeMap<&str, &str> = from_jai
+    .lines()
+    .filter_map(|line| line.split_once(' '))
+    .collect();
+  let mut wrong = Vec::new();
+  for line in from_c.lines() {
+    let Some((name, theirs)) = line.split_once(' ') else {
+      continue;
+    };
+    match ours.get(name) {
+      Some(mine) if *mine == theirs => {}
+      Some(mine) => wrong.push(format!("  {name}: the system says {theirs}, we say {mine}")),
+      None => wrong.push(format!("  {name}: the system says {theirs}, we do not say")),
+    }
   }
-  assert_eq!(
+  assert!(
+    wrong.is_empty(),
+    "{} of {} Darwin facts do not match the system headers:\n{}",
+    wrong.len(),
     from_c.lines().count(),
-    from_jai.lines().count(),
-    "\n--- C said ---\n{from_c}\n--- we say ---\n{from_jai}"
+    wrong.join("\n")
   );
 }
 
@@ -428,19 +443,121 @@ const DARWIN_LAYOUT_C: &str = r#"
 #include <stdio.h>
 #include <stddef.h>
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
 #include <netinet/in.h>
 #include <ucontext.h>
 
 #define SIZE(name, type)          printf("%s %zu\n", name, sizeof(type))
 #define OFF(name, type, member)   printf("%s %zu\n", name, offsetof(type, member))
+#define VAL(name, expr)           printf("%s %lld\n", name, (long long)(expr))
 
 int main(void) {
+  /* The flag numbers, error numbers and socket constants. A layout that is
+     wrong by eight bytes announces itself; `SO_REUSEADDR` that is wrong by two
+     just stops working, so these are measured too. */
+  VAL("O_RDONLY", O_RDONLY);
+  VAL("O_WRONLY", O_WRONLY);
+  VAL("O_RDWR", O_RDWR);
+  VAL("O_NONBLOCK", O_NONBLOCK);
+  VAL("O_APPEND", O_APPEND);
+  VAL("O_CREAT", O_CREAT);
+  VAL("O_TRUNC", O_TRUNC);
+  VAL("O_EXCL", O_EXCL);
+  VAL("O_DIRECTORY", O_DIRECTORY);
+  VAL("O_CLOEXEC", O_CLOEXEC);
+
+  VAL("SEEK_SET", SEEK_SET);
+  VAL("SEEK_CUR", SEEK_CUR);
+  VAL("SEEK_END", SEEK_END);
+
+  VAL("S_IFMT", S_IFMT);
+  VAL("S_IFDIR", S_IFDIR);
+  VAL("S_IFREG", S_IFREG);
+  VAL("S_IFLNK", S_IFLNK);
+
+  VAL("EPERM", EPERM);
+  VAL("ENOENT", ENOENT);
+  VAL("EINTR", EINTR);
+  VAL("EIO", EIO);
+  VAL("EBADF", EBADF);
+  VAL("ENOMEM", ENOMEM);
+  VAL("EACCES", EACCES);
+  VAL("EEXIST", EEXIST);
+  VAL("ENOTDIR", ENOTDIR);
+  VAL("EISDIR", EISDIR);
+  VAL("EINVAL", EINVAL);
+  VAL("ERANGE", ERANGE);
+  VAL("EAGAIN", EAGAIN);
+  VAL("EWOULDBLOCK", EWOULDBLOCK);
+  VAL("ETIMEDOUT", ETIMEDOUT);
+  VAL("ELOOP", ELOOP);
+
+  VAL("PROT_READ", PROT_READ);
+  VAL("PROT_WRITE", PROT_WRITE);
+  VAL("MAP_SHARED", MAP_SHARED);
+  VAL("MAP_PRIVATE", MAP_PRIVATE);
+  VAL("MAP_ANON", MAP_ANON);
+
+  VAL("AF_INET", AF_INET);
+  VAL("AF_INET6", AF_INET6);
+  VAL("SOCK_STREAM", SOCK_STREAM);
+  VAL("SOCK_DGRAM", SOCK_DGRAM);
+  VAL("SOL_SOCKET", SOL_SOCKET);
+  VAL("SO_REUSEADDR", SO_REUSEADDR);
+  VAL("SHUT_RD", SHUT_RD);
+  VAL("SHUT_WR", SHUT_WR);
+  VAL("SHUT_RDWR", SHUT_RDWR);
+
+  VAL("POLLIN", POLLIN);
+  VAL("POLLOUT", POLLOUT);
+  VAL("POLLERR", POLLERR);
+  VAL("POLLHUP", POLLHUP);
+
+  VAL("DT.DIR", DT_DIR);
+  VAL("DT.REG", DT_REG);
+  VAL("DT.LNK", DT_LNK);
+
+  VAL("CLOCK.REALTIME", CLOCK_REALTIME);
+  VAL("CLOCK.MONOTONIC", CLOCK_MONOTONIC);
+  VAL("CLOCK.MONOTONIC_RAW", CLOCK_MONOTONIC_RAW);
+
+  VAL("PTHREAD_MUTEX.RECURSIVE", PTHREAD_MUTEX_RECURSIVE);
+  VAL("PTHREAD_MUTEX.ERRORCHECK", PTHREAD_MUTEX_ERRORCHECK);
+
+  VAL("_SC_NPROCESSORS_ONLN", _SC_NPROCESSORS_ONLN);
+  VAL("_SC_NPROCESSORS_CONF", _SC_NPROCESSORS_CONF);
+  VAL("_SC_PAGESIZE", _SC_PAGESIZE);
+  VAL("_SC_GETPW_R_SIZE_MAX", _SC_GETPW_R_SIZE_MAX);
+
+  VAL("SIGQUIT", SIGQUIT);
+  VAL("SIGILL", SIGILL);
+  VAL("SIGTRAP", SIGTRAP);
+  VAL("SIGABRT", SIGABRT);
+  VAL("SIGBUS", SIGBUS);
+  VAL("SIGFPE", SIGFPE);
+  VAL("SIGSEGV", SIGSEGV);
+  VAL("SIGINT", SIGINT);
+  VAL("SIGKILL", SIGKILL);
+  VAL("SIGTERM", SIGTERM);
+
+  VAL("SEGV_MAPERR", SEGV_MAPERR);
+  VAL("SEGV_ACCERR", SEGV_ACCERR);
+  VAL("SA_ONSTACK", SA_ONSTACK);
+  VAL("SA_RESTART", SA_RESTART);
+  VAL("SA_SIGINFO", SA_SIGINFO);
+  VAL("SA_RESTART_ONSTACK_SIGINFO", SA_ONSTACK | SA_RESTART | SA_SIGINFO);
+
   SIZE("stat_t", struct stat);
   OFF("stat_t.st_mode", struct stat, st_mode);
   OFF("stat_t.st_ino", struct stat, st_ino);
@@ -509,6 +626,98 @@ off :: (base: *void, member: *void) -> s64 {
 }
 
 main :: () {
+    print("O_RDONLY %\n", O_RDONLY);
+    print("O_WRONLY %\n", O_WRONLY);
+    print("O_RDWR %\n", O_RDWR);
+    print("O_NONBLOCK %\n", O_NONBLOCK);
+    print("O_APPEND %\n", O_APPEND);
+    print("O_CREAT %\n", O_CREAT);
+    print("O_TRUNC %\n", O_TRUNC);
+    print("O_EXCL %\n", O_EXCL);
+    print("O_DIRECTORY %\n", O_DIRECTORY);
+    print("O_CLOEXEC %\n", O_CLOEXEC);
+
+    print("SEEK_SET %\n", SEEK_SET);
+    print("SEEK_CUR %\n", SEEK_CUR);
+    print("SEEK_END %\n", SEEK_END);
+
+    print("S_IFMT %\n", S_IFMT);
+    print("S_IFDIR %\n", S_IFDIR);
+    print("S_IFREG %\n", S_IFREG);
+    print("S_IFLNK %\n", S_IFLNK);
+
+    print("EPERM %\n", EPERM);
+    print("ENOENT %\n", ENOENT);
+    print("EINTR %\n", EINTR);
+    print("EIO %\n", EIO);
+    print("EBADF %\n", EBADF);
+    print("ENOMEM %\n", ENOMEM);
+    print("EACCES %\n", EACCES);
+    print("EEXIST %\n", EEXIST);
+    print("ENOTDIR %\n", ENOTDIR);
+    print("EISDIR %\n", EISDIR);
+    print("EINVAL %\n", EINVAL);
+    print("ERANGE %\n", ERANGE);
+    print("EAGAIN %\n", EAGAIN);
+    print("EWOULDBLOCK %\n", EWOULDBLOCK);
+    print("ETIMEDOUT %\n", ETIMEDOUT);
+    print("ELOOP %\n", ELOOP);
+
+    print("PROT_READ %\n", PROT_READ);
+    print("PROT_WRITE %\n", PROT_WRITE);
+    print("MAP_SHARED %\n", MAP_SHARED);
+    print("MAP_PRIVATE %\n", MAP_PRIVATE);
+    print("MAP_ANON %\n", MAP_ANON);
+
+    print("AF_INET %\n", AF_INET);
+    print("AF_INET6 %\n", AF_INET6);
+    print("SOCK_STREAM %\n", SOCK_STREAM);
+    print("SOCK_DGRAM %\n", SOCK_DGRAM);
+    print("SOL_SOCKET %\n", SOL_SOCKET);
+    print("SO_REUSEADDR %\n", SO_REUSEADDR);
+    print("SHUT_RD %\n", SHUT_RD);
+    print("SHUT_WR %\n", SHUT_WR);
+    print("SHUT_RDWR %\n", SHUT_RDWR);
+
+    print("POLLIN %\n", POLLIN);
+    print("POLLOUT %\n", POLLOUT);
+    print("POLLERR %\n", POLLERR);
+    print("POLLHUP %\n", POLLHUP);
+
+    print("DT.DIR %\n", cast(s64) DT.DIR);
+    print("DT.REG %\n", cast(s64) DT.REG);
+    print("DT.LNK %\n", cast(s64) DT.LNK);
+
+    print("CLOCK.REALTIME %\n", cast(s64) clockid_t.REALTIME);
+    print("CLOCK.MONOTONIC %\n", cast(s64) clockid_t.MONOTONIC);
+    print("CLOCK.MONOTONIC_RAW %\n", cast(s64) clockid_t.MONOTONIC_RAW);
+
+    print("PTHREAD_MUTEX.RECURSIVE %\n", cast(s64) PTHREAD_MUTEX.RECURSIVE);
+    print("PTHREAD_MUTEX.ERRORCHECK %\n", cast(s64) PTHREAD_MUTEX.ERRORCHECK);
+
+    print("_SC_NPROCESSORS_ONLN %\n", cast(s64) _SC_NPROCESSORS_ONLN);
+    print("_SC_NPROCESSORS_CONF %\n", cast(s64) _SC_NPROCESSORS_CONF);
+    print("_SC_PAGESIZE %\n", cast(s64) _SC_PAGESIZE);
+    print("_SC_GETPW_R_SIZE_MAX %\n", cast(s64) _SC_GETPW_R_SIZE_MAX);
+
+    print("SIGQUIT %\n", Crash.SIGQUIT);
+    print("SIGILL %\n", Crash.SIGILL);
+    print("SIGTRAP %\n", Crash.SIGTRAP);
+    print("SIGABRT %\n", Crash.SIGABRT);
+    print("SIGBUS %\n", Crash.SIGBUS);
+    print("SIGFPE %\n", Crash.SIGFPE);
+    print("SIGSEGV %\n", Crash.SIGSEGV);
+    print("SIGINT %\n", SIGINT);
+    print("SIGKILL %\n", SIGKILL);
+    print("SIGTERM %\n", SIGTERM);
+
+    print("SEGV_MAPERR %\n", Crash.SEGV_MAPERR);
+    print("SEGV_ACCERR %\n", Crash.SEGV_ACCERR);
+    print("SA_ONSTACK %\n", Crash.SA_ONSTACK);
+    print("SA_RESTART %\n", Crash.SA_RESTART);
+    print("SA_SIGINFO %\n", Crash.SA_SIGINFO);
+    print("SA_RESTART_ONSTACK_SIGINFO %\n", Crash.SA_RESTART_ONSTACK_SIGINFO);
+
     s: stat_t;
     print("stat_t %\n", size_of(stat_t));
     print("stat_t.st_mode %\n", off(*s, *s.st_mode));

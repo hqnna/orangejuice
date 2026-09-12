@@ -14,27 +14,38 @@ anyone's source.
 | `socket` | BSD sockets, netdb, netinet | `modules/Socket/generated.jai` |
 | `linux`  | epoll, inotify, input, statx, io_uring | `modules/Linux/generated.jai` |
 | `lz4`    | lz4, lz4hc, lz4frame | `modules/lz4/generated.jai` |
+| `macos`  | the Darwin equivalents, plus kqueue, sysctl and dyld | `modules/POSIX/generated_macos.jai` |
 
-**Every one of these is a Linux binding, and the generator has to be run on
-Linux.** `posix/headers.c` includes `<sys/epoll.h>`, `<sys/inotify.h>` and a
-dozen more that exist nowhere else, so the preparation step fails outright on
-a Mac rather than producing something wrong. `docs/spec.md` §7.2 is how a
-Linux host is reached from one.
+The generator is not tied to Linux — the emitters read clang's `-ast-print`
+and know nothing about glibc — but each *header list* is. `posix/headers.c`
+includes `<sys/epoll.h>`, `<sys/inotify.h>` and a dozen more that exist
+nowhere else, so `generate.sh posix` has to run on Linux; `macos/headers.c` is
+the same list with what Darwin has instead, and has to run on a Mac.
+`docs/spec.md` §7.2 is how a Linux host is reached from one.
 
-That matters most for `posix`, which is the one module with a second system
-behind it. `POSIX/module.jai` holds what every Unix agrees on and loads one of
-two files beside it:
+`posix` is the module with two systems behind it. `POSIX/module.jai` holds
+what every Unix agrees on and loads one of two files beside it:
 
 | File | What it is |
 |---|---|
 | `POSIX/linux.jai` | hand-written: the flag numbers, kernel layouts and glibc object sizes Linux fixes — and it is what `#load`s `generated.jai` |
 | `POSIX/macos.jai` | hand-written: the same for Darwin, plus the C library entry points the Linux side takes from the generated file |
 
-There is no generated Darwin binding. What the standard library calls on a Mac
-is small enough to declare, and `a_darwin_layout_is_what_the_c_compiler_says`
-in `crates/driver/tests/distribution.rs` measures every layout in `macos.jai`
-against the system's own headers, which is the check a generated file would
-otherwise be standing in for.
+`macos.jai` is hand-written rather than generated because the Darwin surface
+the standard library actually calls is a few dozen names, where glibc's is
+1,800 — running the pipeline for it would be more assembly than declaration.
+That is a judgement about size, not a limitation: `generate.sh macos` prepares
+the same inputs on a Mac, and the moment the Darwin surface stops being small
+it should be generated like everything else.
+
+What makes the hand-written file safe to keep is that it is *measured*:
+`a_darwin_layout_is_what_the_c_compiler_says` in
+`crates/driver/tests/distribution.rs` compiles a C program against the system
+headers and asserts all 118 sizes, offsets and constant values in `macos.jai`
+and the crash handler against it. It found `_SC_GETPW_R_SIZE_MAX` written as
+70 where Darwin says 71. **Add a Darwin declaration, add it to that test in
+the same commit** — a constant that is wrong by one does not announce itself
+the way a struct that is wrong by eight bytes does.
 
 ## Running it
 

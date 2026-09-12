@@ -3,6 +3,7 @@
 # Regenerates one module's bindings. Run inside `nix develop`:
 #
 #     tools/cbind/generate.sh posix
+#     tools/cbind/generate.sh macos    # on a Mac; posix/socket/linux want Linux
 #     tools/cbind/generate.sh socket
 #     tools/cbind/generate.sh linux
 #     tools/cbind/generate.sh lz4    # needs lz4's headers; see README
@@ -18,6 +19,7 @@ mkdir -p "$work"
 
 case "$module" in
   posix)  target=$root/modules/POSIX/generated.jai  ; lib=libc ;;
+  macos)  target=$root/modules/POSIX/generated_macos.jai ; lib=libc ;;
   socket) target=$root/modules/Socket/generated.jai ; lib=libc ;;
   linux)  target=$root/modules/Linux/generated.jai  ; lib=libc ;;
   lz4)    target=$root/modules/lz4/generated.jai    ; lib=lz4lib ;;

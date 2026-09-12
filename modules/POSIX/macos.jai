@@ -305,7 +305,7 @@ using _SC_definitions :: enum s32 {
     _SC_PAGESIZE           :: 29;
     _SC_NPROCESSORS_CONF   :: 57;
     _SC_NPROCESSORS_ONLN   :: 58;
-    _SC_GETPW_R_SIZE_MAX   :: 70;
+    _SC_GETPW_R_SIZE_MAX   :: 71;
     _SC_HOST_NAME_MAX      :: 72;
 }
 
