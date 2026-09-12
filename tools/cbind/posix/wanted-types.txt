@@ -73,9 +73,6 @@ __uint8_t
 __useconds_t
 _fpstate
 _fpxreg
-_libc_fpstate
-_libc_fpxreg
-_libc_xmmreg
 _pthread_cleanup_buffer
 _xmmreg
 aiocb
@@ -98,15 +95,12 @@ flock
 flock64
 fpos64_t
 fpos_t
-fpregset_t
 fsblkcnt64_t
 fsblkcnt_t
 fsfilcnt64_t
 fsfilcnt_t
 fsid_t
 gid_t
-greg_t
-gregset_t
 id_t
 if_nameindex
 ino64_t
@@ -120,7 +114,6 @@ itimerval
 jmp_buf
 key_t
 locale_t
-mcontext_t
 mode_t
 nfds_t
 nlink_t
@@ -153,7 +146,6 @@ shmid_ds
 shminfo
 sig_t
 sigaction
-sigcontext
 sigevent
 sigevent_t
 sighandler_t
@@ -177,7 +169,6 @@ timer_t
 timeval
 timex
 timezone
-ucontext_t
 uid_t
 uint16_t
 uint32_t

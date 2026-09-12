@@ -2,9 +2,13 @@
 // The glibc surface: the types, constants, procedures and globals that
 // `POSIX/module.jai` and `POSIX/linux.jai` do not declare by hand.
 //
-// This file is Linux's alone. `POSIX/module.jai` loads it only under
-// `#if OS == .LINUX`, beside `linux.jai`; the Darwin side of the module is
-// `macos.jai`, which has no generated binding behind it.
+// This file is one Linux architecture's. `POSIX/linux.jai` loads it under
+// `#if CPU ==`, because 299 of these declarations differ between x86-64 and
+// arm64 — the syscall numbers above all, but also `__nlink_t`, `__blksize_t`,
+// `O_NOFOLLOW`, `O_DIRECT` and the pthread and machine-context layouts.
+//
+// The Darwin side of the module is `macos.jai`, which has no generated
+// binding behind it.
 //
 // Generated from the system's own C headers rather than typed out, the way the
 // reference generates its bindings — a constant's value is whatever
@@ -314,7 +318,6 @@ MREMAP_MAYMOVE :: 1;
 MS_ASYNC :: 1;
 MS_INVALIDATE :: 2;
 MS_SYNC :: 4;
-NGREG :: 23;
 NSIG :: 65;
 NSS_BUFLEN_PASSWD :: 1024;
 O_ACCMODE :: 3;
@@ -1523,87 +1526,10 @@ _fpstate :: struct {
     __glibc_reserved1: [24] __uint32_t;
 }
 
-sigcontext :: struct {
-    r8: __uint64_t;
-    r9: __uint64_t;
-    r10: __uint64_t;
-    r11: __uint64_t;
-    r12: __uint64_t;
-    r13: __uint64_t;
-    r14: __uint64_t;
-    r15: __uint64_t;
-    rdi: __uint64_t;
-    rsi: __uint64_t;
-    rbp: __uint64_t;
-    rbx: __uint64_t;
-    rdx: __uint64_t;
-    rax: __uint64_t;
-    rcx: __uint64_t;
-    rsp: __uint64_t;
-    rip: __uint64_t;
-    eflags: __uint64_t;
-    cs: u16;
-    gs: u16;
-    fs: u16;
-    __pad0: u16;
-    err: __uint64_t;
-    trapno: __uint64_t;
-    oldmask: __uint64_t;
-    cr2: __uint64_t;
-    using _anonymous_26: union {
-        fpstate: *_fpstate;
-        __fpstate_word: __uint64_t;
-    }
-    __reserved1: [8] __uint64_t;
-}
-
 stack_t :: struct {
     ss_sp: *void;
     ss_flags: s32;
     ss_size: size_t;
-}
-
-greg_t :: s64;
-gregset_t :: [23] greg_t;
-_libc_fpxreg :: struct {
-    significand: [4] u16;
-    exponent: u16;
-    __glibc_reserved1: [3] u16;
-}
-
-_libc_xmmreg :: struct {
-    element: [4] __uint32_t;
-}
-
-_libc_fpstate :: struct {
-    cwd: __uint16_t;
-    swd: __uint16_t;
-    ftw: __uint16_t;
-    fop: __uint16_t;
-    rip: __uint64_t;
-    rdp: __uint64_t;
-    mxcsr: __uint32_t;
-    mxcr_mask: __uint32_t;
-    _st: [8] _libc_fpxreg;
-    _xmm: [16] _libc_xmmreg;
-    __glibc_reserved1: [24] __uint32_t;
-}
-
-fpregset_t :: *_libc_fpstate;
-mcontext_t :: struct {
-    gregs: gregset_t;
-    fpregs: fpregset_t;
-    __reserved1: [8] u64;
-}
-
-ucontext_t :: struct {
-    uc_flags: u64;
-    uc_link: *ucontext_t;
-    uc_stack: stack_t;
-    uc_mcontext: mcontext_t;
-    uc_sigmask: sigset_t;
-    __fpregs_mem: _libc_fpstate;
-    __ssp: [4] u64;
 }
 
 intptr_t :: __intptr_t;
@@ -2025,32 +1951,6 @@ PTHREAD_CANCEL :: enum s32 {
 PTHREAD_CANCEL_1 :: enum s32 {
     DEFERRED;
     ASYNCHRONOUS;
-}
-
-REG :: enum s32 {
-    R8 :: 0;
-    R9;
-    R10;
-    R11;
-    R12;
-    R13;
-    R14;
-    R15;
-    RDI;
-    RSI;
-    RBP;
-    RBX;
-    RDX;
-    RAX;
-    RCX;
-    RSP;
-    RIP;
-    EFL;
-    CSGSFS;
-    ERR;
-    TRAPNO;
-    OLDMASK;
-    CR2;
 }
 
 PC :: enum s32 {
@@ -2925,7 +2825,6 @@ sigpending :: (__set: *sigset_t) -> s32 #foreign libc;
 sigprocmask :: (__how: s32, __set: *sigset_t, __oset: *sigset_t) -> s32 #foreign libc;
 sigqueue :: (__pid: __pid_t, __sig: s32, __val: sigval) -> s32 #foreign libc;
 sigrelse :: (__sig: s32) -> s32 #foreign libc;
-sigreturn :: (__scp: *sigcontext) -> s32 #foreign libc;
 sigset :: (__sig: s32, __disp: __sighandler_t) -> __sighandler_t #foreign libc;
 sigsetmask :: (__mask: s32) -> s32 #foreign libc;
 sigsuspend :: (__set: *sigset_t) -> s32 #foreign libc;

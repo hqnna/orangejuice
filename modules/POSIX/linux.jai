@@ -14,7 +14,17 @@
 // declared by hand comes from.
 //
 
-#load "generated.jai";
+// The generated glibc binding, which is the *architecture's* and not just the
+// system's: 299 of its declarations differ between the two. Most are syscall
+// numbers — `SYS_exit` is 60 on x86-64 and 93 on arm64 — but `__nlink_t` is
+// `u64` against `u32`, `__blksize_t` is `s64` against `s32`, `O_NOFOLLOW` and
+// `O_DIRECT` are different numbers, and the pthread attribute types and the
+// whole machine-context family are laid out differently.
+#if CPU == .ARM64 {
+    #load "generated_arm64.jai";
+} else {
+    #load "generated_x64.jai";
+}
 
 #scope_export
 

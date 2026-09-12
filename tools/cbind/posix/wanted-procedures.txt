@@ -482,7 +482,6 @@ sigpending
 sigprocmask
 sigqueue
 sigrelse
-sigreturn
 sigset
 sigsetmask
 sigsuspend

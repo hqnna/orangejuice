@@ -10,11 +10,20 @@ anyone's source.
 
 | Module | Headers | Generated into |
 |---|---|---|
-| `posix`  | glibc's POSIX set | `modules/POSIX/generated.jai` |
+| `posix`  | glibc's POSIX set | `modules/POSIX/generated_{x64,arm64}.jai` |
 | `socket` | BSD sockets, netdb, netinet | `modules/Socket/generated.jai` |
 | `linux`  | epoll, inotify, input, statx, io_uring | `modules/Linux/generated.jai` |
 | `lz4`    | lz4, lz4hc, lz4frame | `modules/lz4/generated.jai` |
 | `macos`  | the Darwin equivalents, plus kqueue, sysctl and dyld | `modules/POSIX/generated_macos.jai` |
+
+`posix` writes the file for the architecture it runs on, because that binding
+is the *architecture's* and not just the system's: 299 of its declarations
+differ between x86-64 and arm64. Most are syscall numbers — `SYS_exit` is 60
+on one and 93 on the other — but `__nlink_t` is `u64` against `u32`,
+`__blksize_t` is `s64` against `s32`, `O_NOFOLLOW` and `O_DIRECT` are
+different numbers, and the pthread attribute types are laid out differently.
+`socket` and `linux` were generated on both and come out identical, so they
+are one file each.
 
 The generator is not tied to Linux — the emitters read clang's `-ast-print`
 and know nothing about glibc — but each *header list* is. `posix/headers.c`

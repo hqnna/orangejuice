@@ -30,8 +30,15 @@ module="${args[0]:?which module}"
 work="${TMPDIR:-/tmp}/cbind-$module"
 mkdir -p "$work"
 
+# The glibc binding is the architecture's as well as the system's, so `posix`
+# writes the file for the machine it is generated on — see `POSIX/linux.jai`.
+case "$(uname -m)" in
+  aarch64|arm64) arch=arm64 ;;
+  *)             arch=x64 ;;
+esac
+
 case "$module" in
-  posix)  target=$root/modules/POSIX/generated.jai       ; lib=libc ;;
+  posix)  target=$root/modules/POSIX/generated_$arch.jai ; lib=libc ;;
   macos)  target=$root/modules/POSIX/generated_macos.jai ; lib=libc ;;
   socket) target=$root/modules/Socket/generated.jai      ; lib=libc ;;
   linux)  target=$root/modules/Linux/generated.jai       ; lib=libc ;;
