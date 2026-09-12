@@ -189,6 +189,10 @@ print_to_builder :: (builder: *String_Builder, format_string: string, args: .. A
     return format_to_builder(builder, format_string, args);
 }
 
+// `print` names the builder form too, so a call whose first argument is a
+// builder appends rather than writing to standard output (**C§13**).
+print :: print_to_builder;
+
 // Several values one after another, with no format string between them.
 print_sequence_to_builder :: (builder: *String_Builder, args: .. Any) {
     for args  append_any(builder, it);

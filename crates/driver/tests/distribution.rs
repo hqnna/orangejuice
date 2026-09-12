@@ -839,3 +839,21 @@ main :: () {
     print("MCONTEXT_PC %\n", Crash.MCONTEXT_PC);
 }
 "##;
+
+#[test]
+fn print_appends_to_a_builder_when_that_is_what_it_was_given() {
+  // `print` names `print_to_builder` too, so which of the two a call reaches
+  // is what its first argument is (**C§13**).
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       builder: String_Builder;\n  \
+       print(*builder, \"<%>\", 42);\n  \
+       print(*builder, \" and %\", \"more\");\n  \
+       print(\"%\\n\", builder_to_string(*builder));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(output, "<42> and more\n");
+}
