@@ -26,6 +26,17 @@ The command line is meant to act as a drop-in replacement for `jai`, so all
 invocations translate verbatim, everything after the last `--` is orangejuice's
 own commands and arguments.
 
+## Platforms
+
+`x86_64-linux`, `aarch64-linux` and `aarch64-darwin`. Each is both a host and a
+target: `oj` builds and runs there, and emits and links native code for there.
+Releases carry a tarball per platform that brings its own libraries, so it runs
+on a machine with nothing installed.
+
+Inline assembly is the exception. `#asm` is an x86-64 feature of the language
+itself, so on arm64 a program that writes one gets a diagnostic naming it
+rather than an encoding the compiler invented.
+
 ## Building
 
 Everything was built in an isolated sandbox using a Nix flake.
