@@ -8,6 +8,14 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+
+/// `OJ_MODULES` is process-wide and the tests in this binary run on threads,
+/// so the one that points the compiler at a distribution of its own and the
+/// one that asserts the compiler finds its own without being pointed anywhere
+/// cannot overlap. Whoever writes the variable holds this, and puts it back
+/// before letting go.
+static MODULES_ENV_GUARD: Mutex<()> = Mutex::new(());
 
 fn linker_is_available() -> bool {
   let driver = oj_link::driver();
@@ -161,6 +169,9 @@ fn temporary_storage_is_reset_in_one_go() {
 fn the_distribution_is_found_without_being_pointed_at() {
   // What makes `oj` usable on its own: the modules are found from the
   // executable rather than from an environment variable.
+  let _guard = MODULES_ENV_GUARD
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   let found = oj_driver::distribution();
   assert!(
     found.is_some_and(|directory| directory.join("modules").join("Preload.jai").is_file()),
@@ -298,8 +309,12 @@ fn a_module_reached_two_ways_is_one_module() {
   )
   .expect("the input should be writable");
 
-  // SAFETY: cargo runs each integration test binary in its own process, and
-  // nothing else in this one reads it.
+  // SAFETY: the variable is process-wide and read by
+  // `the_distribution_is_found_without_being_pointed_at`, so the write is held
+  // apart from that test rather than merely from other writers.
+  let _guard = MODULES_ENV_GUARD
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
   unsafe { std::env::set_var(oj_testsupport::MODULES_ENV, &modules) };
 
   let options = oj_driver::BuildOptions {
@@ -307,6 +322,11 @@ fn a_module_reached_two_ways_is_one_module() {
     ..oj_driver::BuildOptions::new()
   };
   let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  // The build is over, and `directory` is about to be deleted with the
+  // temporary directory: nothing may be left naming a path inside it.
+  // SAFETY: as above, and the guard is still held.
+  unsafe { oj_testsupport::use_own_modules() };
+
   assert!(
     !report.failed,
     "the program should build, but:\n{}",
