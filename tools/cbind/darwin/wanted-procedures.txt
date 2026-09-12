@@ -1,0 +1,17 @@
+_NSGetExecutablePath
+_dyld_get_image_name
+_dyld_image_count
+fstatfs
+getmntinfo
+kevent
+kevent64
+kqueue
+mach_absolute_time
+mach_continuous_time
+mach_timebase_info
+proc_name
+proc_pidpath
+statfs
+sysctl
+sysctlbyname
+sysctlnametomib

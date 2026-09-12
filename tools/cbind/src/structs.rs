@@ -1,6 +1,6 @@
 // Emits Jai struct, union and typedef declarations from clang's `-ast-print`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::Read;
 
 include!("common.rs");

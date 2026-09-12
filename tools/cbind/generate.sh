@@ -5,7 +5,7 @@
 #     tools/cbind/generate.sh posix
 #     tools/cbind/generate.sh socket
 #     tools/cbind/generate.sh linux
-#     tools/cbind/generate.sh macos    # on a Mac; the other three want Linux
+#     tools/cbind/generate.sh darwin   # on a Mac; the others want Linux
 #     tools/cbind/generate.sh lz4      # needs lz4's headers; see README
 #
 # What comes out is written beside the module's file as `<name>.new`, and the
@@ -39,7 +39,7 @@ esac
 
 case "$module" in
   posix)  target=$root/modules/POSIX/generated_$arch.jai ; lib=libc ;;
-  macos)  target=$root/modules/POSIX/generated_macos.jai ; lib=libc ;;
+  darwin) target=$root/modules/Darwin/generated.jai       ; lib=libc ;;
   socket) target=$root/modules/Socket/generated.jai      ; lib=libc ;;
   linux)  target=$root/modules/Linux/generated.jai       ; lib=libc ;;
   lz4)    target=$root/modules/lz4/generated.jai         ; lib=lz4lib ;;

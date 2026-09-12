@@ -14,7 +14,7 @@ anyone's source.
 | `socket` | BSD sockets, netdb, netinet | `modules/Socket/generated.jai` |
 | `linux`  | epoll, inotify, input, statx, io_uring | `modules/Linux/generated.jai` |
 | `lz4`    | lz4, lz4hc, lz4frame | `modules/lz4/generated.jai` |
-| `macos`  | the Darwin equivalents, plus kqueue, sysctl and dyld | `modules/POSIX/generated_macos.jai` |
+| `darwin` | kqueue, sysctl, Mach time, dyld, libproc | `modules/Darwin/generated.jai` |
 
 `posix` writes the file for the architecture it runs on, because that binding
 is the *architecture's* and not just the system's: 299 of its declarations
@@ -28,8 +28,9 @@ are one file each.
 The generator is not tied to Linux — the emitters read clang's `-ast-print`
 and know nothing about glibc — but each *header list* is. `posix/headers.c`
 includes `<sys/epoll.h>`, `<sys/inotify.h>` and a dozen more that exist
-nowhere else, so `generate.sh posix` has to run on Linux; `macos/headers.c` is
-the same list with what Darwin has instead, and has to run on a Mac.
+nowhere else, so `generate.sh posix` has to run on Linux; `darwin/headers.c` holds
+what only Darwin has, the way `linux/headers.c` holds what only Linux does,
+and has to run on a Mac.
 `docs/spec.md` §7.2 is how a Linux host is reached from one.
 
 `posix` is the module with two systems behind it. `POSIX/module.jai` holds
@@ -40,13 +41,13 @@ what every Unix agrees on and loads one of two files beside it:
 | `POSIX/linux.jai` | hand-written: the flag numbers, kernel layouts and glibc object sizes Linux fixes — and it is what `#load`s `generated.jai` |
 | `POSIX/macos.jai` | hand-written: the same for Darwin, plus the C library entry points the Linux side takes from the generated file |
 
-`macos.jai` is hand-written rather than generated because the Darwin surface
-the standard library actually calls is a few dozen names, where glibc's is
-1,800 — writing the four wanted lists for it would be more work than the
-declarations themselves. That is a judgement about size, not a limitation:
-`macos/headers.c` is there and `generate.sh macos` runs on a Mac, so the
-moment that surface stops being small it should be generated like everything
-else.
+`POSIX/macos.jai` is hand-written rather than generated because the *POSIX*
+surface the standard library calls on a Mac is a few dozen names, where
+glibc's is 1,800 — writing the four wanted lists for it would be more work
+than the declarations themselves. That is a judgement about size, not a
+limitation. What is *only* Darwin's is generated: `modules/Darwin` is the
+sibling of `modules/Linux`, a hand-written libc surface with a generated
+binding behind it, and `generate.sh darwin` round-trips.
 
 What makes the hand-written file safe to keep is that it is *measured*:
 `a_darwin_layout_is_what_the_c_compiler_says` in
@@ -141,8 +142,8 @@ emitted as an opaque struct, which is what a C incomplete type is.
 
 ### Where each module stands
 
-`posix` round-trips: regenerating it prints `no change`, on both
-architectures. `socket` and `linux` do not yet. Their `flaggroups.txt` is
+`posix` and `darwin` round-trip: regenerating either prints `no change` —
+`posix` on both architectures. `socket` and `linux` do not yet. Their `flaggroups.txt` is
 applied now and reproduces exactly — `IOSQE_Flags` and the rest come out byte
 for byte — but two other things stand in the way, and neither is the
 generator's fault:

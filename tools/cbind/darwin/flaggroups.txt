@@ -1,0 +1,2 @@
+EV_Flags EV_ u16
+NOTE_Flags NOTE_ u32

@@ -458,6 +458,12 @@ const LAYOUT_C: &str = r##"
 #include <unistd.h>
 #include <netinet/in.h>
 #include <ucontext.h>
+#ifdef __APPLE__
+  #include <sys/event.h>
+  #include <sys/sysctl.h>
+  #include <sys/param.h>
+  #include <mach/mach_time.h>
+#endif
 
 #define SIZE(name, type)          printf("%s %zu\n", name, sizeof(type))
 #define OFF(name, type, member)   printf("%s %zu\n", name, offsetof(type, member))
@@ -610,6 +616,26 @@ int main(void) {
   SIZE("pthread_mutex_t", pthread_mutex_t);
   SIZE("pthread_cond_t", pthread_cond_t);
   SIZE("pthread_attr_t", pthread_attr_t);
+
+#ifdef __APPLE__
+  /* What only Darwin has, which `modules/Darwin` binds. */
+  SIZE("kevent_t", struct kevent);
+  OFF("kevent_t.filter", struct kevent, filter);
+  OFF("kevent_t.flags", struct kevent, flags);
+  OFF("kevent_t.fflags", struct kevent, fflags);
+  OFF("kevent_t.data", struct kevent, data);
+  OFF("kevent_t.udata", struct kevent, udata);
+  SIZE("mach_timebase_info_data_t", mach_timebase_info_data_t);
+  VAL("EVFILT_READ", EVFILT_READ);
+  VAL("EVFILT_WRITE", EVFILT_WRITE);
+  VAL("EV_ADD", EV_ADD);
+  VAL("EV_DELETE", EV_DELETE);
+  VAL("EV_CLEAR", EV_CLEAR);
+  VAL("NOTE_WRITE", NOTE_WRITE);
+  VAL("CTL_HW", CTL_HW);
+  VAL("HW_NCPU", HW_NCPU);
+  VAL("MAXPATHLEN", MAXPATHLEN);
+#endif
 
   /* Where the crash handler reads the saved program counter from. Darwin
      keeps a pointer to the machine state in the `ucontext_t`; Linux keeps the
@@ -784,6 +810,27 @@ main :: () {
     print("pthread_mutex_t %\n", size_of(pthread_mutex_t));
     print("pthread_cond_t %\n", size_of(pthread_cond_t));
     print("pthread_attr_t %\n", size_of(pthread_attr_t));
+
+    #if OS == .MACOS {
+        Darwin :: #import "Darwin";
+        ev: Darwin.kevent_t;
+        print("kevent_t %\n", size_of(Darwin.kevent_t));
+        print("kevent_t.filter %\n", off(*ev, *ev.filter));
+        print("kevent_t.flags %\n", off(*ev, *ev.flags));
+        print("kevent_t.fflags %\n", off(*ev, *ev.fflags));
+        print("kevent_t.data %\n", off(*ev, *ev.data));
+        print("kevent_t.udata %\n", off(*ev, *ev.udata));
+        print("mach_timebase_info_data_t %\n", size_of(Darwin.mach_timebase_info_data_t));
+        print("EVFILT_READ %\n", Darwin.EVFILT_READ);
+        print("EVFILT_WRITE %\n", Darwin.EVFILT_WRITE);
+        print("EV_ADD %\n", cast(s64) Darwin.EV_ADD);
+        print("EV_DELETE %\n", cast(s64) Darwin.EV_DELETE);
+        print("EV_CLEAR %\n", cast(s64) Darwin.EV_CLEAR);
+        print("NOTE_WRITE %\n", cast(s64) Darwin.NOTE_WRITE);
+        print("CTL_HW %\n", Darwin.CTL_HW);
+        print("HW_NCPU %\n", Darwin.HW_NCPU);
+        print("MAXPATHLEN %\n", Darwin.MAXPATHLEN);
+    }
 
     print("UC_MCONTEXT %\n", Crash.UC_MCONTEXT);
     #if OS == .MACOS || CPU == .ARM64 {

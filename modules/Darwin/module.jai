@@ -1,17 +1,22 @@
 //
-// The part of libSystem orangejuice's own modules actually call.
+// Darwin: what macOS has that no other Unix does, and the part of libSystem
+// orangejuice's own modules actually call.
 //
-// The sibling of `Linux`, for the other Unix orangejuice targets: the same
-// surface, declared against the same documented C signatures, with the values
-// Darwin gives the constants that are not the same on both. The standard
-// library wants to allocate, write bytes to a file descriptor, map pages and
-// stop the process, and that is all this is.
+// The sibling of `Linux`, and the same shape. The hand-written half below is
+// the C library surface the standard library wants — allocate, write bytes to
+// a file descriptor, map pages, stop the process — declared against the same
+// documented signatures, with the values Darwin gives the constants that are
+// not the same on both. The generated half is what only Darwin has: kqueue
+// where Linux has epoll, `sysctl` where Linux has `/proc`, the Mach clock,
+// and the loader call that says where the running image came from.
 //
 // macOS has no `libc` of its own to link: every one of these lives in
 // `libSystem`, which is what `-lc` resolves to there.
 //
 
 #scope_export
+
+#load "generated.jai";
 
 // ------------------------------------------------------------- allocation ---
 

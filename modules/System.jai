@@ -176,7 +176,10 @@ get_number_of_processors :: ($type: Processor_Query_Type = .PERFORMANCE_LOGICAL)
         };
         count: s32;
         size: u64 = size_of(s32);
-        if sysctlbyname(name.data, *count, *size, null, 0) == 0 && count > 0  return count;
+        // `name` is a constant the `#run` above produced, and what `sysctl`
+        // reads is a C string: it has to be terminated rather than assumed to
+        // be.
+        if sysctlbyname(to_c_string(name, temp), *count, *size, null, 0) == 0 && count > 0  return count;
 
         #if type == .PERFORMANCE_PHYSICAL  return get_number_of_processors(.ALL_PHYSICAL);
         #if type == .PERFORMANCE_LOGICAL   return get_number_of_processors(.ALL_LOGICAL);
@@ -338,10 +341,16 @@ read_special_file :: (path: string) -> (contents: string, ok: bool) {
 libc_nprocs :: #library,system "libc";
 
 #if OS == .MACOS {
-    PATH_MAX :: 1024;
+    // `_NSGetExecutablePath` and `sysctl` are Darwin's own, so they come from
+    // the module that holds what only Darwin has rather than being declared
+    // again here.
+    Darwin :: #import "Darwin";
+    using Darwin;
 
-    _NSGetExecutablePath :: (buffer: *u8, size: *u32) -> s32 #foreign libc_nprocs;
-    sysctlbyname :: (name: *u8, value: *void, size: *u64, new_value: *void, new_size: u64) -> s32 #foreign libc_nprocs;
+    PATH_MAX :: Darwin.MAXPATHLEN;
+
+    // The XSI `strerror_r`, which is the one Darwin has; `POSIX` declares the
+    // GNU spelling that Linux has.
     strerror_r :: (errnum: s32, buffer: *u8, length: u64) -> s32 #foreign libc_nprocs;
 } else {
     get_nprocs :: () -> s32 #foreign libc_nprocs;

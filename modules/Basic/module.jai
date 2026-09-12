@@ -21,7 +21,7 @@
 #scope_module
 
 #if OS == .MACOS {
-    Libc :: #import "MacOS";
+    Libc :: #import "Darwin";
 } else {
     Libc :: #import "Linux";
 }

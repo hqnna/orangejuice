@@ -1,4 +1,10 @@
+// `common.rs` is `include!`d into each of the four emitters rather than being a
+// crate they share — they are single files built with plain `rustc`, which has
+// no other way to share code. Each uses the part of this it needs, so every
+// item here is dead in at least one of them, and says so.
+
 /// Drops every `__attribute__((...))`, matching nested parentheses.
+#[allow(dead_code)]
 fn strip_attributes(decl: &str) -> String {
   let decl = &strip_asm(decl);
   let mut result = String::new();
@@ -29,12 +35,14 @@ fn strip_attributes(decl: &str) -> String {
   result.trim().to_string()
 }
 
+#[allow(dead_code)]
 fn char_index(chars: &[char], at: usize) -> usize {
   chars[..at].iter().map(|c| c.len_utf8()).sum()
 }
 
 /// `RET name(params)` -> the Jai declaration, or None when the shape is one we
 /// do not translate (a function returning a function pointer, say).
+#[allow(dead_code)]
 fn function(decl: &str) -> Option<(String, String)> {
   let open = decl.find('(')?;
   if !decl.ends_with(')') {
@@ -79,6 +87,7 @@ fn function(decl: &str) -> Option<(String, String)> {
 
 /// Splits a parameter list on commas that are not inside parentheses or
 /// brackets, so a function-pointer parameter stays in one piece.
+#[allow(dead_code)]
 fn split_top_level(params: &str) -> Vec<String> {
   let mut parts = Vec::new();
   let mut depth = 0;
@@ -108,6 +117,7 @@ fn split_top_level(params: &str) -> Vec<String> {
 /// A C type to its Jai spelling. `const`, `restrict` and the struct/union/enum
 /// keywords carry no information here and come off — at word boundaries, so
 /// that a type called `__locale_struct` keeps its name.
+#[allow(dead_code)]
 fn jai_type(text: &str) -> Option<String> {
   let spaced = text.replace('*', " * ");
   let mut stars = 0;
@@ -145,6 +155,7 @@ fn jai_type(text: &str) -> Option<String> {
   Some(format!("{}{}", "*".repeat(stars), mapped))
 }
 /// One parameter: its name (invented when the header gave none) and its type.
+#[allow(dead_code)]
 fn parameter(part: &str, index: usize) -> Option<(String, String)> {
   let cleaned = part.trim();
 
@@ -189,6 +200,7 @@ fn parameter(part: &str, index: usize) -> Option<(String, String)> {
 /// Splits `int __fd` into ("__fd", "int"). A declaration with no name — `int`,
 /// `unsigned long`, `struct aiocb *` — keeps all of it as the type and gets a
 /// made-up name, since Jai has no unnamed parameters.
+#[allow(dead_code)]
 fn split_name(text: &str, index: usize) -> (String, String) {
   let text = text.trim();
   let unnamed = || (format!("__arg{index}"), text.to_string());
@@ -222,6 +234,7 @@ fn split_name(text: &str, index: usize) -> (String, String) {
   (candidate.to_string(), rest.to_string())
 }
 
+#[allow(dead_code)]
 fn is_type_word(word: &str) -> bool {
   matches!(
     word,
@@ -231,6 +244,7 @@ fn is_type_word(word: &str) -> bool {
 
 /// `asm("symbol")` renames the symbol a declaration binds to; it carries no
 /// type information, so it comes off with the attributes.
+#[allow(dead_code)]
 fn strip_asm(decl: &str) -> String {
   let Some(at) = decl.find(" asm(") else { return decl.to_string() };
   let Some(close) = decl[at..].find(')') else { return decl.to_string() };

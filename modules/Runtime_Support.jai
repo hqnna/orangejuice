@@ -17,7 +17,7 @@
 // operating system being compiled for (`docs/spec.md` §2.1). Both modules
 // export the same names, so nothing below has to know which it got.
 #if OS == .MACOS {
-    Libc :: #import "MacOS";
+    Libc :: #import "Darwin";
 } else {
     Libc :: #import "Linux";
 }
