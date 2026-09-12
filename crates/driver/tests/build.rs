@@ -5719,3 +5719,90 @@ fn a_stallable_run_goes_after_the_ones_that_cannot_wait() {
   };
   assert_eq!(built.output, "eager 1 stallable 2\n");
 }
+
+/// Meow hash, against the values it produces for the inputs its own header
+/// says were checked against the reference implementation: the empty string,
+/// 1, 3, 40, 43 and 1000 bytes — between them the residual path, the
+/// whole-lane path and several 256-byte blocks.
+///
+/// The module is 500 lines of `#asm` and nothing exercised it, so a change to
+/// how registers are allocated across chained `#asm` macros could have
+/// silently changed every hash it produces.
+#[test]
+fn meow_hash_produces_the_hashes_it_was_verified_against() {
+  if skip_without_asm() {
+    return;
+  }
+  assert_output(
+    "Meow :: #import \"meow_hash\";\n\
+     Basic :: #import \"Basic\";\n\
+     hex :: (h: Meow.Meow_Hash) -> string {\n  \
+       DIGITS :: \"0123456789abcdef\";\n  \
+       out: [32] u8;\n  \
+       for 0..15 {\n    \
+         out[it * 2]     = DIGITS[h.bytes[it] >> 4];\n    \
+         out[it * 2 + 1] = DIGITS[h.bytes[it] & 0xf];\n  \
+       }\n  \
+       r: string;\n  \
+       r.data = out.data;\n  \
+       r.count = 32;\n  \
+       return Basic.copy_string(r);\n\
+     }\n\
+     main :: () {\n  \
+       if !Meow.meow_hash_is_available() { put(\"no aes\\n\"); return; }\n  \
+       inputs := string.[\"\", \"a\", \"abc\",\n    \
+         \"0123456789012345678901234567890123456789\",\n    \
+         \"0123456789012345678901234567890123456789abc\"];\n  \
+       for inputs  put(hex(Meow.meow_hash(it)));\n  \
+       big: [1000] u8;\n  \
+       for * big  it.* = cast(u8)(it_index % 251);\n  \
+       put(hex(Meow.meow_hash(cast([] u8) big)));\n\
+     }\n",
+    "45c059582aa07c655e26830355b5a775\
+     e3500e349652bed8b5a46c34e1646bb2\
+     3bcc0a43ec73f719b49a4c426b236d5f\
+     d39253364c823aebb783993cf986ebb6\
+     226d070407f57d44069dfa615b0c17a5\
+     f441bb6d39f06b7b53ffae28894044af",
+  );
+}
+
+/// The same module on a target the language has no `#asm` for says so once,
+/// naming itself, rather than fifteen times from inside its own `#asm` blocks
+/// with a confusing untyped-expression error at the call site on top.
+#[test]
+fn meow_hash_says_it_is_x86_64_rather_than_failing_from_the_inside() {
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("program.jai");
+  std::fs::write(
+    &path,
+    "Meow :: #import \"meow_hash\";\nmain :: () { Meow.meow_hash(\"x\"); }\n",
+  )
+  .expect("the input should be writable");
+  unsafe {
+    oj_testsupport::use_own_modules();
+  }
+
+  // Whichever target this host is, one that has no `#asm`. Nothing is run, so
+  // compiling for a machine this is not costs nothing.
+  let target = match oj_types::Target::HOST.is_x64() {
+    true => oj_types::Target::LINUX_ARM64,
+    false => oj_types::Target::HOST,
+  };
+  let options = oj_driver::BuildOptions {
+    target,
+    ..oj_driver::BuildOptions::new()
+  };
+  let report = oj_driver::run(&path, &options, oj_driver::Stage::Executable, None);
+  assert!(report.failed, "it should not build for {target}");
+
+  let text = report.diagnostics.join("");
+  assert!(
+    text.contains("meow_hash is x86-64 only"),
+    "the module should name itself, but:\n{text}"
+  );
+  assert!(
+    !text.contains("has no '#asm' for"),
+    "it should not also report every block inside it:\n{text}"
+  );
+}

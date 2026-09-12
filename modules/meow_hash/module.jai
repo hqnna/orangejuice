@@ -20,6 +20,23 @@
 // several 256-byte blocks — all agree exactly. A hash whose whole value is
 // agreeing with other tools is worthless unverified, so it is verified.
 //
+// **This module is x86-64, and there is no fallback.** The algorithm *is* a
+// sequence of `aesdec` instructions; a software AES round would be a different
+// thing wearing this one's name, and slow enough to defeat the point of it.
+// The language's `#asm` is x86-64 too (**L§15**), so on another architecture
+// the whole module is one `#assert` rather than fifteen errors from inside its
+// own `#asm` blocks. Guard the import:
+//
+//     #if CPU == .X64  Meow :: #import "meow_hash";
+//
+// `Hash` is the portable hash to reach for instead.
+//
+
+#if CPU != .X64 {
+
+#assert false "meow_hash is x86-64 only: it is built out of AES-NI instructions, which the language's '#asm' has on no other architecture. Guard the import with '#if CPU == .X64', or use the 'Hash' module for a portable hash.";
+
+} else {
 
 #import "Basic";
 #import "Machine_X64";
@@ -529,4 +546,6 @@ hash_into :: (seed: [128] u8, source: *void, length: u64, store: *u8) {
     #asm { h0: vec; }
     MeowHash(seed, length, source, h0);
     #asm { movdqu [store], h0; }
+}
+
 }
