@@ -173,6 +173,7 @@ impl Checker<'_> {
     if declaration.flags.contains(DeclarationFlags::IS_CONSTANT) {
       return DeclType::value(value.type_id);
     }
+    self.report_unplaced_enum_name(source, expression, &value);
     DeclType::value(self.harden(value.type_id))
   }
 

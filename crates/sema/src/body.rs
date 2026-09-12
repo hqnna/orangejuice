@@ -753,9 +753,11 @@ impl Checker<'_> {
       // — measured against the reference, which is what `Treemap`'s `if
       // node.border` over a `[4] float` reads.
       TypeKind::Array { .. } => true,
-      // A struct has no truth value of its own (**L§5.9**), but `operator !`
-      // may give it one, so one is not reported here.
-      TypeKind::Struct(_) | TypeKind::Any => true,
+      // An `Any` is a pair, and the reference reads one as a condition.
+      TypeKind::Any => true,
+      // A struct never has a truth value, even with an operator of its own
+      // (**L§5.9**); `!x` reaches `operator !` before this is asked.
+      TypeKind::Struct(_) => false,
       // A literal, a polymorph variable or a type the front end has not worked
       // out is not something to complain about.
       TypeKind::Unknown

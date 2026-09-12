@@ -573,6 +573,8 @@ D3D_DRIVER_TYPE.[.HARDWARE, .WARP]     // unary-dot elements
 | `Code` | not `#code,null` |
 | `Type`, structs, arrays `[N] T`, `Any`, `void` | **error** ("cannot implicitly coerce to bool"); structs never have a truth value, even with an `operator ==` |
 
+A struct is reported wherever it is tested, `!x` included — `operator !` is the only thing that gives one a truth value, and it is resolved before this is asked.
+
 Comparison results are `bool`. `if x` on an integer `x` is exactly `if x != 0`.
 
 ### 5.10 Implicit conversions and type inference

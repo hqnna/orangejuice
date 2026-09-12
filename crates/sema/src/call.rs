@@ -90,11 +90,35 @@ impl Checker<'_> {
       return None;
     }
 
+    // A name that resolves to something with no procedure type at all is a call
+    // that cannot be made: overload resolution has nothing to score, and would
+    // otherwise leave the answer open the way an unresolved candidate does.
+    if !callee.overloads.is_empty() {
+      let candidates = callee.overloads.clone();
+      let types: Vec<TypeId> = candidates
+        .iter()
+        .map(|id| self.decl_type(*id).value)
+        .collect();
+      if types.iter().all(|type_id| {
+        // A pointer is left alone: what it points at may still turn out to be
+        // a procedure the checker has not settled.
+        !self.undecided_type(*type_id)
+          && !self.types().is_pointer(*type_id)
+          && self.types().procedure_of(*type_id).is_none()
+      }) && let Some(first) = types.first().copied()
+      {
+        return self.report_not_callable(source, node, call.procedure_expression, first);
+      }
+    }
+
     // Even a single candidate is scored: a call whose arguments it does not
     // accept is one whose answer we do not have, not one whose return type is
     // that candidate's (**L§7.5**).
     let resolved = if callee.overloads.is_empty() {
-      let signature = self.signature_of_annotated(scope, source, call.procedure_expression)?;
+      let Some(signature) = self.signature_of_annotated(scope, source, call.procedure_expression)
+      else {
+        return self.report_not_callable(source, node, call.procedure_expression, callee.type_id);
+      };
       match self.accepts(&signature, &arguments) {
         true => Resolved::One(signature),
         false => Resolved::None,
@@ -127,6 +151,30 @@ impl Checker<'_> {
       // open: there is nothing to complain about until it is.
       Resolved::Ambiguous => None,
     }
+  }
+
+  /// A call whose callee is not a procedure at all (**L§7.1**). Nothing about
+  /// the arguments can be judged, so what is named is the thing that was
+  /// called.
+  fn report_not_callable(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    callee: NodeId,
+    callee_type: TypeId,
+  ) -> Option<crate::overload::Signature> {
+    if self.undecided_type(callee_type) {
+      return None;
+    }
+    let span = self.span_of(source, node)?;
+    let name = self.written_name(source, callee);
+    let printed = self.type_name(callee_type);
+    self.report_once(
+      source,
+      span,
+      format!("'{name}' is not a procedure: it is a '{printed}'."),
+    );
+    None
   }
 
   /// What a call no candidate accepts reports (**L§7.5**). The argument types

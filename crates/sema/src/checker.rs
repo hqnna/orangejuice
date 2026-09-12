@@ -530,6 +530,43 @@ impl<'a> Checker<'a> {
     value
   }
 
+  /// Whether a type is one nothing can be concluded from, so that a mistake
+  /// written against it is not reported: an answer the checker has not worked
+  /// out, a `$T` no call site has bound, or a polymorphic struct *family*,
+  /// whose members and operators belong to an instantiation rather than to it
+  /// (**L§7.8**, **L§8.5**). One error must not turn into a second one about
+  /// what it left behind.
+  pub(crate) fn undecided_type(&self, type_id: TypeId) -> bool {
+    self.mentions_unknown(type_id)
+      || self.mentions_polymorph(type_id)
+      || self.mentions_family(type_id)
+  }
+
+  /// Reports at a span nothing has reported at yet, and says whether it did.
+  /// Lowering walks the same trees the checker did, so a construct reached
+  /// twice would otherwise be named twice.
+  pub(crate) fn report_once(
+    &mut self,
+    source: SourceId,
+    span: oj_diag::Span,
+    message: impl Into<String>,
+  ) -> bool {
+    if self
+      .diagnostics()
+      .iter()
+      .any(|diagnostic| diagnostic.source == source && diagnostic.span == span)
+    {
+      return false;
+    }
+    self.error(source, span, message);
+    true
+  }
+
+  /// The span a node was written at, for a diagnostic that has one to point at.
+  pub(crate) fn span_of(&self, source: SourceId, node: NodeId) -> Option<oj_diag::Span> {
+    Some(self.ast(source)?.node(node).span)
+  }
+
   pub(crate) fn checking_a_body(&self) -> bool {
     self.checking_bodies > 0
   }

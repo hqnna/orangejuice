@@ -990,17 +990,29 @@ impl Checker<'_> {
       OperatorType::POINTER_DEREFERENCE | OperatorType::POSTFIX_DEREFERENCE => {
         match self.types().pointee(inner.type_id) {
           Some(pointee) => Expr::place(pointee),
-          None => Expr::UNKNOWN,
+          None => self.not_dereferenceable(source, node, inner.type_id),
         }
       }
-      OperatorType::NOT => match inner
-        .constant
-        .as_ref()
-        .and_then(|value| value.value.truth())
-      {
-        Some(truth) => Expr::constant(Const::bool(!truth)),
-        None => Expr::value(TypeId::BOOL),
-      },
+      OperatorType::NOT => {
+        // A struct has no truth value of its own (**L§5.9**), so `operator !`
+        // is the only thing that can give it one (**L§7.7**).
+        if let Some(result) =
+          self.operator_overload(scope, source, node, operator, std::slice::from_ref(&inner))
+        {
+          return result;
+        }
+        if self.is_struct_value(inner.type_id) {
+          return self.not_a_truth_value(source, node, inner.type_id);
+        }
+        match inner
+          .constant
+          .as_ref()
+          .and_then(|value| value.value.truth())
+        {
+          Some(truth) => Expr::constant(Const::bool(!truth)),
+          None => Expr::value(TypeId::BOOL),
+        }
+      }
       // `~` on a constant folds, which is what makes `MASK :: ~(SIZE - 1)` a
       // constant and `x & ~7` an ordinary integer expression (**L§5.11**).
       OperatorType::BITWISE_NOT
@@ -1037,6 +1049,12 @@ impl Checker<'_> {
         if operator == OperatorType::PLUS {
           return inner;
         }
+        // Arithmetic is what is left, and only a number does it: without this
+        // a struct would be typed as itself here and reach the back end as a
+        // negate of an aggregate, which is nothing it can build (**L§5.2**).
+        if !self.is_arithmetic(inner.type_id) {
+          return self.unsupported_operand(source, node, operator, inner.type_id);
+        }
         match inner
           .constant
           .as_ref()
@@ -1051,6 +1069,144 @@ impl Checker<'_> {
       }
       _ => Expr::value(inner.type_id),
     }
+  }
+
+  /// Whether arithmetic applies to a type at all: a number, or an enum or
+  /// variant of one (**L§5.2**).
+  pub(crate) fn is_arithmetic(&self, type_id: TypeId) -> bool {
+    let underlying = self.types().underlying(type_id);
+    self.types().integer_kind(underlying).is_some()
+      || self.types().float_kind(underlying).is_some()
+      || matches!(
+        underlying,
+        TypeId::UNTYPED_INT
+          | TypeId::UNTYPED_FLOAT32
+          | TypeId::UNTYPED_FLOAT64
+          | TypeId::UNTYPED_ENUM
+          | TypeId::UNTYPED_LITERAL
+      )
+  }
+
+  /// An operator written against a type that has none of it and declares no
+  /// overload for it. The reference names the operator and what it was given,
+  /// which is what its string comparison message does (**C§12**).
+  pub(crate) fn unsupported_operand(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    operator: OperatorType,
+    operand: TypeId,
+  ) -> Expr {
+    if self.undecided_type(operand) {
+      return Expr::UNKNOWN;
+    }
+    let Some(span) = self.span_of(source, node) else {
+      return Expr::UNKNOWN;
+    };
+    let printed = self.type_name(operand);
+    let written = operator.text();
+    self.report_once(
+      source,
+      span,
+      format!("Operator '{written}' does not work on '{printed}'."),
+    );
+    Expr::UNKNOWN
+  }
+
+  /// `.NAME` written where nothing says which enum it belongs to: a `.` member
+  /// takes its type from its context, and a declaration with no type slot is
+  /// not one that supplies it (**L§5.12**).
+  pub(crate) fn report_unplaced_enum_name(&mut self, source: SourceId, node: NodeId, value: &Expr) {
+    if value.type_id != TypeId::UNTYPED_ENUM {
+      return;
+    }
+    let Some(Value::EnumName(name)) = value.constant.as_ref().map(|entry| entry.value.clone())
+    else {
+      return;
+    };
+    let Some(span) = self.span_of(source, node) else {
+      return;
+    };
+    let written = self.symbol_text(name);
+    self.report_once(
+      source,
+      span,
+      format!("'.{written}' needs an enum type from its context, and nothing here supplies one."),
+    );
+  }
+
+  /// Whether a value is a struct rather than something with a truth value of
+  /// its own. `Any` and arrays are left out of this on purpose: the reference
+  /// reads `if node.border` over a `[4] float`, which is what the note in
+  /// `has_truth_value` records (**L§5.9**).
+  pub(crate) fn is_struct_value(&self, type_id: TypeId) -> bool {
+    matches!(
+      self.types().kind(self.types().underlying(type_id)),
+      oj_types::TypeKind::Struct(_)
+    )
+  }
+
+  /// A value used as a condition that has no truth value (**L§5.9**). The
+  /// wording is the reference's, measured (**C§12**).
+  pub(crate) fn not_a_truth_value(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    operand: TypeId,
+  ) -> Expr {
+    if self.undecided_type(operand) {
+      return Expr::UNKNOWN;
+    }
+    let Some(span) = self.span_of(source, node) else {
+      return Expr::UNKNOWN;
+    };
+    let given = self.type_name(operand);
+    self.report_once(
+      source,
+      span,
+      format!("Type {given} cannot implicitly coerce to bool."),
+    );
+    Expr::value(TypeId::BOOL)
+  }
+
+  /// `x.*` where `x` is not a pointer (**L§5.2**).
+  pub(crate) fn not_dereferenceable(
+    &mut self,
+    source: SourceId,
+    node: NodeId,
+    operand: TypeId,
+  ) -> Expr {
+    if self.undecided_type(operand) {
+      return Expr::UNKNOWN;
+    }
+    let Some(span) = self.span_of(source, node) else {
+      return Expr::UNKNOWN;
+    };
+    let printed = self.type_name(operand);
+    self.report_once(
+      source,
+      span,
+      format!("Type '{printed}' cannot be dereferenced: it is not a pointer."),
+    );
+    Expr::UNKNOWN
+  }
+
+  /// `x[i]` where `x` is neither an array, a string nor a pointer, and its type
+  /// declares no `operator []` either (**L§5.4**, **L§7.7**).
+  pub(crate) fn not_indexable(&mut self, source: SourceId, node: NodeId, operand: TypeId) -> Expr {
+    if self.undecided_type(operand) {
+      return Expr::UNKNOWN;
+    }
+    let Some(span) = self.span_of(source, node) else {
+      return Expr::UNKNOWN;
+    };
+    let printed = self.type_name(operand);
+    let reason = match self.types().struct_of(self.types().underlying(operand)) {
+      Some(_) => format!("Type '{printed}' cannot be indexed: it declares no 'operator []'."),
+      None => format!("Type '{printed}' cannot be indexed."),
+    };
+    self.report_once(source, span, reason);
+    Expr::UNKNOWN
   }
 
   fn binary_type(
@@ -1103,7 +1259,7 @@ impl Checker<'_> {
           return Expr::place(pointee);
         }
       }
-      return Expr::UNKNOWN;
+      return self.not_indexable(source, node, operands[0].type_id);
     }
 
     let left_type = self.expression_type(scope, source, left);

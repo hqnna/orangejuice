@@ -780,3 +780,125 @@ fn an_enum_member_that_does_not_exist_is_reported() {
     vec!["'MAUVE' is not a member of 'Colour'.".to_string()]
   );
 }
+
+#[test]
+fn a_call_on_something_that_is_not_a_procedure_names_it() {
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; }
+      f :: () { n: s64 = 1; n(); }
+      "
+    ),
+    vec!["'n' is not a procedure: it is a 's64'.".to_string()]
+  );
+}
+
+#[test]
+fn indexing_something_that_is_not_an_array_says_so() {
+  assert_eq!(
+    errors("f :: () { n: s64 = 1; m := n[0]; }"),
+    vec!["Type 's64' cannot be indexed.".to_string()]
+  );
+}
+
+#[test]
+fn indexing_a_struct_says_which_operator_is_missing() {
+  // A struct *can* be indexed, but only through an `operator []` (**L§7.7**),
+  // so the diagnostic points at the one that would have made it work.
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; }
+      f :: () { p: Point; q := p[0]; }
+      "
+    ),
+    vec!["Type 'Point' cannot be indexed: it declares no 'operator []'.".to_string()]
+  );
+}
+
+#[test]
+fn dereferencing_something_that_is_not_a_pointer_says_so() {
+  assert_eq!(
+    errors("f :: () { n: s64 = 1; m := n.*; }"),
+    vec!["Type 's64' cannot be dereferenced: it is not a pointer.".to_string()]
+  );
+}
+
+#[test]
+fn arithmetic_on_a_type_that_has_none_names_the_operator() {
+  // Without this the operand was typed as itself and reached the back end as a
+  // negate of an aggregate, which is nothing it can build (**L§5.2**).
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; }
+      f :: () { p: Point; q := -p; }
+      "
+    ),
+    vec!["Operator '-' does not work on 'Point'.".to_string()]
+  );
+}
+
+#[test]
+fn a_unary_dot_with_no_type_in_context_says_what_is_missing() {
+  // `.NAME` takes its type from context, and a declaration with no type slot
+  // is not one that supplies it (**L§5.12**).
+  assert_eq!(
+    errors(
+      "
+      Colour :: enum { RED; GREEN; }
+      f :: () { x := .RED; }
+      "
+    ),
+    vec!["'.RED' needs an enum type from its context, and nothing here supplies one.".to_string()]
+  );
+}
+
+#[test]
+fn a_struct_has_no_truth_value_however_it_is_tested() {
+  // **L§5.9**: structs never have one. The wording is the reference's.
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; }
+      f :: () { p: Point; if p { } }
+      "
+    ),
+    vec!["Type Point cannot implicitly coerce to bool.".to_string()]
+  );
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; }
+      f :: () { p: Point; if !p { } }
+      "
+    ),
+    vec!["Type Point cannot implicitly coerce to bool.".to_string()]
+  );
+}
+
+#[test]
+fn the_ordinary_spellings_of_all_of_those_are_still_accepted() {
+  accepts(
+    "
+    Colour :: enum { RED; GREEN; }
+    Point :: struct { x: s64; }
+    twice :: (n: s64) -> s64 { return n * 2; }
+    f :: () {
+      n: s64 = 1;
+      xs: [4] s64;
+      p: Point;
+      here := *p;
+      c: Colour = .RED;
+      m := -n;
+      k := xs[0];
+      d := here.*;
+      v := twice(n);
+      if n { }
+      if !n { }
+      if c == .GREEN { }
+    }
+    ",
+  );
+}

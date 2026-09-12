@@ -155,13 +155,7 @@ impl Checker<'_> {
     base: TypeId,
     name: Symbol,
   ) -> Expr {
-    if !self.checking_a_body() {
-      return Expr::UNKNOWN;
-    }
-    // A polymorphic struct *family* has no members of its own: `b.T` in
-    // `first :: (b: *Box) -> b.T` names a parameter of whichever instantiation
-    // the call passes, and is answered there rather than here (**L§8.5**).
-    if self.mentions_unknown(base) || self.mentions_polymorph(base) || self.mentions_family(base) {
+    if !self.checking_a_body() || self.undecided_type(base) {
       return Expr::UNKNOWN;
     }
     // `#Context` is open: any module of the program may `#add_context` a member
@@ -170,20 +164,12 @@ impl Checker<'_> {
     if base == self.context_type() {
       return Expr::UNKNOWN;
     }
-    let Some(ast) = self.ast(source) else {
+    let Some(span) = self.span_of(source, right) else {
       return Expr::UNKNOWN;
     };
-    let span = ast.node(right).span;
-    if self
-      .diagnostics()
-      .iter()
-      .any(|diagnostic| diagnostic.source == source && diagnostic.span == span)
-    {
-      return Expr::UNKNOWN;
-    }
     let written = self.symbol_text(name);
     let printed = self.type_name(base);
-    self.error(
+    self.report_once(
       source,
       span,
       format!("'{written}' is not a member of '{printed}'."),
