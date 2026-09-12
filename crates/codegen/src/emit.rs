@@ -505,7 +505,14 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
           position += parts.len() as u32;
           continue;
         }
-        (ParameterKind::Pointer, None) if parameter.class.is_some() => {
+        // System V copies a memory-class argument into the caller's argument
+        // area, which is what `byval` asks LLVM for. AAPCS64 does not: it
+        // passes the address of a copy, which is the pointer the IR already
+        // hands over, so asking for `byval` there would put the bytes on the
+        // stack where the callee expects a pointer.
+        (ParameterKind::Pointer, None)
+          if parameter.class.is_some() && !self.target().is_aarch64() =>
+        {
           attributes.push((position, self.type_attribute("byval", parameter.type_id)));
         }
         _ => {}

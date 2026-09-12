@@ -73,6 +73,11 @@ pub struct Options {
   /// `compiler_modify_procedure` (**C§3.3**), applied to a file before it is
   /// parsed.
   pub modified_bodies: Vec<ModifiedBody>,
+  /// What the compilation emits for, which is what `OS` and `CPU` are
+  /// (**L§17**). This folder and the checker's have to agree about them: a
+  /// `#if OS ==` decides here which branch contributes declarations, and there
+  /// which branch is typed.
+  pub target: oj_types::Target,
 }
 
 /// One `compiler_modify_procedure`, as the text the block of the named
@@ -186,6 +191,7 @@ impl Default for Options {
       provided_imports: Vec::new(),
       added_strings: Vec::new(),
       modified_bodies: Vec::new(),
+      target: oj_types::Target::HOST,
     }
   }
 }
@@ -788,11 +794,14 @@ impl<'a> Program<'a> {
     let discard = self.interner.intern(b"_");
     self.tree.set_discard_name(discard);
     self.declare_builtin(b"_", None);
-    let linux = self.interner.intern(b"LINUX");
-    let x64 = self.interner.intern(b"X64");
-    self.declare_builtin(b"OS", Some(ConstValue::EnumName(linux)));
-    self.declare_builtin(b"CPU", Some(ConstValue::EnumName(x64)));
-    self.declare_builtin(b"IS_CROSS_COMPILING", Some(ConstValue::Bool(false)));
+    let os = self.interner.intern(self.options.target.os.member());
+    let cpu = self.interner.intern(self.options.target.cpu.member());
+    self.declare_builtin(b"OS", Some(ConstValue::EnumName(os)));
+    self.declare_builtin(b"CPU", Some(ConstValue::EnumName(cpu)));
+    self.declare_builtin(
+      b"IS_CROSS_COMPILING",
+      Some(ConstValue::Bool(self.options.target.is_cross_compiling())),
+    );
     self.declare_builtin(b"MACHINE_OPTIONS_SIZE", Some(ConstValue::Int(256)));
     // Runtime_Support sizes the first thread's temporary storage by this, and
     // the compiler is what defines it, out of `Build_Options` (**C§4**);

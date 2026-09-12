@@ -13,6 +13,7 @@ oj-diag.workspace = true
 oj-lexer.workspace = true
 oj-source.workspace = true
 oj-syntax.workspace = true
+oj-types.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

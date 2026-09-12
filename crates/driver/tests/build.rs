@@ -103,6 +103,21 @@ fn assert_output(body: &str, expected: &str) {
 }
 
 #[test]
+fn the_scope_folder_and_the_checker_agree_about_which_branch_of_a_static_if_ran() {
+  // Two `#if` folders read `OS` and `CPU`: the scope pass decides which branch
+  // contributes declarations, and the checker decides which branch is typed.
+  // When they disagreed, the taken branch's locals were nowhere in the scope
+  // tree and every use of one was an expression with no type (**L§5.11**).
+  assert_output(
+    "f :: (p: *int) -> int {\n         #if CPU == .X64 {\n             x := p.*;\n             y := x + 1;\n             return y;\n         } else {\n             a := p.*;\n             b := a + 2;\n             return b;\n         }\n     }\n     main :: () { n := 40; put_number(f(*n)); }\n",
+    match cfg!(target_arch = "x86_64") {
+      true => "41\n",
+      false => "42\n",
+    },
+  );
+}
+
+#[test]
 fn a_program_prints_through_a_foreign_procedure() {
   assert_output(
     "main :: () { put(\"hello, world\\n\"); }\n",

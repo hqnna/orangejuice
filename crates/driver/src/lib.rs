@@ -279,6 +279,7 @@ fn run_workspace_once(
     distribution: distribution(),
     ..oj_scope::Options::default()
   };
+  scope_options.target = options.target;
   scope_options.import_dirs = options.import_dirs.clone();
   scope_options.import_remaps = options.import_remaps.clone();
   scope_options.provided_imports = options.provided_imports.clone();
