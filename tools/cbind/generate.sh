@@ -58,12 +58,31 @@ echo "ast $(wc -l < "$work/ast.txt") lines, macros $(wc -l < "$work/macros.txt")
 
 wanted() { cat "$here/$module/wanted-$1.txt"; }
 
+# The `#define` families the module gathers into an `enum_flags`. Their values
+# are wanted the same way the plain constants are, so they are asked for
+# together and split apart afterwards.
+groups=$here/$module/flaggroups.txt
+: > "$work/flagmembers.txt"
+: > "$work/flaggroups.jai"
+if [ -f "$groups" ]; then
+  while read -r name prefix width style; do
+    [ -z "${name:-}" ] && continue
+    case "$name" in \#*) continue ;; esac
+    : "$width" "${style:-}"
+    awk -v p="$prefix" 'index($1, p) == 1 { print $1 }' "$work/macros.txt" \
+      | sort -u > "$work/flag-$name.txt"
+    cat "$work/flag-$name.txt" >> "$work/flagmembers.txt"
+  done < "$groups"
+  sort -u -o "$work/flagmembers.txt" "$work/flagmembers.txt"
+fi
+
 # The constants, by asking the compiler. A macro that does not compile — one
 # that names a type, or an identifier the headers only declare behind a guard
 # — is dropped and the program built again, until what is left compiles.
 : > "$work/rejected.txt"
 while : ; do
-  wanted constants | "$work/cconsts" "$work/macros.txt" "$here/$module/headers.c" "$work/rejected.txt" \
+  cat "$here/$module/wanted-constants.txt" "$work/flagmembers.txt" | sort -u \
+    | "$work/cconsts" "$work/macros.txt" "$here/$module/headers.c" "$work/rejected.txt" \
     > "$work/constants.c" 2>"$work/constants.log"
   if clang ${CBIND_CFLAGS:-} -w -o "$work/constants" "$work/constants.c" 2>"$work/constants.err"; then
     break
@@ -84,6 +103,69 @@ done
 "$work/constants" > "$work/constants.jai"
 rejected=$(wc -l < "$work/rejected.txt")
 [ "$rejected" = "0" ] || echo "dropped $rejected macro(s) the compiler would not take"
+
+if [ -f "$groups" ]; then
+  while read -r name prefix width style; do
+    [ -z "${name:-}" ] && continue
+    case "$name" in \#*) continue ;; esac
+    awk -v members="$work/flag-$name.txt" -v name="$name" -v prefix="$prefix" \
+        -v width="$width" -v style="${style:-}" '
+      BEGIN {
+        while ((getline m < members) > 0) wanted[m] = 1
+        widest = 0; aliaswidest = 0; count = 0
+      }
+      {
+        key = $1
+        if (!(key in wanted)) next
+        value = $3; sub(/;$/, "", value)
+        count++
+        order[count] = key; number[key] = value + 0
+        short = key; sub("^" prefix, "", short)
+        brief[key] = short
+        if (length(short) > widest) widest = length(short)
+        if (length(key) > aliaswidest) aliaswidest = length(key)
+        if (length(key) > widest && style != "strip") widest = length(key)
+      }
+      END {
+        if (count == 0) exit
+        # Value order for the stripped style, which reads as a bit list; name
+        # order for the plain one, which reads as a table.
+        for (i = 1; i <= count; i++)
+          for (j = i + 1; j <= count; j++) {
+            a = order[i]; b = order[j]
+            swap = (style == "strip") ? (number[a] > number[b]) : (a > b)
+            if (swap) { order[i] = b; order[j] = a }
+          }
+        if (style == "strip") printf "%s :: enum_flags %s {\n", name, width
+        else                  printf "using %s :: enum_flags %s {\n", name, width
+        for (i = 1; i <= count; i++) {
+          key = order[i]
+          if (style == "strip") printf "    %-*s :: 0x%04x;\n", widest, brief[key], number[key]
+          else                  printf "    %s :: %d;\n", key, number[key]
+        }
+        # The stripped style keeps the C spelling too, as an alias, so that a
+        # program written against either compiles.
+        if (style == "strip") {
+          printf "\n"
+          for (i = 1; i <= count; i++) {
+            key = order[i]
+            printf "    %-*s :: %s;\n", aliaswidest, key, brief[key]
+          }
+        }
+        printf "}\n\n"
+      }
+    ' "$work/constants.jai" >> "$work/flaggroups.jai"
+  done < "$groups"
+fi
+
+# What is left, once the families have been taken out, are the plain constants.
+# Guarded on the list being non-empty: `NR == FNR` reads the *second* file as
+# the first when the first has no lines, which drops every constant there is.
+if [ -s "$work/flagmembers.txt" ]; then
+  awk 'NR == FNR { member[$1] = 1; next } !($1 in member)' \
+    "$work/flagmembers.txt" "$work/constants.jai" > "$work/constants.tmp"
+  mv "$work/constants.tmp" "$work/constants.jai"
+fi
 
 wanted types      | "$work/cstructs" "$work/ast.txt" > "$work/types.jai"  2>/dev/null
 wanted enums      | "$work/cenums"   "$work/ast.txt" > "$work/enums.jai"  2>/dev/null
@@ -206,7 +288,9 @@ section() { printf '\n// %s %s ---\n\n' "$(printf -- '-%.0s' $(seq 1 $((71 - ${#
   cat "$here/$module/header.jai"
   section "constants";  cat "$work/constants.jai"
   section "the types";  cat "$work/types.jai"
-  section "enums";      cat "$work/enums.jai"
+  section "enums"
+  cat "$work/enums.jai"
+  [ -s "$work/flaggroups.jai" ] && cat "$work/flaggroups.jai"
   section "procedures"; cat "$work/procs.jai"
   if [ -f "$overridden" ]; then
     section "the overrides"

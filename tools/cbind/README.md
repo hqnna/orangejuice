@@ -120,8 +120,14 @@ emitted as an opaque struct, which is what a C incomplete type is.
 - `<module>/tail.jai` holds what no header can answer: C's macros (`S_IS*`,
   `W*`, `FD_*`, `CMSG_*`), the globals libc defines, the io_uring syscall
   wrappers, and the conveniences the reference ships beside its bindings.
-- `<module>/flaggroups.txt` lists the families of `#define`s the reference groups
-  into `enum_flags`, with the width it gives each.
+- `<module>/flaggroups.txt` lists the families of `#define`s the reference
+  groups into `enum_flags`, with the width it gives each and, optionally,
+  `strip`. The members' values come from the same compiled program the plain
+  constants do, and are then taken out of the constants section. Without
+  `strip` the members keep the C spelling and are listed by name, which is
+  what the io_uring families are; with it the common prefix comes off, the
+  values read as hex in bit order, and the C spellings follow as aliases so
+  that both compile — `AI.PASSIVE` and `AI.AI_PASSIVE`.
 - `<module>/enums.txt` is the enums the module names or widens differently from
   what the headers say: `__rusage_who` ships as `RUSAGE` because a tag says
   nothing about its members, `DT` is narrowed to `u8` because `dirent.d_type`
@@ -135,11 +141,22 @@ emitted as an opaque struct, which is what a C incomplete type is.
 
 ### Where each module stands
 
-`posix` round-trips: regenerating it prints `no change`. The other three do
-not yet, because their curation is not all captured as data — `flaggroups.txt`
-is read by nobody, and `socket` and `linux` each rename a few enums the way
-`enums.txt` now expresses. Until that is wired in, run them without `--write`
-and read the diff.
+`posix` round-trips: regenerating it prints `no change`, on both
+architectures. `socket` and `linux` do not yet. Their `flaggroups.txt` is
+applied now and reproduces exactly — `IOSQE_Flags` and the rest come out byte
+for byte — but two other things stand in the way, and neither is the
+generator's fault:
+
+- **Enums they rename.** `__socket_type` ships as `SOCK`, `io_uring_op` as
+  `IORING_OP`, `statx` as `statx_t`. `enums.txt` and `renames.txt` are where
+  those belong; nobody has written them down yet.
+- **Headers that moved.** The committed files were generated against an older
+  glibc, which still had `AI_IDN_ALLOW_UNASSIGNED`, `NI_IDN_*` and a shelf of
+  legacy `sockaddr_*`. Regenerating drops them, and dropping a declaration a
+  program might name is not a decision the generator should make quietly.
+
+So run those two without `--write`, read the diff, and decide. `lz4` has
+lists but has never been run — its headers are not in the dev shell.
 
 ## What is not generated
 

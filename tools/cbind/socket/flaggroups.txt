@@ -1,1 +1,1 @@
-AI AI_ u32
+AI AI_ u32 strip
