@@ -1,0 +1,16 @@
+# Enums the generator names or widens differently from what the module ships.
+#
+#   <name cenums gives it>  <name it keeps>  <base type>  [using] [keep-prefix]
+#
+# A tagged C enum is named after its tag, which says nothing about its members
+# (`__rusage_who` holds `RUSAGE_SELF`), so the reference names those after the
+# members instead. `DT` is narrowed because `dirent.d_type` is one byte, and
+# widening it there would move every field after it. `_SC_definitions` is
+# `using` so that `sysconf(_SC_NPROCESSORS_ONLN)` reads the way C writes it —
+# and `keep-prefix`, because an anonymous enum normally has its common prefix
+# taken off each member, which would leave `sysconf(GETPW_R_SIZE_MAX)`.
+_SC               _SC_definitions   s32  using keep-prefix
+DT                DT                u8
+__rlimit_resource RLIMIT_RESOURCE   s32
+__rusage_who      RUSAGE            s32
+__priority_which  PRIO              s32

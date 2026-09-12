@@ -33,10 +33,11 @@ what every Unix agrees on and loads one of two files beside it:
 
 `macos.jai` is hand-written rather than generated because the Darwin surface
 the standard library actually calls is a few dozen names, where glibc's is
-1,800 — running the pipeline for it would be more assembly than declaration.
-That is a judgement about size, not a limitation: `generate.sh macos` prepares
-the same inputs on a Mac, and the moment the Darwin surface stops being small
-it should be generated like everything else.
+1,800 — writing the four wanted lists for it would be more work than the
+declarations themselves. That is a judgement about size, not a limitation:
+`macos/headers.c` is there and `generate.sh macos` runs on a Mac, so the
+moment that surface stops being small it should be generated like everything
+else.
 
 What makes the hand-written file safe to keep is that it is *measured*:
 `a_darwin_layout_is_what_the_c_compiler_says` in
@@ -49,10 +50,11 @@ the way a struct that is wrong by eight bytes does.
 
 ## Running it
 
-Inside `nix develop`:
+Inside `nix develop`, one command per module:
 
 ```
-tools/cbind/generate.sh posix
+tools/cbind/generate.sh posix           # writes generated.jai.new and diffs it
+tools/cbind/generate.sh posix --write   # ... and moves it into place
 ```
 
 lz4's headers are not in the dev shell; point the script at them:
@@ -62,20 +64,36 @@ CBIND_CFLAGS=-I$(nix build --no-link --print-out-paths 'nixpkgs#lz4.dev')/includ
   tools/cbind/generate.sh lz4
 ```
 
-The three emitters each read the wanted names on stdin and write Jai on
-stdout:
+Without `--write` nothing is overwritten: the candidate is left beside the
+module's file and the diff is printed. **Regenerating a module that has not
+changed prints `no change` and writes nothing**, which is the useful property
+— a diff means either the headers moved or somebody edited the generated file
+by hand.
 
-| Program | Emits |
-|---|---|
-| `cbind` | `#foreign` procedure declarations |
-| `cstructs` | structs, unions, typedefs and opaque types |
-| `cenums` | enums, with the reference's naming rules |
+### What it runs
 
-Constant *values* come from compiling a generated C program that prints each
-one, so nothing is guessed. A type the output leans on but does not declare is
-chased to a fixed point; anything still undeclared that the headers mention
-only behind a pointer is emitted as an opaque struct, which is what a C
-incomplete type is.
+Four emitters, each reading the names it should emit on stdin and writing Jai
+on stdout:
+
+| Program | Emits | Wanted list |
+|---|---|---|
+| `cconsts` | a C program that prints each macro's value | `wanted-constants.txt` |
+| `cstructs` | structs, unions, typedefs and opaque types | `wanted-types.txt` |
+| `cenums` | enums, with the reference's naming rules | `wanted-enums.txt` |
+| `cbind` | `#foreign` procedure declarations | `wanted-procedures.txt` |
+
+The wanted lists are the module's surface, and they hold the names *C* uses —
+the renames below are applied after. Constant values come from compiling and
+running the program `cconsts` writes, so nothing is guessed: `O_CREAT` is
+`0100` in the header and `64` here because the compiler said so. A macro the
+compiler will not take is dropped and the program built again until what is
+left compiles; a macro whose value is a *string* is skipped outright, because
+casting one to a number yields whatever address the literal landed at — which
+is how `P_tmpdir` used to come out as `93824992259364`.
+
+A type the output leans on but does not declare is chased to a fixed point;
+anything still undeclared that the headers mention only behind a pointer is
+emitted as an opaque struct, which is what a C incomplete type is.
 
 ## The rules it follows
 
@@ -95,6 +113,34 @@ incomplete type is.
   wrappers, and the conveniences the reference ships beside its bindings.
 - `<module>/flaggroups.txt` lists the families of `#define`s the reference groups
   into `enum_flags`, with the width it gives each.
+- `<module>/enums.txt` is the enums the module names or widens differently from
+  what the headers say: `__rusage_who` ships as `RUSAGE` because a tag says
+  nothing about its members, `DT` is narrowed to `u8` because `dirent.d_type`
+  is one byte and widening it would move every field after it, and
+  `_SC_definitions` keeps its members' `_SC_` prefix so that `sysconf` reads
+  the way C writes it.
+- `<module>/overrides.jai` is whole declarations the module ships *instead of*
+  what the generator produces. The generated one is dropped and this one takes
+  its place. `clockid_t` is there: the headers make it a plain `typedef int`,
+  which would leave `clock_gettime(.REALTIME, *now)` with nothing to name.
+
+### Where each module stands
+
+`posix` round-trips: regenerating it prints `no change`. The other three do
+not yet, because their curation is not all captured as data — `flaggroups.txt`
+is read by nobody, and `socket` and `linux` each rename a few enums the way
+`enums.txt` now expresses. Until that is wired in, run them without `--write`
+and read the diff.
+
+## What is not generated
+
+`generated.jai` is exactly what `generate.sh` produces — that is checked by
+regenerating and seeing `no change`. Three things make that true without the
+generator having to be clever, and all three are data beside the headers:
+`renames.txt`, `enums.txt` and `overrides.jai`, described above. If a
+regeneration ever produces a diff nobody expected, one of those is where the
+answer belongs — not a hand edit to the output, which the next regeneration
+would throw away.
 
 ## What it deliberately leaves out
 

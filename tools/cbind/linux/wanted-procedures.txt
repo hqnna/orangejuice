@@ -1,0 +1,9 @@
+epoll_create
+epoll_create1
+epoll_ctl
+epoll_pwait
+epoll_wait
+inotify_add_watch
+inotify_init
+inotify_rm_watch
+sysinfo

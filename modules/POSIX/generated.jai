@@ -18,7 +18,8 @@
 
 #scope_export
 
-// ------------------------------------------------------------- constants ---
+
+// -------------------------------------------------------------- constants ---
 
 ACCESSPERMS :: 511;
 ALLPERMS :: 4095;
@@ -359,7 +360,6 @@ PROT_NONE :: 0;
 PTHREAD_BARRIER_SERIAL_THREAD :: -1;
 PTHREAD_CANCELED :: -1;
 PTHREAD_ONCE_INIT :: 0;
-P_tmpdir :: 93824992259364;
 RLIM64_INFINITY :: -1;
 RLIM_INFINITY :: -1;
 RLIM_SAVED_CUR :: -1;
@@ -1010,12 +1010,49 @@ __error_t_defined :: 1;
 __have_pthread_attr_t :: 1;
 __rusage_defined :: 1;
 
-// ------------------------------------------------------------- the types ---
+// -------------------------------------------------------------- the types ---
 
+__uint8_t :: u8;
+__uint16_t :: u16;
+__int32_t :: s32;
+__uint32_t :: u32;
+__uint64_t :: u64;
+__dev_t :: u64;
+__uid_t :: u32;
+__gid_t :: u32;
+__ino_t :: u64;
+__ino64_t :: u64;
+__mode_t :: u32;
+__nlink_t :: u64;
+__off_t :: s64;
+__off64_t :: s64;
+__pid_t :: s32;
 __fsid_t :: struct {
     __val: [2] s32;
 }
 
+__clock_t :: s64;
+__rlim_t :: u64;
+__rlim64_t :: u64;
+__id_t :: u32;
+__time_t :: s64;
+__useconds_t :: u32;
+__suseconds_t :: s64;
+__key_t :: s32;
+__clockid_t :: s32;
+__timer_t :: *void;
+__blksize_t :: s64;
+__blkcnt_t :: s64;
+__blkcnt64_t :: s64;
+__fsblkcnt_t :: u64;
+__fsblkcnt64_t :: u64;
+__fsfilcnt_t :: u64;
+__fsfilcnt64_t :: u64;
+__fsword_t :: s64;
+__ssize_t :: s64;
+__syscall_slong_t :: s64;
+__syscall_ulong_t :: u64;
+__intptr_t :: s64;
 fsid_t :: __fsid_t;
 ino_t :: __ino_t;
 ino64_t :: __ino64_t;
@@ -1025,6 +1062,7 @@ mode_t :: __mode_t;
 nlink_t :: __nlink_t;
 uid_t :: __uid_t;
 off_t :: __off_t;
+off64_t :: __off64_t;
 pid_t :: __pid_t;
 id_t :: __id_t;
 ssize_t :: __ssize_t;
@@ -1034,6 +1072,7 @@ timer_t :: __timer_t;
 useconds_t :: __useconds_t;
 suseconds_t :: __suseconds_t;
 size_t :: u64;
+int32_t :: __int32_t;
 register_t :: s32;
 __sigset_t :: struct {
     __val: [16] u64;
@@ -1052,10 +1091,20 @@ fsfilcnt_t :: __fsfilcnt_t;
 blkcnt64_t :: __blkcnt64_t;
 fsblkcnt64_t :: __fsblkcnt64_t;
 fsfilcnt64_t :: __fsfilcnt64_t;
+__atomic_wide_counter :: union {
+    __value64: u64;
+    __value32: struct {
+        __low: u32;
+        __high: u32;
+    }
+}
+
 __pthread_internal_list :: struct {
     __prev: *__pthread_internal_list;
     __next: *__pthread_internal_list;
 }
+
+__pthread_list_t :: __pthread_internal_list;
 
 __pthread_mutex_s :: struct {
     __lock: s32;
@@ -1133,6 +1182,7 @@ sigval :: union {
     sival_ptr: *void;
 }
 
+__sigval_t :: sigval;
 sigevent :: struct {
     sigev_value: __sigval_t;
     sigev_signo: s32;
@@ -1286,6 +1336,7 @@ __locale_struct :: struct {
     __names: [13] *u8;
 }
 
+__locale_t :: *__locale_struct;
 locale_t :: __locale_t;
 nfds_t :: u64;
 pollfd :: struct {
@@ -1294,6 +1345,10 @@ pollfd :: struct {
     revents: s16;
 }
 
+__u16 :: u16;
+__u32 :: u32;
+__kernel_long_t :: s64;
+__kernel_ulong_t :: u64;
 sched_param :: struct {
     sched_priority: s32;
 }
@@ -1431,6 +1486,7 @@ siginfo_t :: struct {
     }
 }
 
+__sighandler_t :: #type (s32) -> void #c_call;
 sighandler_t :: __sighandler_t;
 sig_t :: __sighandler_t;
 sigaction_t :: struct {
@@ -1550,6 +1606,7 @@ ucontext_t :: struct {
     __ssp: [4] u64;
 }
 
+intptr_t :: __intptr_t;
 sigstack_t :: struct {
     ss_sp: *void;
     ss_onstack: s32;
@@ -1568,10 +1625,14 @@ _G_fpos_t :: struct {
     __state: __mbstate_t;
 }
 
+__fpos_t :: _G_fpos_t;
+
 _G_fpos64_t :: struct {
     __pos: __off64_t;
     __state: __mbstate_t;
 }
+
+__fpos64_t :: _G_fpos64_t;
 
 _IO_cookie_io_functions_t :: struct {
     read: *cookie_read_function_t;
@@ -1580,11 +1641,17 @@ _IO_cookie_io_functions_t :: struct {
     close: *cookie_close_function_t;
 }
 
+cookie_io_functions_t :: _IO_cookie_io_functions_t;
+
 fpos_t :: __fpos_t;
 fpos64_t :: __fpos64_t;
 // Opaque: the library owns the contents.
 obstack :: struct {}
 
+uint8_t :: __uint8_t;
+uint16_t :: __uint16_t;
+uint32_t :: __uint32_t;
+uint64_t :: __uint64_t;
 eventfd_t :: uint64_t;
 ipc_perm :: struct {
     __key: __key_t;
@@ -1672,6 +1739,9 @@ rusage :: struct {
     }
 }
 
+__rlimit_resource_t :: __rlimit_resource;
+__rusage_who_t :: __rusage_who;
+__priority_which_t :: __priority_which;
 shmatt_t :: __syscall_ulong_t;
 shmid_ds :: struct {
     shm_perm: ipc_perm;
@@ -1791,6 +1861,7 @@ itimerval :: struct {
     it_value: timeval;
 }
 
+__itimer_which_t :: __itimer_which;
 utsname :: struct {
     sysname: [65] u8;
     nodename: [65] u8;
@@ -1835,116 +1906,6 @@ statfs64_t :: struct {
     f_spare: [4] __fsword_t;
 }
 
-__uint16_t :: u16;
-__uint32_t :: u32;
-__uint64_t :: u64;
-__dev_t :: u64;
-__uid_t :: u32;
-__gid_t :: u32;
-__ino_t :: u64;
-__ino64_t :: u64;
-__mode_t :: u32;
-__nlink_t :: u64;
-__off_t :: s64;
-__off64_t :: s64;
-__pid_t :: s32;
-__clock_t :: s64;
-__rlim_t :: u64;
-__rlim64_t :: u64;
-__id_t :: u32;
-__time_t :: s64;
-__useconds_t :: u32;
-__suseconds_t :: s64;
-__key_t :: s32;
-__clockid_t :: s32;
-__timer_t :: *void;
-__blksize_t :: s64;
-__blkcnt_t :: s64;
-__blkcnt64_t :: s64;
-__fsblkcnt_t :: u64;
-__fsblkcnt64_t :: u64;
-__fsfilcnt_t :: u64;
-__fsfilcnt64_t :: u64;
-__fsword_t :: s64;
-__ssize_t :: s64;
-__syscall_slong_t :: s64;
-__syscall_ulong_t :: u64;
-off64_t :: __off64_t;
-clockid_t :: enum u32 {
-    REALTIME           :: 0;
-    MONOTONIC          :: 1;
-    PROCESS_CPUTIME_ID :: 2;
-    THREAD_CPUTIME_ID  :: 3;
-    MONOTONIC_RAW      :: 4;
-    REALTIME_COARSE    :: 5;
-    MONOTONIC_COARSE   :: 6;
-    BOOTTIME           :: 7;
-    REALTIME_ALARM     :: 8;
-    BOOTTIME_ALARM     :: 9;
-    TAI                :: 11;
-
-    CLOCK_REALTIME           :: REALTIME;
-    CLOCK_MONOTONIC          :: MONOTONIC;
-    CLOCK_PROCESS_CPUTIME_ID :: PROCESS_CPUTIME_ID;
-    CLOCK_THREAD_CPUTIME_ID  :: THREAD_CPUTIME_ID;
-    CLOCK_MONOTONIC_RAW      :: MONOTONIC_RAW;
-    CLOCK_REALTIME_COARSE    :: REALTIME_COARSE;
-    CLOCK_MONOTONIC_COARSE   :: MONOTONIC_COARSE;
-    CLOCK_BOOTTIME           :: BOOTTIME;
-    CLOCK_REALTIME_ALARM     :: REALTIME_ALARM;
-    CLOCK_BOOTTIME_ALARM     :: BOOTTIME_ALARM;
-    CLOCK_TAI                :: TAI;
-}
-int32_t :: __int32_t;
-__atomic_wide_counter :: union {
-    __value64: u64;
-    __value32: struct {
-        __low: u32;
-        __high: u32;
-    }
-}
-
-__pthread_list_t :: struct {
-    __prev: *__pthread_internal_list;
-    __next: *__pthread_internal_list;
-}
-
-__sigval_t :: sigval;
-__locale_t :: *__locale_struct;
-__u16 :: u16;
-__u32 :: u32;
-__kernel_long_t :: s64;
-__kernel_ulong_t :: u64;
-__sighandler_t :: #type (s32) -> void #c_call;
-intptr_t :: __intptr_t;
-__fpos_t :: struct {
-    __pos: __off_t;
-    __state: __mbstate_t;
-}
-
-__fpos64_t :: struct {
-    __pos: __off64_t;
-    __state: __mbstate_t;
-}
-
-cookie_io_functions_t :: struct {
-    read: *cookie_read_function_t;
-    write: *cookie_write_function_t;
-    seek: *cookie_seek_function_t;
-    close: *cookie_close_function_t;
-}
-
-uint8_t :: __uint8_t;
-uint16_t :: __uint16_t;
-uint32_t :: __uint32_t;
-uint64_t :: __uint64_t;
-__rlimit_resource_t :: __rlimit_resource;
-__rusage_who_t :: __rusage_who;
-__priority_which_t :: __priority_which;
-__itimer_which_t :: __itimer_which;
-__uint8_t :: u8;
-__int32_t :: s32;
-__intptr_t :: s64;
 
 // ------------------------------------------------------------------ enums ---
 
@@ -2430,21 +2391,18 @@ RLIMIT_RESOURCE :: enum s32 {
     __RLIMIT_NLIMITS :: 16;
     __RLIM_NLIMITS :: __RLIMIT_NLIMITS;
 }
-__rlimit_resource :: RLIMIT_RESOURCE;
 
 RUSAGE :: enum s32 {
     RUSAGE_SELF :: 0;
     RUSAGE_CHILDREN :: -1;
     RUSAGE_THREAD :: 1;
 }
-__rusage_who :: RUSAGE;
 
 PRIO :: enum s32 {
     PRIO_PROCESS :: 0;
     PRIO_PGRP :: 1;
     PRIO_USER :: 2;
 }
-__priority_which :: PRIO;
 
 SFD :: enum s32 {
     CLOEXEC :: 524288;
@@ -2474,6 +2432,12 @@ idtype_t :: enum s32 {
     P_PIDFD;
 }
 
+
+__rlimit_resource :: RLIMIT_RESOURCE;
+
+__rusage_who :: RUSAGE;
+
+__priority_which :: PRIO;
 
 // ------------------------------------------------------------- procedures ---
 
@@ -3032,6 +2996,34 @@ wait3 :: (__stat_loc: *s32, __options: s32, __usage: *rusage) -> __pid_t #foreig
 wait4 :: (__pid: __pid_t, __stat_loc: *s32, __options: s32, __usage: *rusage) -> __pid_t #foreign libc;
 waitid :: (__idtype: idtype_t, __id: __id_t, __infop: *siginfo_t, __options: s32) -> s32 #foreign libc;
 writev :: (__fd: s32, __iovec: *iovec, __count: s32) -> ssize_t #foreign libc;
+
+// ---------------------------------------------------------- the overrides ---
+
+clockid_t :: enum u32 {
+    REALTIME           :: 0;
+    MONOTONIC          :: 1;
+    PROCESS_CPUTIME_ID :: 2;
+    THREAD_CPUTIME_ID  :: 3;
+    MONOTONIC_RAW      :: 4;
+    REALTIME_COARSE    :: 5;
+    MONOTONIC_COARSE   :: 6;
+    BOOTTIME           :: 7;
+    REALTIME_ALARM     :: 8;
+    BOOTTIME_ALARM     :: 9;
+    TAI                :: 11;
+
+    CLOCK_REALTIME           :: REALTIME;
+    CLOCK_MONOTONIC          :: MONOTONIC;
+    CLOCK_PROCESS_CPUTIME_ID :: PROCESS_CPUTIME_ID;
+    CLOCK_THREAD_CPUTIME_ID  :: THREAD_CPUTIME_ID;
+    CLOCK_MONOTONIC_RAW      :: MONOTONIC_RAW;
+    CLOCK_REALTIME_COARSE    :: REALTIME_COARSE;
+    CLOCK_MONOTONIC_COARSE   :: MONOTONIC_COARSE;
+    CLOCK_BOOTTIME           :: BOOTTIME;
+    CLOCK_REALTIME_ALARM     :: REALTIME_ALARM;
+    CLOCK_BOOTTIME_ALARM     :: BOOTTIME_ALARM;
+    CLOCK_TAI                :: TAI;
+}
 
 // ------------------------------------------------------- the hand-written ---
 //

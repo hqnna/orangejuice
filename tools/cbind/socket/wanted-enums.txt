@@ -1,0 +1,12 @@
+IFF
+IPPORT
+IPPROTO
+IPPROTO_1
+MSG
+SCM
+SHUT
+SOCK
+TCP
+TCP_1
+__socket_type
+tcp_ca_state
