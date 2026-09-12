@@ -117,13 +117,73 @@ impl Checker<'_> {
         };
       }
       // A nested type or procedure reached through a value (**L§8.3**).
-      return self.member_of_type(value_type, name);
+      let found = self.member_of_type(value_type, name);
+      if !found.is_unknown() {
+        return found;
+      }
+      return self.unknown_member(source, right, value_type, name);
     }
 
     if self.types().enum_of(value_type).is_some() {
-      return self.member_of_type(value_type, name);
+      let found = self.member_of_type(value_type, name);
+      if !found.is_unknown() {
+        return found;
+      }
+      return self.unknown_member(source, right, value_type, name);
     }
 
+    self.unknown_member(source, right, value_type, name)
+  }
+
+  /// A member access that named nothing, where the type it was written against
+  /// *is* known: `p.z` on a struct with no `z` (**L§5.3**). Nothing further out
+  /// can supply the name — a struct's members are not searched outward — so the
+  /// front end reports it here rather than leaving an `unknown` for the back
+  /// end to fail on.
+  ///
+  /// A type the checker has not worked out yet says nothing, the same rule an
+  /// argument of unknown type follows at a call site: one error should not turn
+  /// into a second one about the type it left behind.
+  fn unknown_member(
+    &mut self,
+    source: SourceId,
+    right: NodeId,
+    base: TypeId,
+    name: Symbol,
+  ) -> Expr {
+    if !self.checking_a_body() {
+      return Expr::UNKNOWN;
+    }
+    // A polymorphic struct *family* has no members of its own: `b.T` in
+    // `first :: (b: *Box) -> b.T` names a parameter of whichever instantiation
+    // the call passes, and is answered there rather than here (**L§8.5**).
+    if self.mentions_unknown(base) || self.mentions_polymorph(base) || self.mentions_family(base) {
+      return Expr::UNKNOWN;
+    }
+    // `#Context` is open: any module of the program may `#add_context` a member
+    // to it (**L§10.2**), so a name that misses there is one the rest of the
+    // program may still declare rather than one nothing has.
+    if base == self.context_type() {
+      return Expr::UNKNOWN;
+    }
+    let Some(ast) = self.ast(source) else {
+      return Expr::UNKNOWN;
+    };
+    let span = ast.node(right).span;
+    if self
+      .diagnostics()
+      .iter()
+      .any(|diagnostic| diagnostic.source == source && diagnostic.span == span)
+    {
+      return Expr::UNKNOWN;
+    }
+    let written = self.symbol_text(name);
+    let printed = self.type_name(base);
+    self.error(
+      source,
+      span,
+      format!("'{written}' is not a member of '{printed}'."),
+    );
     Expr::UNKNOWN
   }
 

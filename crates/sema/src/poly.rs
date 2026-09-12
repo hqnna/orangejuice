@@ -1594,7 +1594,7 @@ impl Checker<'_> {
 
   /// Whether a type slot names a polymorphic struct family anywhere inside it:
   /// `Holder`, `*Holder`, `*[..] *Holder` (**L§8.5**).
-  fn mentions_family(&self, pattern: TypeId) -> bool {
+  pub(crate) fn mentions_family(&self, pattern: TypeId) -> bool {
     match self.types().kind(pattern) {
       TypeKind::Pointer(pointee) => self.mentions_family(*pointee),
       TypeKind::Array { element, .. } => self.mentions_family(*element),

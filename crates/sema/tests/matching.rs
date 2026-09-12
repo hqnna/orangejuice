@@ -708,3 +708,46 @@ fn a_variadic_struct_parameter_gathers_the_arguments_it_was_given() {
     ",
   );
 }
+
+#[test]
+fn a_member_a_struct_does_not_have_is_reported_against_the_name() {
+  // A struct's members are not searched outward (**L§5.3**), so nothing further
+  // out can supply the name and the front end is where this belongs — the back
+  // end used to be the one to notice, as a declaration it could not lower.
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; y: s64; }
+      f :: () { p: Point; p.z = 3; }
+      "
+    ),
+    vec!["'z' is not a member of 'Point'.".to_string()]
+  );
+}
+
+#[test]
+fn a_member_miss_is_reported_wherever_the_value_was_read() {
+  assert_eq!(
+    errors(
+      "
+      Point :: struct { x: s64; }
+      f :: () { p: Point; q := p.w; }
+      "
+    ),
+    vec!["'w' is not a member of 'Point'.".to_string()]
+  );
+}
+
+#[test]
+fn a_member_of_a_type_the_checker_has_not_worked_out_is_not_reported() {
+  // One error should not turn into a second one about what it left behind, and
+  // a family has no members of its own until a call site instantiates it
+  // (**L§8.5**).
+  accepts(
+    "
+    Box :: struct (T: Type) { x: T; }
+    first :: (b: *Box) -> b.T { return b.x; }
+    f :: () { a: Box(s64); first(*a); }
+    ",
+  );
+}
