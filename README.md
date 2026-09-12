@@ -33,9 +33,11 @@ target: `oj` builds and runs there, and emits and links native code for there.
 Releases carry a tarball per platform that brings its own libraries, so it runs
 on a machine with nothing installed.
 
-Inline assembly is the exception. `#asm` is an x86-64 feature of the language
-itself, so on arm64 a program that writes one gets a diagnostic naming it
-rather than an encoding the compiler invented.
+Inline assembly works on both architectures. `#asm` is x86-64 in the reference
+language; orangejuice also assembles arm64 blocks, which is an extension of
+its own that `docs/language.md` §15.9 specifies. A block written for one
+architecture does not mean anything on the other, so a program that wants
+both writes `#if CPU == .X64`.
 
 ## Building
 
