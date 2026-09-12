@@ -15,8 +15,12 @@ use oj_syntax::ast::{
   AsmClass, AsmDeclaration, AsmNode, AsmOperand, AsmOperandKind, AsmRegister, AsmSize,
 };
 
+use oj_types::Cpu;
+
 use super::*;
 use crate::ir::AsmBinding;
+
+mod arm64;
 
 /// A register the block declared, which the allocator here has to place.
 struct Reg {
@@ -98,6 +102,9 @@ struct Resolved {
   written: String,
   scalar_bits: u32,
   vector_bits: u32,
+  /// The width of one lane, where the instruction reads its vector operands as
+  /// lanes (**L§15.9**).
+  lane_bits: u32,
   vex: bool,
   /// The `lock_` the reference writes into the opcode name (**L§15**).
   locked: bool,
@@ -140,6 +147,9 @@ impl At {
 /// The operands of one block, and what each name stands for.
 #[derive(Default)]
 struct Operands {
+  /// The architecture the block is being assembled for, which is what decides
+  /// how a register is named and how a memory operand is written.
+  cpu: Cpu,
   registers: Vec<Reg>,
   slots: Vec<Slot>,
   by_key: HashMap<Key, Place>,
@@ -181,22 +191,11 @@ impl Lowering<'_, '_> {
   /// Lowers one `#asm` block into the text the back end assembles, with the
   /// values its operands carry in and out (**L§15**).
   pub(super) fn asm(&mut self, source: SourceId, node: NodeId) {
-    // `#asm` is an x86-64 feature of the language itself (**L§15**), not a
-    // back-end one: there is nothing to assemble for another architecture, so
-    // a program that reaches one is told which construct stopped it rather
-    // than handed an object full of x86-64 text.
+    // The reference's `#asm` is x86-64 and nothing else (**L§15**). This one
+    // assembles arm64 blocks too, out of a table of its own — an extension
+    // rather than compatibility, specified in `docs/language.md` §15.9. A
+    // mnemonic neither table has is reported the same way on both.
     let target = self.checker.target();
-    if !target.is_x64() {
-      self.error(
-        source,
-        node,
-        format!(
-          "orangejuice has no '#asm' for {}: the language's inline assembly is x86-64.",
-          target.cpu.name()
-        ),
-      );
-      return;
-    }
     let scope = self.checker.scope_for(source, node, self.body_scope);
     let Some(ast) = self.checker.tree_of(source) else {
       return;
@@ -220,7 +219,10 @@ impl Lowering<'_, '_> {
       128
     };
 
-    let mut operands = Operands::default();
+    let mut operands = Operands {
+      cpu: target.cpu,
+      ..Operands::default()
+    };
     let mut resolved: Vec<Resolved> = Vec::new();
     for (index, instruction) in block.instructions.iter().enumerate() {
       let written = instruction
@@ -229,7 +231,7 @@ impl Lowering<'_, '_> {
         .unwrap_or_default();
       let (form, locked) = match instruction.mnemonic {
         None => (&DECLARATION_FORM, false),
-        Some(_) => match form_of(&written) {
+        Some(_) => match form_of(target.cpu, &written) {
           Some(found) => found,
           None => {
             self.error(
@@ -243,8 +245,13 @@ impl Lowering<'_, '_> {
       };
       let tagged = self.asm_size(scope, source, instruction.size);
       let scalar_bits = form.scalar_bits.or(tagged).unwrap_or(64);
-      let vector_bits = match form.class {
-        AsmClass::Vec => tagged.unwrap_or(block_vector_bits),
+      // On AArch64 a tag on a lane-wise instruction says how wide one lane is,
+      // not how wide the register is — a NEON register is 128 bits and the
+      // arrangement says how it is cut up (**L§15.9**).
+      let lane_bits = tagged.unwrap_or(32);
+      let vector_bits = match (target.cpu, form.class) {
+        (Cpu::Arm64, _) => 128,
+        (_, AsmClass::Vec) => tagged.unwrap_or(block_vector_bits),
         _ => block_vector_bits,
       };
 
@@ -285,6 +292,7 @@ impl Lowering<'_, '_> {
           written,
           scalar_bits,
           vector_bits,
+          lane_bits,
           vex,
           locked,
           operands: written_operands,
@@ -386,7 +394,11 @@ impl Lowering<'_, '_> {
         // A register the block uses but keeps nothing in is still one the
         // procedure around it may not have left something live in.
         if let Some(assigned) = register.assigned {
-          clobbers.push(constraint_name(register.class, Some(assigned)));
+          clobbers.push(constraint_name(
+            operands.cpu,
+            register.class,
+            Some(assigned),
+          ));
         }
         continue;
       };
@@ -399,7 +411,10 @@ impl Lowering<'_, '_> {
       });
       let dest = self.value(type_id);
       outputs.push(AsmBinding {
-        constraint: format!("={}", constraint_name(register.class, register.assigned)),
+        constraint: format!(
+          "={}",
+          constraint_name(operands.cpu, register.class, register.assigned)
+        ),
         value: dest,
       });
       stores.push((address, dest, type_id));
@@ -493,8 +508,15 @@ impl Lowering<'_, '_> {
   }
 
   fn constraint_of(&self, slot: &Slot) -> String {
+    let cpu = self.checker.target().cpu;
     match slot.pin {
-      Some(pin) => constraint_name(slot.class, Some(pin)),
+      Some(pin) => constraint_name(cpu, slot.class, Some(pin)),
+      // AArch64 spells its vector file `w`, and has no `rm` a template could
+      // write either way round — everything else there is a register.
+      None if cpu == Cpu::Arm64 => match slot.class {
+        AsmClass::Vec => String::from("w"),
+        _ => String::from("r"),
+      },
       // Anything the block did not pin is the back end's to place; only a
       // memory operand's base has to be a register (**L§15**).
       None if slot.register_only => String::from("r"),
@@ -758,6 +780,17 @@ impl Lowering<'_, '_> {
       oj_types::TypeKind::Float(_) => AsmClass::Vec,
       _ => AsmClass::Gpr,
     };
+    // AArch64 names a floating-point register by the width it is being used
+    // at — `d0` for a `float64` and `s0` for a `float32` — so a variable's
+    // own width is what the template has to ask for, not the register file's.
+    let bits = match (operands.cpu, class, by_reference) {
+      (Cpu::Arm64, AsmClass::Vec, false) => self
+        .checker
+        .layout(value.type_id)
+        .map(|layout| layout.size as u32 * 8)
+        .unwrap_or(64),
+      _ => at.bits_for(class, by_reference),
+    };
     let index = operands.slots.len();
     operands.slots.push(Slot {
       input: Some(input),
@@ -766,7 +799,7 @@ impl Lowering<'_, '_> {
       pin: at.pin,
       class,
       register_only: false,
-      bits: at.bits_for(class, by_reference),
+      bits,
       position: 0,
     });
     operands.by_key.insert(key, Place::Slot(index));
@@ -830,7 +863,7 @@ impl Lowering<'_, '_> {
       AsmRegister::Numbered(index) => Some(index),
       AsmRegister::Named(symbol) => {
         let name = self.text(symbol);
-        match pinned_register(&name) {
+        match pinned_register(self.checker.target().cpu, &name) {
           Some(index) => Some(index),
           None => {
             self.error(
@@ -887,6 +920,7 @@ impl Lowering<'_, '_> {
   /// pinned, the rest by lifetime, sharing a register where two lifetimes do
   /// not overlap. Nothing is spilled — running out is an error (**L§15**).
   fn allocate(&mut self, source: SourceId, node: NodeId, registers: &mut [Reg]) -> bool {
+    let cpu = self.checker.target().cpu;
     let mut held: Vec<(AsmClass, u32, usize, usize)> = Vec::new();
     let mut order: Vec<usize> = (0..registers.len()).collect();
     order.sort_by_key(|index| {
@@ -917,7 +951,7 @@ impl Lowering<'_, '_> {
       let assigned = match pin {
         Some(pin) => pin,
         None => {
-          let free = pool(class).iter().copied().find(|candidate| {
+          let free = pool(cpu, class).iter().copied().find(|candidate| {
             !held.iter().any(|(other, taken, from, to)| {
               *other == class && taken == candidate && *from <= last && first <= *to
             })
@@ -990,22 +1024,70 @@ impl Lowering<'_, '_> {
     for (written, position) in positions.into_iter().enumerate() {
       text.push_str(if written == 0 { " " } else { ", " });
       match &instruction.operands[position] {
-        Operand::Immediate(value) => {
-          let _ = write!(text, "{value}");
-        }
+        Operand::Immediate(value) => match operands.cpu {
+          Cpu::Arm64 => {
+            let _ = write!(text, "#{value}");
+          }
+          Cpu::X64 => {
+            let _ = write!(text, "{value}");
+          }
+        },
         Operand::Register(index) => {
           let register = &operands.registers[*index];
-          let bits = match register.class {
-            AsmClass::Vec => instruction.vector_bits,
-            _ if form.byte_operands.contains(&position) => 8,
-            _ => instruction.scalar_bits,
-          };
-          text.push_str(&register_name(register.class, register.assigned, bits));
+          if operands.cpu == Cpu::Arm64 && register.class == AsmClass::Vec {
+            // A NEON register is named by what the instruction makes of it:
+            // as an arrangement where the operand is lanes, as one lane's
+            // width where the instruction reduces lanes into a scalar
+            // (`addv s0, v1.4s`), and otherwise at the width the block asked
+            // for, which is what a scalar `fadd d0, d1, d2` wants.
+            let name = if form.lanes.contains(&position) {
+              arm64::lane_name(
+                register.assigned,
+                instruction.lane_bits,
+                instruction.vector_bits,
+              )
+            } else if form.lanes.is_empty() {
+              register_name(
+                operands.cpu,
+                register.class,
+                register.assigned,
+                instruction.scalar_bits,
+              )
+            } else {
+              register_name(
+                operands.cpu,
+                register.class,
+                register.assigned,
+                instruction.lane_bits,
+              )
+            };
+            text.push_str(&name);
+          } else {
+            let bits = match register.class {
+              AsmClass::Vec => instruction.vector_bits,
+              _ if form.byte_operands.contains(&position) => 8,
+              _ => instruction.scalar_bits,
+            };
+            text.push_str(&register_name(
+              operands.cpu,
+              register.class,
+              register.assigned,
+              bits,
+            ));
+          }
         }
         Operand::Slot(index) => {
-          let used = match form.byte_operands.contains(&position) {
-            true => 8,
-            false => instruction.bits_for(operands.slots[*index].class),
+          let slot = &operands.slots[*index];
+          let used = match (
+            form.byte_operands.contains(&position),
+            operands.cpu,
+            slot.class,
+          ) {
+            (true, _, _) => 8,
+            // A scalar floating-point instruction uses the variable at its own
+            // width; only a lane-wise one reads the whole register.
+            (_, Cpu::Arm64, AsmClass::Vec) if !form.lanes.contains(&position) => slot.bits,
+            _ => instruction.bits_for(slot.class),
           };
           text.push_str(&slot_name(operands, *index, used));
         }
@@ -1016,7 +1098,7 @@ impl Lowering<'_, '_> {
           displacement,
           broadcast,
         } => {
-          if !form.bare_memory {
+          if !form.bare_memory && operands.cpu != Cpu::Arm64 {
             // A broadcast reads one lane, so what it names is that wide.
             let bits = match broadcast {
               true => form.element_bits,
@@ -1029,21 +1111,34 @@ impl Lowering<'_, '_> {
           }
           text.push('[');
           text.push_str(&place_name(operands, *base, 64, instruction));
-          if let Some(index) = index {
-            let _ = write!(
-              text,
-              " + {}*{scale}",
-              place_name(operands, *index, 64, instruction)
-            );
-          }
-          match displacement.cmp(&0) {
-            std::cmp::Ordering::Greater => {
-              let _ = write!(text, " + {displacement}");
+          if operands.cpu == Cpu::Arm64 {
+            // AArch64 writes an addend rather than a sum, scales by a shift
+            // rather than a factor, and takes at most one of the two.
+            if let Some(index) = index {
+              let _ = write!(text, ", {}", place_name(operands, *index, 64, instruction));
+              if let Some(shift) = arm64::scale_shift(*scale) {
+                let _ = write!(text, ", lsl #{shift}");
+              }
+            } else if *displacement != 0 {
+              let _ = write!(text, ", #{displacement}");
             }
-            std::cmp::Ordering::Less => {
-              let _ = write!(text, " - {}", -displacement);
+          } else {
+            if let Some(index) = index {
+              let _ = write!(
+                text,
+                " + {}*{scale}",
+                place_name(operands, *index, 64, instruction)
+              );
             }
-            std::cmp::Ordering::Equal => {}
+            match displacement.cmp(&0) {
+              std::cmp::Ordering::Greater => {
+                let _ = write!(text, " + {displacement}");
+              }
+              std::cmp::Ordering::Less => {
+                let _ = write!(text, " - {}", -displacement);
+              }
+              std::cmp::Ordering::Equal => {}
+            }
           }
           text.push(']');
           if *broadcast {
@@ -1058,7 +1153,7 @@ impl Lowering<'_, '_> {
           let _ = write!(
             text,
             " {{{}}}",
-            register_name(register.class, register.assigned, 0)
+            register_name(operands.cpu, register.class, register.assigned, 0)
           );
           if zeroing {
             text.push_str(" {z}");
@@ -1082,6 +1177,9 @@ impl Lowering<'_, '_> {
     // its own, after the ones it works on (**L§15**).
     if let Some(rounding) = rounding {
       let _ = write!(text, ", {rounding}");
+    }
+    if !form.suffix.is_empty() {
+      let _ = write!(text, ", {}", form.suffix);
     }
     Some(text)
   }
@@ -1195,7 +1293,7 @@ fn place_name(operands: &Operands, place: Place, bits: u32, instruction: &Resolv
         AsmClass::Vec => instruction.vector_bits,
         _ => bits,
       };
-      register_name(register.class, register.assigned, bits)
+      register_name(operands.cpu, register.class, register.assigned, bits)
     }
     // A base and an index are addresses, whatever width the instruction
     // works at.
@@ -1207,14 +1305,30 @@ fn place_name(operands: &Operands, place: Place, bits: u32, instruction: &Resolv
 /// it this instruction means when the block uses it at more than one width.
 fn slot_name(operands: &Operands, index: usize, used: u32) -> String {
   let slot = &operands.slots[index];
-  if used == slot.bits {
+  // AArch64 always spells the width: a register's name *is* the width it is
+  // being used at, and LLVM's default for a constraint is the whole register.
+  let spell = operands.cpu == Cpu::Arm64;
+  if used == slot.bits && !spell {
     return format!("${}", slot.position);
   }
-  let modifier = match used {
-    8 => "b",
-    16 => "w",
-    32 => "k",
-    _ => "q",
+  // Which width of the register the template asks for. The letters are the
+  // architecture's own: x86 counts them off by size, AArch64 names the file.
+  let modifier = match operands.cpu {
+    Cpu::Arm64 => match (slot.class, used) {
+      (AsmClass::Vec, 8) => "b",
+      (AsmClass::Vec, 16) => "h",
+      (AsmClass::Vec, 32) => "s",
+      (AsmClass::Vec, 64) => "d",
+      (AsmClass::Vec, _) => "q",
+      (_, 0..=32) => "w",
+      _ => "x",
+    },
+    Cpu::X64 => match used {
+      8 => "b",
+      16 => "w",
+      32 => "k",
+      _ => "q",
+    },
   };
   format!("${{{}:{modifier}}}", slot.position)
 }
@@ -1269,7 +1383,10 @@ const VEC_POOL: [u32; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 1
 /// `k0` cannot be a write mask, so the allocator does not hand it out.
 const OMR_POOL: [u32; 7] = [1, 2, 3, 4, 5, 6, 7];
 
-fn pool(class: AsmClass) -> &'static [u32] {
+fn pool(cpu: Cpu, class: AsmClass) -> &'static [u32] {
+  if cpu == Cpu::Arm64 {
+    return arm64::pool(class);
+  }
   match class {
     AsmClass::Vec => &VEC_POOL,
     AsmClass::Omr => &OMR_POOL,
@@ -1277,7 +1394,10 @@ fn pool(class: AsmClass) -> &'static [u32] {
   }
 }
 
-fn constraint_name(class: AsmClass, index: Option<u32>) -> String {
+fn constraint_name(cpu: Cpu, class: AsmClass, index: Option<u32>) -> String {
+  if cpu == Cpu::Arm64 {
+    return arm64::constraint_name(class, index);
+  }
   let index = index.unwrap_or(0);
   match class {
     AsmClass::Vec => format!("{{xmm{index}}}"),
@@ -1286,7 +1406,10 @@ fn constraint_name(class: AsmClass, index: Option<u32>) -> String {
   }
 }
 
-fn register_name(class: AsmClass, index: Option<u32>, bits: u32) -> String {
+fn register_name(cpu: Cpu, class: AsmClass, index: Option<u32>, bits: u32) -> String {
+  if cpu == Cpu::Arm64 {
+    return arm64::register_name(class, index, bits);
+  }
   let index = index.unwrap_or(0);
   match class {
     AsmClass::Vec => match bits {
@@ -1309,7 +1432,10 @@ fn register_name(class: AsmClass, index: Option<u32>, bits: u32) -> String {
 
 /// `a b c d si di sp bp` name the first eight general-purpose registers in the
 /// order the encoding gives them (**L§15**).
-fn pinned_register(name: &str) -> Option<u32> {
+fn pinned_register(cpu: Cpu, name: &str) -> Option<u32> {
+  if cpu == Cpu::Arm64 {
+    return arm64::pinned_register(name);
+  }
   Some(match name {
     "a" => 0,
     "c" => 1,
@@ -1365,6 +1491,15 @@ struct Form {
   /// instruction works at: the shift count of a `shl`, `sar`, `shld` or
   /// `shrd` is `cl` and nothing else (**L§15**).
   byte_operands: &'static [usize],
+  /// Text the instruction ends with, after its operands. AArch64 writes a
+  /// condition there — `cset w0, eq` — and a condition is not an operand a
+  /// program could name (**L§15.9**).
+  suffix: &'static str,
+  /// The operands the instruction reads as lanes rather than as whole
+  /// registers, which is how AArch64 writes NEON: `add v0.4s, v1.4s, v2.4s`
+  /// against `fadd s0, s1, s2`. It is per operand because an instruction may
+  /// mix the two — `addv s0, v1.4s` reduces lanes into a scalar (**L§15.9**).
+  lanes: &'static [usize],
 }
 
 enum Ops {
@@ -1387,6 +1522,8 @@ const fn form(text: &'static str, operands: Ops, class: AsmClass) -> Form {
     vex: false,
     bare_memory: false,
     byte_operands: &[],
+    lanes: &[],
+    suffix: "",
   }
 }
 
@@ -1633,7 +1770,10 @@ static FORMS: &[(&str, Form)] = &[
 
 /// The form a mnemonic names, and whether it carries the `lock` prefix the
 /// reference writes into the opcode name (**L§15**).
-fn form_of(written: &str) -> Option<(&'static Form, bool)> {
+fn form_of(cpu: Cpu, written: &str) -> Option<(&'static Form, bool)> {
+  if cpu == Cpu::Arm64 {
+    return arm64::form_of(written);
+  }
   let (locked, name) = match written.strip_prefix("lock_") {
     Some(rest) => (true, rest),
     None => (false, written),

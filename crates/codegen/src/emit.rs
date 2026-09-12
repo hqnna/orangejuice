@@ -1114,11 +1114,17 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
         for register in clobbers {
           constraints.push(format!("~{register}"));
         }
-        // Every `#asm` block may set the flags and touch memory, and the
-        // reference's own blocks do both.
-        constraints.push(String::from("~{dirflag}"));
-        constraints.push(String::from("~{fpsr}"));
-        constraints.push(String::from("~{flags}"));
+        // Every `#asm` block may set the condition flags and touch memory, and
+        // the reference's own blocks do both. What the flags are called is the
+        // architecture's: x86 has three such registers and AArch64 one.
+        match self.target().is_aarch64() {
+          true => constraints.push(String::from("~{cc}")),
+          false => {
+            constraints.push(String::from("~{dirflag}"));
+            constraints.push(String::from("~{fpsr}"));
+            constraints.push(String::from("~{flags}"));
+          }
+        }
         constraints.push(String::from("~{memory}"));
         let assembly = self.context.create_inline_asm(
           signature,
@@ -1126,7 +1132,12 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
           constraints.join(","),
           true,
           false,
-          Some(inkwell::InlineAsmDialect::Intel),
+          // Intel syntax is x86's; AArch64 has one dialect and LLVM calls it
+          // AT&T.
+          Some(match self.target().is_aarch64() {
+            true => inkwell::InlineAsmDialect::ATT,
+            false => inkwell::InlineAsmDialect::Intel,
+          }),
           false,
         );
         let arguments: Vec<BasicMetadataValueEnum<'ctx>> = inputs

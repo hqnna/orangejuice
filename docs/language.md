@@ -1504,7 +1504,7 @@ Rules:
 
 ## 15. Inline assembly (`#asm`)
 
-`#asm { instr operands; ... }` embeds x86-64 assembly (an error when compiling for a non-x64 target, raised after the metaprogram has seen it so it can be replaced). Grammar summary (Intel/AMD mnemonics without the `v` prefix; VEX/EVEX encoding chosen by the block's feature set):
+`#asm { instr operands; ... }` embeds x86-64 assembly. The reference compiler has no other kind; orangejuice also assembles arm64 blocks, which is an extension and is specified in §15.9 rather than here. Grammar summary (Intel/AMD mnemonics without the `v` prefix; VEX/EVEX encoding chosen by the block's feature set):
 
 ```
 #asm { mov apple:, 10; }                       // `name:` declares a register operand with inferred class
@@ -1527,6 +1527,27 @@ if cond #asm { ... }
 ```
 
 Semantics: no automatic spilling (too many live registers is an error); lifetime-based allocation; the stack pointer may not be manipulated manually; `#asm` blocks work at compile time (assembled to machine code); the LLVM backend respects flag-modifying instructions; procedures containing `#asm` are not inlined; `#asm` operands are opaque to metaprograms (`Code_Asm`). Old letter size suffixes (`.b .w .d .q .x .y .z`) are still accepted. Manual `syscall`s are how Runtime_Support performs `write`, futex and `exit_group` on Linux.
+
+### 15.9 arm64 blocks (an orangejuice extension)
+
+**The reference compiler's `#asm` is x86-64 and nothing else.** A block written for one architecture does not mean anything on the other, and nothing here is compatibility: an arm64 block is orangejuice's own, and a program that wants both writes `#if CPU == .X64`. What is shared is everything that is not the instruction set — a block declares its registers into the scope around it, they are placed by the same lifetime-based allocator with no spilling, a register declared in one block is visible in the next, and a variable of the program stays the back end's to place.
+
+What differs is the shape of an instruction. x86-64 is two-operand and destructive, where `add a, b` means `a += b`; AArch64 is three-operand, where `add d, n, m` means `d = n + m`:
+
+```
+#asm { mov a:, 17; sub a, a, 5; add total, total, a; }   // `total` is a variable of the program
+#asm { ldr x, [base]; ldr y, [base + 8]; ldr z, [base + index*8]; }   // `[base, #8]` and `[base, index, lsl #3]`
+#asm { adds sum, a, b; cset_cs carry; }                  // a condition is written into the mnemonic
+#asm { fadd z, x, y; scvtf f, n; fcvtzs back, f; }       // scalar floating point, and across the register files
+#asm { vdup.32 v: vec, seed; vadd.32 v, v, v; vaddv.32 s: vec, v; fmov out, s; }   // NEON lanes
+#asm { t: gpr === x9; u: vec === v3; }                   // pinned by the register's own name
+```
+
+- **Registers.** A general-purpose register is written `w<n>` at 32 bits and below and `x<n>` above, and the block never has to say which: the width comes from the operand's type or the instruction's size tag. The allocator hands out `x0`–`x15` less `x8`, and `v0`–`v7` and `v16`–`v31`; `x16`/`x17` are the linker's veneer scratch, `x18` is reserved on Darwin, and `x29`/`x30` and the stack pointer belong to the procedure around the block.
+- **Size tags** mean what they do on x86-64 for a general-purpose instruction. On a NEON instruction a tag is the *lane* width — `vadd.32` is `add v0.4s, v1.4s, v2.4s` — because a NEON register is 128 bits and the arrangement says how it is cut up.
+- **Conditions** are spelled into the mnemonic, since a condition is not a name a program could have declared: `cset_eq`, `csel_lt`, and the rest of `eq ne lt le gt ge lo ls hi hs cs cc mi pl`.
+- **NEON mnemonics that collide with a scalar one take a `v`** in the Jai spelling and reach the assembler as themselves: `vadd` is written and `add` is emitted, with vector registers.
+- **Not expressible**, and reported rather than guessed at: `ld1`/`st1`, whose register list is written in braces; anything the table does not carry. `ldr q0, [x]` loads 128 bits and is an ordinary form.
 
 ---
 

@@ -102,6 +102,58 @@ fn assert_output(body: &str, expected: &str) {
   assert_eq!(built.output, expected);
 }
 
+/// The other side of `skip_without_asm`: an arm64 `#asm` block is arm64's own
+/// (**L§15.9**), so the programs below only mean anything there.
+fn skip_without_arm64_asm() -> bool {
+  if oj_types::Target::HOST.is_aarch64() {
+    return false;
+  }
+  eprintln!("skipping: these blocks are arm64's and this machine is not");
+  true
+}
+
+#[test]
+fn an_arm64_asm_block_computes_with_the_registers_it_names() {
+  if skip_without_arm64_asm() {
+    return;
+  }
+  // Three-operand and non-destructive, which is the whole difference from the
+  // x86-64 blocks above: `sub a, a, 5` leaves `a` holding `a - 5`.
+  assert_output(
+    "main :: () {\n       total := 10;\n       #asm {\n           mov a:, 17;\n           sub a, a, 5;\n           add total, total, a;\n       }\n       put_number(total);\n     }\n",
+    "22\n",
+  );
+}
+
+#[test]
+fn an_arm64_asm_block_reaches_memory_and_outlives_its_block() {
+  if skip_without_arm64_asm() {
+    return;
+  }
+  // A base, a base with a displacement, and a base with a scaled index —
+  // AArch64 writes the scale as a shift, which is why only a power of two is
+  // an addressing mode at all. Then a register declared in one block read by
+  // the next, the way the x86-64 side does it.
+  assert_output(
+    "main :: () {\n       values: [4] s64;\n       for i: 0..3  values[i] = (i + 1) * 10;\n       base := values.data;\n       index := 2;\n       total: s64 = ---;\n       #asm {\n           ldr total, [base];\n           t: gpr;\n           ldr t, [base + 8];\n           add total, total, t;\n           ldr t, [base + index*8];\n           add total, total, t;\n       }\n       put_number(total);\n       #asm { mov k:, 12; }\n       #asm { mov j:, 18; add k, k, j; }\n       out: s64 = ---;\n       #asm { mov out, k; }\n       put_number(out);\n     }\n",
+    "60\n30\n",
+  );
+}
+
+#[test]
+fn an_arm64_asm_block_computes_with_floats_and_lanes() {
+  if skip_without_arm64_asm() {
+    return;
+  }
+  // A scalar float names its register by width — `d0` for a `float64` — and a
+  // NEON instruction names an arrangement, `v0.4s`. `addv` reduces lanes into
+  // a scalar, so its destination is one lane wide where its source is four.
+  assert_output(
+    "Basic :: #import \"Basic\";\n     main :: () {\n       x: float64 = 1.5;\n       y: float64 = 2.25;\n       z: float64 = ---;\n       #asm { fadd z, x, y; }\n       Basic.print(\"%\\n\", z);\n       n: s64 = 7;\n       f: float64 = ---;\n       #asm { scvtf f, n; }\n       back: s64 = ---;\n       #asm { fcvtzs back, f; }\n       put_number(back);\n       seed: s32 = 5;\n       lanes: s32 = ---;\n       #asm {\n           vdup.32 v: vec, seed;\n           vadd.32 v, v, v;\n           vaddv.32 s: vec, v;\n           fmov lanes, s;\n       }\n       put_number(lanes);\n     }\n",
+    "3.75\n7\n40\n",
+  );
+}
+
 /// Whether the language has an `#asm` for the machine these tests run on.
 /// Inline assembly is x86-64's (**L§15**), so on another target a program that
 /// writes one is a diagnostic rather than something to run — which is what
@@ -347,14 +399,12 @@ fn a_program_the_back_end_cannot_build_names_what_stopped_it() {
   );
   assert!(report.failed);
   let text = report.diagnostics.join("");
-  // On a target the language has no `#asm` for it is the block that is named,
-  // and on x86-64 it is the mnemonic inside it. Either way what stopped the
-  // build is in the message (**L§15**).
-  let expected = match oj_types::Target::HOST.is_x64() {
-    true => "no encoding for the '#asm' instruction 'frobnicate'",
-    false => "no '#asm' for arm64",
-  };
-  assert!(text.contains(expected), "{text}");
+  // Each architecture has a table of its own and `frobnicate` is in neither,
+  // so the message names the mnemonic whichever this is (**L§15.9**).
+  assert!(
+    text.contains("no encoding for the '#asm' instruction 'frobnicate'"),
+    "{text}"
+  );
 }
 
 #[test]

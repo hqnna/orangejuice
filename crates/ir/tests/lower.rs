@@ -211,17 +211,28 @@ fn a_construct_the_back_end_cannot_build_names_the_construct() {
 }
 
 #[test]
-fn an_asm_block_is_an_error_on_a_target_the_language_has_no_asm_for() {
-  // `#asm` is x86-64 (**L§15**), so a program compiled for arm64 is told which
-  // construct stopped it rather than handed x86-64 text to assemble.
+fn an_asm_mnemonic_is_read_out_of_the_table_for_the_target() {
+  // Each architecture has its own table (**L§15.9**), and a mnemonic is looked
+  // up in the one the compilation is for. `int3` is x86-64's breakpoint and
+  // `brk` is arm64's, and neither is the other's.
   for target in [oj_types::Target::MACOS_ARM64, oj_types::Target::LINUX_ARM64] {
     let lowered = lower_for("main :: () { #asm { int3; } }\n", target);
     assert_eq!(
       lowered.errors,
-      ["orangejuice has no '#asm' for arm64: the language's inline assembly is x86-64."],
+      ["orangejuice has no encoding for the '#asm' instruction 'int3'."],
       "{target}"
     );
+    let lowered = lower_for("main :: () { #asm { brk 0; } }\n", target);
+    assert!(lowered.errors.is_empty(), "{target}: {:?}", lowered.errors);
   }
+  let lowered = lower_for(
+    "main :: () { #asm { brk 0; } }\n",
+    oj_types::Target::LINUX_X64,
+  );
+  assert_eq!(
+    lowered.errors,
+    ["orangejuice has no encoding for the '#asm' instruction 'brk'."]
+  );
 }
 
 #[test]

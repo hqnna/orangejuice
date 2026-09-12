@@ -19,8 +19,9 @@ pub enum Os {
 }
 
 /// The processor half of a target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Cpu {
+  #[default]
   X64,
   Arm64,
 }
