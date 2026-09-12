@@ -19,7 +19,11 @@
 
 #scope_module
 
-Linux :: #import "Linux";
+#if OS == .MACOS {
+    Libc :: #import "MacOS";
+} else {
+    Libc :: #import "Linux";
+}
 
 #scope_export
 
@@ -160,7 +164,7 @@ werr :: (s: string) #no_context {
     if !s.count  return;
     written := 0;
     while written < s.count {
-        n := Linux.write(STDERR, s.data + written, cast(u64) (s.count - written));
+        n := Libc.write(STDERR, s.data + written, cast(u64) (s.count - written));
         if n <= 0  break;
         written += n;
     }

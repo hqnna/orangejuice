@@ -1,16 +1,17 @@
 //
-// The part of libc orangejuice's own modules actually call.
+// The part of libSystem orangejuice's own modules actually call.
 //
-// The reference distribution vendors a generated binding of the whole POSIX
-// surface — twenty-five thousand lines of it. Nothing here needs that: the
-// standard library wants to allocate, write bytes to a file descriptor, ask
-// the clock what time it is and stop the process. Those are declared by hand,
-// against the C library's own documented signatures.
+// The sibling of `Linux`, for the other Unix orangejuice targets: the same
+// surface, declared against the same documented C signatures, with the values
+// Darwin gives the constants that are not the same on both. The standard
+// library wants to allocate, write bytes to a file descriptor, map pages and
+// stop the process, and that is all this is.
+//
+// macOS has no `libc` of its own to link: every one of these lives in
+// `libSystem`, which is what `-lc` resolves to there.
 //
 
 #scope_export
-
-#load "generated.jai";
 
 // ------------------------------------------------------------- allocation ---
 
@@ -19,8 +20,9 @@ calloc  :: (count: u64, size: u64) -> *void #foreign libc;
 realloc :: (memory: *void, size: u64) -> *void #foreign libc;
 free    :: (memory: *void) #foreign libc;
 
-// glibc's aligned allocation. `alignment` must be a power of two and a
-// multiple of the pointer size; `size` must be a multiple of `alignment`.
+// C11 aligned allocation, which Darwin has had since macOS 10.15.
+// `alignment` must be a power of two and a multiple of the pointer size;
+// `size` must be a multiple of `alignment`.
 aligned_alloc :: (alignment: u64, size: u64) -> *void #foreign libc;
 
 // ---------------------------------------------------------------- output ---
@@ -46,20 +48,20 @@ raise :: (signal: s32) -> s32 #foreign libc;
 
 // ------------------------------------------------------------------ time ---
 
-
 timespec :: struct {
     tv_sec:  s64;
     tv_nsec: s64;
 }
-
 
 // ---------------------------------------------------------------- memory ---
 
 PROT_READ  :: 0x1;
 PROT_WRITE :: 0x2;
 
-MAP_PRIVATE   :: 0x02;
-MAP_ANONYMOUS :: 0x20;
+MAP_PRIVATE :: 0x0002;
+
+// Darwin's `MAP_ANON`, which is not the number Linux gives `MAP_ANONYMOUS`.
+MAP_ANONYMOUS :: 0x1000;
 
 mmap   :: (address: *void, length: u64, protection: s32, flags: s32, fd: s32, offset: s64) -> *void #foreign libc;
 munmap :: (address: *void, length: u64) -> s32 #foreign libc;

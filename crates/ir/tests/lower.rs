@@ -16,13 +16,20 @@ struct Lowered {
 }
 
 fn lower(source: &str) -> Lowered {
+  lower_for(source, oj_types::Target::HOST)
+}
+
+/// Lowers as if the compilation had been asked for that target, which is what
+/// says whether a construct the language only has on one of them is an error
+/// here (**L§15**).
+fn lower_for(source: &str, target: oj_types::Target) -> Lowered {
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("input.jai");
   std::fs::write(&path, source).expect("the input should be writable");
-  lower_file(&path)
+  lower_file_for(&path, target)
 }
 
-fn lower_file(path: &Path) -> Lowered {
+fn lower_file_for(path: &Path, target: oj_types::Target) -> Lowered {
   let sources = SourceMap::new();
   let interner = Interner::new();
   let options = oj_scope::Options {
@@ -31,6 +38,7 @@ fn lower_file(path: &Path) -> Lowered {
   };
   let program = oj_scope::Program::build(&sources, &interner, path, options);
   let mut checker = oj_sema::Checker::new(&program);
+  checker.set_target(target);
   checker.check();
   let lowered = oj_ir::lower(&mut checker);
   Lowered {
@@ -190,11 +198,28 @@ fn a_range_loop_counts_it_and_it_index() {
 
 #[test]
 fn a_construct_the_back_end_cannot_build_names_the_construct() {
-  let lowered = lower("main :: () { #asm { frobnicate a:, 1; } }\n");
+  let lowered = lower_for(
+    "main :: () { #asm { frobnicate a:, 1; } }\n",
+    oj_types::Target::LINUX_X64,
+  );
   assert_eq!(
     lowered.errors,
     ["orangejuice has no encoding for the '#asm' instruction 'frobnicate'."]
   );
+}
+
+#[test]
+fn an_asm_block_is_an_error_on_a_target_the_language_has_no_asm_for() {
+  // `#asm` is x86-64 (**L§15**), so a program compiled for arm64 is told which
+  // construct stopped it rather than handed x86-64 text to assemble.
+  for target in [oj_types::Target::MACOS_ARM64, oj_types::Target::LINUX_ARM64] {
+    let lowered = lower_for("main :: () { #asm { int3; } }\n", target);
+    assert_eq!(
+      lowered.errors,
+      ["orangejuice has no '#asm' for arm64: the language's inline assembly is x86-64."],
+      "{target}"
+    );
+  }
 }
 
 #[test]

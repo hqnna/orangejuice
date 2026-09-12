@@ -20,7 +20,11 @@
 
 #scope_module
 
-Linux :: #import "Linux";
+#if OS == .MACOS {
+    Libc :: #import "MacOS";
+} else {
+    Libc :: #import "Linux";
+}
 
 // `timespec`, `tm` and the clock and calendar calls Apollo_Time is built on.
 #import "POSIX";
@@ -592,7 +596,7 @@ assert :: (condition: bool, format := "", args: ..Any, loc := #caller_location) 
 // ------------------------------------------------------------- the process ---
 
 exit :: (status: s32) {
-    Linux.exit(status);
+    Libc.exit(status);
 }
 
 // Frees every overflow page above `page`, leaving `page` itself in place.

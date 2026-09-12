@@ -157,6 +157,12 @@ impl Target {
     }
   }
 
+  /// Whether the target is x86-64, which is the one architecture the language
+  /// has an `#asm` for (**L§15**).
+  pub fn is_x64(self) -> bool {
+    self.cpu == Cpu::X64
+  }
+
   /// Whether the `#c_call` convention is AAPCS64 rather than System V, which
   /// is also what says an aggregate is coerced whole rather than split into
   /// eightbytes (**L§7.11**).

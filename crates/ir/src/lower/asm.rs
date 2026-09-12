@@ -181,6 +181,22 @@ impl Lowering<'_, '_> {
   /// Lowers one `#asm` block into the text the back end assembles, with the
   /// values its operands carry in and out (**L§15**).
   pub(super) fn asm(&mut self, source: SourceId, node: NodeId) {
+    // `#asm` is an x86-64 feature of the language itself (**L§15**), not a
+    // back-end one: there is nothing to assemble for another architecture, so
+    // a program that reaches one is told which construct stopped it rather
+    // than handed an object full of x86-64 text.
+    let target = self.checker.target();
+    if !target.is_x64() {
+      self.error(
+        source,
+        node,
+        format!(
+          "orangejuice has no '#asm' for {}: the language's inline assembly is x86-64.",
+          target.cpu.name()
+        ),
+      );
+      return;
+    }
     let scope = self.checker.scope_for(source, node, self.body_scope);
     let Some(ast) = self.checker.tree_of(source) else {
       return;

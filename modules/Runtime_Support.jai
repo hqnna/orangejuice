@@ -13,7 +13,14 @@
 
 #scope_module
 
-Linux :: #import "Linux";
+// The thin libc surface the module calls into, which is the one for the
+// operating system being compiled for (`docs/spec.md` §2.1). Both modules
+// export the same names, so nothing below has to know which it got.
+#if OS == .MACOS {
+    Libc :: #import "MacOS";
+} else {
+    Libc :: #import "Linux";
+}
 
 #scope_export
 
@@ -99,10 +106,10 @@ write_strings :: (strings: ..string, to_standard_error := false) #no_context #co
 write_string_unsynchronized :: (s: string, to_standard_error := false) #no_context {
     if !s.count  return;
 
-    fd: s32 = ifx to_standard_error then cast(s32) Linux.STDERR_FILENO else cast(s32) Linux.STDOUT_FILENO;
+    fd: s32 = ifx to_standard_error then cast(s32) Libc.STDERR_FILENO else cast(s32) Libc.STDOUT_FILENO;
     written := 0;
     while written < s.count {
-        n := Linux.write(fd, s.data + written, cast(u64) (s.count - written));
+        n := Libc.write(fd, s.data + written, cast(u64) (s.count - written));
         if n <= 0  break;
         written += n;
     }
@@ -231,7 +238,7 @@ __element_duplicate :: (start: *u8, num_elements: s64, size: s64) #c_call #no_ao
 
 runtime_support_die :: () #no_context {
     __runtime_support_disable_stack_trace = true;
-    Linux.exit(1);
+    Libc.exit(1);
 }
 
 // The bounds a cast's target type admits, decoded from the flag word the
@@ -305,17 +312,17 @@ runtime_support_default_allocator_proc :: (mode: Allocator_Mode, requested_size:
     if #complete mode == {
         case .ALLOCATE;
             if requested_size <= 0  return null;
-            return Linux.malloc(cast(u64) requested_size);
+            return Libc.malloc(cast(u64) requested_size);
 
         case .RESIZE;
             if requested_size <= 0 {
-                Linux.free(old_memory);
+                Libc.free(old_memory);
                 return null;
             }
-            return Linux.realloc(old_memory, cast(u64) requested_size);
+            return Libc.realloc(old_memory, cast(u64) requested_size);
 
         case .FREE;
-            Linux.free(old_memory);
+            Libc.free(old_memory);
             return null;
 
         case .CAPS;
@@ -342,8 +349,16 @@ compile_time_debug_break :: () #compiler #no_context;
 // Stops in a debugger. `int3` is the breakpoint instruction on x86-64; a
 // program running without a debugger attached takes SIGTRAP and dies, which is
 // what asking to break means.
+//
+// The language's `#asm` is x86-64 (**L§15**), so on another architecture the
+// signal the instruction would have raised is raised directly, which is the
+// same thing to the debugger and the same thing to a program without one.
 debug_break :: () #no_context {
-    #asm { int3; }
+    #if CPU == .X64 {
+        #asm { int3; }
+    } else {
+        Libc.raise(Libc.SIGTRAP);
+    }
 }
 
 // --------------------------------------------------------- starting up ---
