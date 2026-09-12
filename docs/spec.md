@@ -235,6 +235,39 @@ Error/warning/info with spans, source excerpts with multi-line highlighting, ANS
 - `nix/package.nix`: crane `buildPackage` with `src` = the cargo sources plus `rustfmt.toml`/`clippy.toml` (the fmt and clippy checks need the style rules, which `cleanCargoSource` filters out) and `modules/`/`docs/examples/` (nothing compiles without a Preload), and a `postInstall` that copies `modules/` next to the binary so an installed `oj` finds its own distribution, `buildInputs` LLVM + zlib + libffi + ncurses + libxml2, `nativeBuildInputs` pkg-config, `cargoArtifacts` from `buildDepsOnly`, `doCheck = true`, `meta.license = mit`, `meta.mainProgram = "oj"`.
 - Developer loop: `nix develop` → `cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (also exposed as `scripts/check.sh` and as `nix flake check`). `cargo test` includes integration tests that build and run real programs; those need a C driver on `PATH` to link with, and skip with a clear message when there is none.
 
+### 7.1 Where a build's time goes
+
+`tools/bench/generate.sh <dir>` writes three programs — `wide` (many small
+declarations), `deep` (the same reached through polymorphic containers) and
+`modules` (every module the distribution ships, imported at once) — and
+`tools/bench/run.sh <dir>` times a build of each, best of four. They are
+generated rather than checked in because what they measure is *scale*, and a
+file that large is not worth reading.
+
+Measured on a 32-core machine, debug build, warm page cache:
+
+| program | lines | through the metaprogram | `-- no_metaprogram` |
+|---|---|---|---|
+| `wide` (1200 structs, 4800 procedures) | 6006 | 885ms | 638ms |
+| `deep` (300 `Table` instantiations) | 2708 | 362ms | 209ms |
+| `modules` (every module) | 52 | 348ms | 168ms |
+
+`wide` by stage: lex+parse+scope 31ms, typecheck and `#run` 86ms, lower to IR
+160ms, LLVM and object 313ms, link 65ms. The shape to keep in mind is that
+**the front end is serial and LLVM is not**: those 313ms are 28 codegen units
+on 28 threads, so LLVM is around 45% of the wall clock and most of the machine.
+One unit takes 1317ms for the same program, which is what the split buys.
+
+Two consequences worth knowing before optimizing anything here. Compiling
+`Default_Metaprogram` costs about 200ms on every build, whatever the program —
+that is the gap between the two columns, and it is the whole cost of a small
+build. And no single front-end function is worth surgery: a callgrind profile
+of the front end alone puts `ScopeTree::lookup` at 9.8% and
+`Program::is_uninstantiated` at 5.8%, but the walk each does is a handful of
+instructions and memoizing the second one measured *slower* than repeating it.
+What is expensive is the *number* of lookups, which is a caching question with
+`#insert` semantics attached (§10) rather than a hot loop to tighten.
+
 ## 8. Testing strategy
 
 1. **Unit tests** in every crate (lexer token tables, number parsing edge cases from **L§2.6**, here-strings, backslash identifiers; parser precedence/`<<` ambiguity/all statement forms; layout computations against sizes recorded from the reference compiler; Match rules; constant folding; overload scoring; polymorph solving cases; IR passes; ABI classification; link-line construction).

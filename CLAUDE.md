@@ -82,6 +82,8 @@ cargo check && cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
 
 Running one test: `cargo test -p oj-<crate> <test_name>`, or `cargo test -p oj-lexer -- --nocapture` for a single crate. Snapshot tests use `insta` (`cargo insta review` to accept changes).
 
+Timing a build: `tools/bench/generate.sh <dir>` writes three programs at scale and `tools/bench/run.sh <dir>` times them, best of four; `docs/spec.md` §7.1 records what the numbers were and where the time goes. LLVM is about 45% of the wall clock and runs on every core; the front end is serial.
+
 Nix files are exactly three and no more: `flake.nix`, `nix/shell.nix` and `nix/package.nix`. There is no Nix formatter.
 
 ## CLI surface
