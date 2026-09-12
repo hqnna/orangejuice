@@ -47,6 +47,11 @@ impl TypeId {
 /// id per declaration (**L§3.13**).
 #[derive(Clone, Debug)]
 pub struct Types {
+  /// What this table's types are laid out and classified for
+  /// (`docs/spec.md` §2.1). It is the table that carries it because every
+  /// question a target changes the answer to — the `#c_call` classification of
+  /// **L§7.11** above all — is already asked of the types.
+  target: crate::Target,
   kinds: Vec<TypeKind>,
   interned: HashMap<TypeKind, TypeId>,
   structs: Vec<StructInfo>,
@@ -64,6 +69,7 @@ impl Default for Types {
 impl Types {
   pub fn new() -> Self {
     let mut types = Self {
+      target: crate::Target::HOST,
       kinds: Vec::new(),
       interned: HashMap::default(),
       structs: Vec::new(),
@@ -167,6 +173,16 @@ impl Types {
 
   /// Declares a struct or union. The definition starts out incomplete: sema
   /// fills its members in and calls [`Types::finish_struct`].
+  /// What this table lays out for. Set before anything is typed, since a
+  /// classification already made is not revisited.
+  pub fn set_target(&mut self, target: crate::Target) {
+    self.target = target;
+  }
+
+  pub fn target(&self) -> crate::Target {
+    self.target
+  }
+
   pub fn new_struct(&mut self, info: StructInfo) -> (StructId, TypeId) {
     let id = StructId(self.structs.len() as u32);
     self.structs.push(info);

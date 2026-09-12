@@ -346,6 +346,10 @@ fn run_workspace_once(
 
   let mut checker = oj_sema::Checker::new(&program);
   checker.set_context_size_max(options.context_size_max);
+  // `OS`, `CPU` and `IS_CROSS_COMPILING` are what the workspace is built for
+  // (**L§17**), so they have to be in place before the first `#if OS ==` is
+  // folded.
+  checker.set_target(options.target);
   // Compile-time execution is part of typechecking: a `#run` produces the
   // constant a declaration was waiting for (**L§12.1**).
   let engine = match oj_jit::Engine::new() {
@@ -500,6 +504,7 @@ fn run_workspace_once(
   }
 
   let codegen = oj_codegen::Options {
+    target: options.target,
     optimization: options.optimization.level(),
     bitcode: options.optimization.bitcode(),
     debug_info: options.debug_info,
@@ -574,6 +579,7 @@ fn run_workspace_once(
         false => name.clone(),
       };
       let request = oj_link::Request {
+        target: options.target,
         objects: objects.clone(),
         output: directory.join(&file),
         output_type: options.output_type,
@@ -869,30 +875,53 @@ fn workspace_compiler(
   })
 }
 
-/// `Operating_System_Tag.LINUX` and `CPU_Tag.X64`, the only pair orangejuice
-/// produces output for (`docs/spec.md` §2, **L§17**).
-const LINUX: u32 = 3;
-const X64: u32 = 3;
+/// What a workspace asked to be compiled for: the target its `os_target` and
+/// `cpu_target` name (**C§4**), or the message saying why that is not one
+/// orangejuice produces output for (`docs/spec.md` §2.1). A metaprogram that
+/// names a target the back end has nothing to emit for is told so rather than
+/// handed a native executable it did not ask for.
+fn workspace_target(
+  workspace: &oj_meta::Workspace,
+  layout: &oj_meta::BuildOptionsLayout,
+  default: oj_types::Target,
+) -> Result<oj_types::Target, String> {
+  let os = match workspace.option_u32(layout, |layout| layout.os_target) {
+    Some(tag) => oj_types::Os::from_tag(tag).ok_or_else(|| {
+      format!("Compiling for this operating system is not supported (os_target is {tag}).")
+    })?,
+    None => default.os,
+  };
+  let cpu = match workspace.option_u32(layout, |layout| layout.cpu_target) {
+    Some(tag) => oj_types::Cpu::from_tag(tag).ok_or_else(|| {
+      format!("Compiling for this processor is not supported (cpu_target is {tag}).")
+    })?,
+    None => default.cpu,
+  };
+  let target = oj_types::Target::new(os, cpu);
+  if !SUPPORTED_TARGETS.contains(&target) {
+    return Err(format!(
+      "Compiling for {target} is not supported (os_target is {}, cpu_target is {}).",
+      os.tag(),
+      cpu.tag()
+    ));
+  }
+  Ok(target)
+}
 
-/// What a workspace asked to be compiled for, when that is a target
-/// orangejuice does not produce output for (`docs/spec.md` §2). A metaprogram
-/// that cross-compiles is told so rather than handed a native executable it
-/// did not ask for.
+/// The targets orangejuice produces output for (`docs/spec.md` §2.1).
+const SUPPORTED_TARGETS: [oj_types::Target; 3] = [
+  oj_types::Target::LINUX_X64,
+  oj_types::Target::LINUX_ARM64,
+  oj_types::Target::MACOS_ARM64,
+];
+
+/// The message a workspace naming a target the compiler has no output for is
+/// answered with.
 fn unsupported_target(
   workspace: &oj_meta::Workspace,
   layout: &oj_meta::BuildOptionsLayout,
 ) -> Option<String> {
-  let os = workspace.option_u32(layout, |layout| layout.os_target);
-  let cpu = workspace.option_u32(layout, |layout| layout.cpu_target);
-  match (os, cpu) {
-    (Some(os), _) if os != LINUX => Some(format!(
-      "Compiling for an operating system other than Linux is not supported (os_target is {os})."
-    )),
-    (_, Some(cpu)) if cpu != X64 => Some(format!(
-      "Compiling for a processor other than x64 is not supported (cpu_target is {cpu})."
-    )),
-    _ => None,
-  }
+  workspace_target(workspace, layout, oj_types::Target::HOST).err()
 }
 
 /// The input and the options one workspace compiles with, as its metaprogram
@@ -909,6 +938,10 @@ fn workspace_input(
     .map(Path::to_path_buf)
     .unwrap_or_else(|| PathBuf::from("."));
   let mut nested = options.clone();
+  // `os_target`/`cpu_target` are `Commonly_Propagated` (**C§4**), so a
+  // workspace starts with the outer compilation's and keeps whatever its own
+  // metaprogram then set.
+  nested.target = workspace_target(workspace, layout, options.target).unwrap_or(options.target);
   // What the workspace's own `#run`s read as their command line: the
   // metaprogram driving it decides that, which is how `Default_Metaprogram`
   // hands a program the arguments written after the lone `-` (**C§2.1**).

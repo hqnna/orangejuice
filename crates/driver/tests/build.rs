@@ -85,7 +85,7 @@ fn build_and_run(body: &str) -> Option<Built> {
 }
 
 fn linker_is_available() -> bool {
-  let driver = oj_link::driver();
+  let driver = oj_link::driver(oj_types::Target::HOST);
   if driver.is_absolute() {
     return driver.exists();
   }
@@ -1617,7 +1617,7 @@ fn with_c_library(source: &str, body: &str) -> Option<Built> {
   let c_path = directory.path().join("cabi.c");
   std::fs::write(&c_path, source).expect("the C source should be writable");
   let library = directory.path().join("libcabi.so");
-  let compiled = Command::new(oj_link::driver())
+  let compiled = Command::new(oj_link::driver(oj_types::Target::HOST))
     .arg("-shared")
     .arg("-fPIC")
     .arg("-o")
@@ -1690,7 +1690,7 @@ fn a_run_calls_into_a_library_whose_file_the_compiler_named() {
   std::fs::write(&c_path, "int answer(void) { return 42; }\n").expect("the C source is writable");
   // `answer.so`, the way the compiler names a library of its own — not
   // `libanswer.so`.
-  let built = Command::new(oj_link::driver())
+  let built = Command::new(oj_link::driver(oj_types::Target::HOST))
     .arg("-shared")
     .arg("-fPIC")
     .arg("-o")
@@ -4465,6 +4465,7 @@ fn a_library_the_compiler_built_is_linked_by_the_file_it_is() {
   // so a non-system `#library` names the file that is actually there
   // (**L§12.2**) — which is what `examples/dll` links against.
   let request = oj_link::Request {
+    target: oj_types::Target::HOST,
     objects: vec![std::path::PathBuf::from("program.o")],
     libraries: vec![oj_ir::Library {
       name: String::from("helper"),
@@ -4894,7 +4895,7 @@ fn a_library_is_found_from_the_file_the_foreign_header_was_written_in() {
   let c_path = module.join("native.c");
   std::fs::write(&c_path, "int answer(void) { return 42; }\n").expect("the C source is writable");
   let object = directory.path().join("native.o");
-  let compiled = Command::new(oj_link::driver())
+  let compiled = Command::new(oj_link::driver(oj_types::Target::HOST))
     .arg("-c")
     .arg("-o")
     .arg(&object)

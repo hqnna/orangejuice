@@ -319,6 +319,7 @@ version = "0.1.8"
 dependencies = [
  "cc",
  "oj-ir",
+ "oj-types",
 ]
 
 [[package]]

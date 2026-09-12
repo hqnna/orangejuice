@@ -438,6 +438,11 @@ pub struct Abi {
   /// parameter at all then: each argument written past the fixed ones is
   /// passed on its own, the way C spells `...`.
   pub variadic: bool,
+  /// The call crosses a `#c_call` boundary, so the platform's convention
+  /// applies to it rather than orangejuice's own (**L§7.11**) — which is what
+  /// says a narrow integer has to arrive already widened on a target whose ABI
+  /// makes that the caller's job.
+  pub c_call: bool,
 }
 
 /// One procedure of the program, in the IR the back end consumes.
@@ -560,6 +565,7 @@ pub fn abi_of(
       direct_return: None,
       return_class: None,
       variadic: false,
+      c_call: false,
     };
   };
 
@@ -646,6 +652,7 @@ pub fn abi_of(
     direct_return,
     return_class,
     variadic,
+    c_call,
   }
 }
 

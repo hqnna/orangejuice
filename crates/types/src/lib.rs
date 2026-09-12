@@ -9,6 +9,7 @@ mod kind;
 mod layout;
 mod print;
 mod table;
+mod target;
 
 pub use abi::{Classification, Eightbyte, classify, eightbyte_size};
 pub use kind::{
@@ -19,3 +20,4 @@ pub use kind::{
 };
 pub use layout::{Layout, LayoutBuilder, align_forward};
 pub use table::Types;
+pub use target::{Cpu, Os, Target};

@@ -18,7 +18,7 @@ use std::sync::Mutex;
 static MODULES_ENV_GUARD: Mutex<()> = Mutex::new(());
 
 fn linker_is_available() -> bool {
-  let driver = oj_link::driver();
+  let driver = oj_link::driver(oj_types::Target::HOST);
   Command::new(&driver)
     .arg("--version")
     .output()

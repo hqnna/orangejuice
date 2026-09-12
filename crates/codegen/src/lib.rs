@@ -16,7 +16,7 @@ use inkwell::context::{Context, ContextRef};
 use inkwell::module::Module;
 use inkwell::targets::FileType;
 
-pub use machine::{Bitcode, DEFAULT_TRIPLE, Options, PassOptions, target_machine};
+pub use machine::{Bitcode, Options, PassOptions, default_triple, target_machine};
 
 /// What a module is being built for.
 ///
@@ -34,7 +34,7 @@ pub enum Purpose {
 /// What the caller wants out of one compilation.
 #[derive(Clone, Debug)]
 pub enum Output<'a> {
-  /// An ELF object written to this path.
+  /// An object file written to this path, in whatever format the target uses.
   Object(&'a Path),
   /// The textual LLVM IR of the module.
   LlvmIr,

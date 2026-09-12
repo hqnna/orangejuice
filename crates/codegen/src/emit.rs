@@ -190,14 +190,89 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       .collect()
   }
 
-  /// What a classified value is when it travels as one LLVM value: an
-  /// eightbyte on its own, or a struct of them.
-  fn coerced_type(&self, type_id: TypeId, classes: &[Eightbyte]) -> BasicTypeEnum<'ctx> {
-    let parts = self.eightbyte_types(type_id, classes);
-    match parts.len() {
-      1 => parts[0],
-      _ => self.context.struct_type(&parts, false).into(),
+  /// The LLVM values a classified one travels as, and where in its storage
+  /// each of them sits (**L§7.11**). `None` is a value that goes through
+  /// memory and is addressed rather than copied into registers.
+  ///
+  /// A value in general-purpose registers is one LLVM value per word,
+  /// whichever target it is: as wide as what is left of the aggregate, so that
+  /// loading and storing one touches exactly the bytes that are there. A
+  /// homogeneous float aggregate is one coerced array instead, which is what
+  /// tells the AArch64 back end to take that many consecutive vector registers
+  /// rather than spreading the elements over both register files.
+  fn register_parts(
+    &self,
+    type_id: TypeId,
+    class: &Classification,
+  ) -> Option<Vec<(BasicTypeEnum<'ctx>, u64)>> {
+    match class {
+      Classification::Memory => None,
+      Classification::Registers(classes) => Some(
+        self
+          .eightbyte_types(type_id, classes)
+          .into_iter()
+          .enumerate()
+          .map(|(index, part)| (part, index as u64 * 8))
+          .collect(),
+      ),
+      // `classify` only answers this for an aggregate whose size is exactly
+      // its elements, so the one part covers the storage and no more.
+      Classification::FloatRegisters { kind, count } => {
+        let element = match kind {
+          oj_types::FloatKind::F32 => self.context.f32_type(),
+          oj_types::FloatKind::F64 => self.context.f64_type(),
+        };
+        let part: BasicTypeEnum<'ctx> = match count {
+          1 => element.into(),
+          _ => element.array_type(*count as u32).into(),
+        };
+        Some(vec![(part, 0)])
+      }
     }
+  }
+
+  /// What a classified value is when it travels as one LLVM value: the one
+  /// part it has, or a struct of the several System V split it into.
+  fn coerced_type(&self, type_id: TypeId, class: &Classification) -> Option<BasicTypeEnum<'ctx>> {
+    let parts = self.register_parts(type_id, class)?;
+    match parts.len() {
+      1 => Some(parts[0].0),
+      _ => {
+        let parts: Vec<BasicTypeEnum<'ctx>> = parts.into_iter().map(|(part, _)| part).collect();
+        Some(self.context.struct_type(&parts, false).into())
+      }
+    }
+  }
+
+  fn target(&self) -> oj_types::Target {
+    self.types().target()
+  }
+
+  /// `signext`/`zeroext` for a value narrower than a word, where the platform
+  /// makes widening the caller's job. Darwin's AArch64 ABI does — a callee
+  /// there may read the whole register — where System V leaves the high bits
+  /// unspecified and every callee re-narrows. LLVM only widens when the
+  /// attribute says to, so this is what a `#c_call` of a `u8` needs to arrive
+  /// as the C side expects.
+  fn extension_attribute(&self, type_id: TypeId) -> Option<inkwell::attributes::Attribute> {
+    if !self.target().extends_narrow_arguments() {
+      return None;
+    }
+    let underlying = self.types().underlying(type_id);
+    let name = match self.types().kind(underlying) {
+      TypeKind::Bool => "zeroext",
+      TypeKind::Integer(kind) if kind.size() < 4 => match kind.is_signed() {
+        true => "signext",
+        false => "zeroext",
+      },
+      TypeKind::Enum(id) => {
+        let base = self.types().enum_info(*id).base;
+        return self.extension_attribute(base);
+      }
+      _ => return None,
+    };
+    let kind = inkwell::attributes::Attribute::get_named_enum_kind_id(name);
+    Some(self.context.create_enum_attribute(kind, 0))
   }
 
   fn function_type(&self, abi: &oj_ir::Abi) -> FunctionType<'ctx> {
@@ -208,15 +283,22 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       // small enough, and then the storage the IR set aside is the caller's
       // own business rather than a parameter (**L§7.11**).
       if parameter.kind == ParameterKind::ReturnPointer
-        && matches!(abi.return_class, Some(Classification::Registers(_)))
+        && abi
+          .return_class
+          .as_ref()
+          .is_some_and(Classification::in_registers)
         && parameters.is_empty()
       {
         continue;
       }
-      match (parameter.kind, &parameter.class) {
+      let parts = parameter
+        .class
+        .as_ref()
+        .and_then(|class| self.register_parts(parameter.type_id, class));
+      match (parameter.kind, parts) {
         (ParameterKind::Value, _) => parameters.push(self.llvm_type(parameter.type_id).into()),
-        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
-          for part in self.eightbyte_types(parameter.type_id, classes) {
+        (ParameterKind::Pointer, Some(parts)) => {
+          for (part, _) in parts {
             parameters.push(part.into());
           }
         }
@@ -228,15 +310,16 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     // platform passes one (**L§7.11**, **L§12.2**).
     let variadic = abi.variadic;
     match (&abi.return_class, abi.direct_return) {
-      (Some(Classification::Registers(classes)), _) => {
+      (Some(class), _) if class.in_registers() => {
         let type_id = abi
           .parameters
           .first()
           .map(|parameter| parameter.type_id)
           .unwrap_or(TypeId::VOID);
-        self
-          .coerced_type(type_id, classes)
-          .fn_type(&parameters, variadic)
+        match self.coerced_type(type_id, class) {
+          Some(coerced) => coerced.fn_type(&parameters, variadic),
+          None => self.context.void_type().fn_type(&parameters, variadic),
+        }
       }
       (_, Some(type_id)) => self.llvm_type(type_id).fn_type(&parameters, variadic),
       _ => self.context.void_type().fn_type(&parameters, variadic),
@@ -392,23 +475,37 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     let mut attributes = Vec::new();
     let mut position = 0u32;
     for parameter in &abi.parameters {
-      match (parameter.kind, &parameter.class) {
+      if abi.c_call
+        && parameter.kind == ParameterKind::Value
+        && let Some(attribute) = self.extension_attribute(parameter.type_id)
+      {
+        attributes.push((position, attribute));
+      }
+      let parts = parameter
+        .class
+        .as_ref()
+        .and_then(|class| self.register_parts(parameter.type_id, class));
+      match (parameter.kind, parts) {
         (ParameterKind::ReturnPointer, _)
           if position == 0 && abi.return_class == Some(Classification::Memory) =>
         {
           attributes.push((position, self.type_attribute("sret", parameter.type_id)));
         }
         (ParameterKind::ReturnPointer, _)
-          if position == 0 && matches!(abi.return_class, Some(Classification::Registers(_))) =>
+          if position == 0
+            && abi
+              .return_class
+              .as_ref()
+              .is_some_and(Classification::in_registers) =>
         {
           // The return travels in registers, so this is not a parameter at all.
           continue;
         }
-        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
-          position += classes.len() as u32;
+        (ParameterKind::Pointer, Some(parts)) => {
+          position += parts.len() as u32;
           continue;
         }
-        (ParameterKind::Pointer, Some(Classification::Memory)) => {
+        (ParameterKind::Pointer, None) if parameter.class.is_some() => {
           attributes.push((position, self.type_attribute("byval", parameter.type_id)));
         }
         _ => {}
@@ -662,22 +759,27 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     for (index, parameter) in procedure.abi.parameters.iter().enumerate() {
       if parameter.kind == ParameterKind::ReturnPointer
         && index == 0
-        && matches!(
-          procedure.abi.return_class,
-          Some(Classification::Registers(_))
-        )
+        && procedure
+          .abi
+          .return_class
+          .as_ref()
+          .is_some_and(Classification::in_registers)
       {
         values[index] = Some(self.aggregate_slot(parameter.type_id)?.into());
         continue;
       }
-      match (parameter.kind, &parameter.class) {
-        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
+      let parts = parameter
+        .class
+        .as_ref()
+        .and_then(|class| self.register_parts(parameter.type_id, class));
+      match (parameter.kind, parts) {
+        (ParameterKind::Pointer, Some(parts)) => {
           let slot = self.aggregate_slot(parameter.type_id)?;
-          for part in 0..classes.len() {
+          for (_, offset) in parts {
             let Some(incoming) = function.get_nth_param(position) else {
               return Err(String::from("a coerced parameter is missing its registers"));
             };
-            let target = self.byte_offset(slot, part as u64 * 8)?;
+            let target = self.byte_offset(slot, offset)?;
             self
               .builder
               .build_store(target, incoming)
@@ -1120,20 +1222,23 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       };
       if parameter.kind == ParameterKind::ReturnPointer
         && index == 0
-        && matches!(abi.return_class, Some(Classification::Registers(_)))
+        && abi
+          .return_class
+          .as_ref()
+          .is_some_and(Classification::in_registers)
       {
         returned_into = Some(self.pointer(values, *argument)?);
         continue;
       }
-      match (parameter.kind, &parameter.class) {
-        (ParameterKind::Pointer, Some(Classification::Registers(classes))) => {
+      let parts = parameter
+        .class
+        .as_ref()
+        .and_then(|class| self.register_parts(parameter.type_id, class));
+      match (parameter.kind, parts) {
+        (ParameterKind::Pointer, Some(parts)) => {
           let address = self.pointer(values, *argument)?;
-          for (part, part_type) in self
-            .eightbyte_types(parameter.type_id, classes)
-            .into_iter()
-            .enumerate()
-          {
-            let slot = self.byte_offset(address, part as u64 * 8)?;
+          for (part_type, offset) in parts {
+            let slot = self.byte_offset(address, offset)?;
             let loaded = self
               .builder
               .build_load(part_type, slot, "")
@@ -1480,11 +1585,11 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       Terminator::Return(returned) => {
         // A `#c_call` whose aggregate return travels in registers reads it back
         // out of the storage the body wrote it into (**L§7.11**).
-        if let Some(Classification::Registers(classes)) = &procedure.abi.return_class
+        if let Some(class) = &procedure.abi.return_class
           && let Some(parameter) = procedure.abi.parameters.first()
+          && let Some(coerced) = self.coerced_type(parameter.type_id, class)
         {
           let storage = self.pointer(values, oj_ir::ValueId(0))?;
-          let coerced = self.coerced_type(parameter.type_id, classes);
           let value = self
             .builder
             .build_load(coerced, storage, "")

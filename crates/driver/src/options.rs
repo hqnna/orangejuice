@@ -101,6 +101,10 @@ impl RuntimeSupport {
 /// driver itself reads.
 #[derive(Clone, Debug, Default)]
 pub struct BuildOptions {
+  /// `Build_Options.os_target`/`cpu_target` (**C§4**): what this compilation
+  /// emits and links for. The host unless a metaprogram named another
+  /// (`docs/spec.md` §2.1).
+  pub target: oj_types::Target,
   pub optimization: Optimization,
   pub stack_trace: bool,
   /// `Build_Options.emit_debug_info` (**C§4**): DWARF is what `.DEFAULT` means
@@ -169,6 +173,7 @@ pub struct BuildOptions {
 impl BuildOptions {
   pub fn new() -> Self {
     Self {
+      target: oj_types::Target::HOST,
       optimization: Optimization::Debug,
       stack_trace: true,
       debug_info: true,

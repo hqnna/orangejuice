@@ -43,12 +43,12 @@ fn llvm_ir_with(source: &str, options: &oj_codegen::Options) -> String {
 }
 
 #[test]
-fn the_module_targets_linux_x86_64() {
+fn the_module_targets_the_host_unless_it_is_told_otherwise() {
   let module = llvm_ir("main :: () {}\n");
   assert!(
     module.contains(&format!(
       "target triple = \"{}\"",
-      oj_codegen::DEFAULT_TRIPLE
+      oj_codegen::default_triple()
     )),
     "{module}"
   );
@@ -172,7 +172,14 @@ fn an_object_file_is_written_where_it_was_asked_for() {
   )
   .expect("the object should be written");
   let bytes = std::fs::read(&object).expect("the object should exist");
-  assert_eq!(&bytes[..4], b"\x7fELF");
+  // The object format is the target's: ELF everywhere but Darwin, which is
+  // Mach-O (`docs/spec.md` §2.1).
+  let magic: &[u8] = if oj_types::Target::HOST.is_darwin() {
+    &[0xcf, 0xfa, 0xed, 0xfe]
+  } else {
+    b"\x7fELF"
+  };
+  assert_eq!(&bytes[..4], magic);
 }
 
 #[test]

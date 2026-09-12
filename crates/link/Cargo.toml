@@ -8,5 +8,6 @@ license.workspace = true
 
 [dependencies]
 oj-ir.workspace = true
+oj-types.workspace = true
 
 cc.workspace = true

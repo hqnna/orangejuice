@@ -93,6 +93,7 @@ impl Lowering<'_, '_> {
       direct_return: None,
       return_class: None,
       variadic: false,
+      c_call: false,
     };
     self.procedures.push(Procedure {
       symbol: run.symbol.clone(),

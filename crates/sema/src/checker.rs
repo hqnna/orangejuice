@@ -281,6 +281,9 @@ pub struct Checker<'a> {
   /// to, so that its size does not depend on which modules a program imports
   /// (**L§10.1**). `-context_size` is what changes it.
   context_size_max: u64,
+  /// What this compilation is being built for, which is where `OS`, `CPU` and
+  /// `IS_CROSS_COMPILING` come from (**L§17**, `docs/spec.md` §2.1).
+  target: oj_types::Target,
   /// Which pass over the file-scope runs this is: the one that executes what
   /// cannot wait, or the one that executes the `#run,stallable`s afterwards
   /// (**L§12.1**, `docs/spec.md` §6.5).
@@ -488,6 +491,7 @@ impl<'a> Checker<'a> {
       argument_instances: HashMap::default(),
       units_seen: 0,
       context_size_max: crate::aggregate::DEFAULT_CONTEXT_SIZE,
+      target: oj_types::Target::HOST,
       checking_bodies: 0,
       stallable_runs: false,
     };
@@ -499,6 +503,18 @@ impl<'a> Checker<'a> {
   /// has to be set before anything asks for the context's layout.
   pub fn set_context_size_max(&mut self, size: u64) {
     self.context_size_max = size;
+  }
+
+  /// What `Build_Options.os_target`/`cpu_target` asked this compilation to be
+  /// built for (**C§4**). It has to be set before anything reads `OS`, since
+  /// the constant is recorded the first time it is looked up.
+  pub fn set_target(&mut self, target: oj_types::Target) {
+    self.target = target;
+    self.types.set_target(target);
+  }
+
+  pub fn target(&self) -> oj_types::Target {
+    self.target
   }
 
   pub(crate) fn context_size_max(&self) -> u64 {
@@ -1407,7 +1423,8 @@ impl<'a> Checker<'a> {
       return DeclType::type_name(TypeId::TYPE);
     }
     if name == self.names.is_cross_compiling {
-      self.record_constant(id, Const::bool(false));
+      let cross = self.target.is_cross_compiling();
+      self.record_constant(id, Const::bool(cross));
       return DeclType::value(TypeId::BOOL);
     }
     if name == self.names.machine_options_size {
@@ -1425,16 +1442,16 @@ impl<'a> Checker<'a> {
       self.record_constant(id, Const::new(TypeId::S64, crate::Value::Int(size)));
       return DeclType::value(TypeId::S64);
     }
-    // `OS` and `CPU` are the target's, which is Linux x86-64 (`docs/spec.md`
-    // §2); they are constants, so `#if OS == .LINUX` folds without running
-    // anything (**L§5.11**).
+    // `OS` and `CPU` are the target's (`docs/spec.md` §2.1); they are
+    // constants, so `#if OS == .LINUX` folds without running anything
+    // (**L§5.11**).
     for (builtin, tag, member) in [
       (
         self.names.os,
         self.names.operating_system_tag,
-        &b"LINUX"[..],
+        self.target.os.member(),
       ),
-      (self.names.cpu, self.names.cpu_tag, b"X64"),
+      (self.names.cpu, self.names.cpu_tag, self.target.cpu.member()),
     ] {
       if name != builtin {
         continue;

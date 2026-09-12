@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use oj_ir::Library;
+use oj_types::Target;
 
 /// What the program is linked into (`Build_Options.output_type`, **C§4**).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -24,6 +25,9 @@ pub enum OutputType {
 
 #[derive(Clone, Debug, Default)]
 pub struct Request {
+  /// What is being linked for, which decides the driver, the runtime search
+  /// path spelling and which linker flags exist at all (`docs/spec.md` §2.1).
+  pub target: Target,
   pub objects: Vec<PathBuf>,
   pub output: PathBuf,
   pub output_type: OutputType,
@@ -53,13 +57,13 @@ impl LinkLine {
 
 /// The C driver that does the linking: `$CC` if it is set, then whatever the
 /// `cc` crate finds for this target, then the usual names.
-pub fn driver() -> PathBuf {
+pub fn driver(target: Target) -> PathBuf {
   if let Some(value) = std::env::var_os("CC").filter(|value| !value.is_empty()) {
     return PathBuf::from(value);
   }
   let found = cc::Build::new()
-    .target(oj_codegen_triple())
-    .host(oj_codegen_triple())
+    .target(target.triple())
+    .host(Target::HOST.triple())
     .opt_level(0)
     .cargo_metadata(false)
     .cargo_warnings(false)
@@ -67,10 +71,6 @@ pub fn driver() -> PathBuf {
     .ok()
     .map(|compiler| compiler.path().to_path_buf());
   found.unwrap_or_else(|| PathBuf::from("cc"))
-}
-
-fn oj_codegen_triple() -> &'static str {
-  "x86_64-unknown-linux-gnu"
 }
 
 /// Whether `ld.lld` is on the path for the C driver to find. Looked for once:
@@ -98,7 +98,8 @@ pub fn link_line(request: &Request) -> LinkLine {
   // the driver still supplies the C runtime and the search paths, which is
   // what going through it was for (**C§11**). A machine without it links the
   // way it did.
-  if lld_available() {
+  // Darwin has one linker, and `ld64` is what a driver there already runs.
+  if !request.target.is_darwin() && lld_available() {
     arguments.push(String::from("-fuse-ld=lld"));
   }
   if request.output_type == OutputType::DynamicLibrary {
@@ -158,8 +159,13 @@ pub fn link_line(request: &Request) -> LinkLine {
       // A library the compiler built is `<name>.so`, not `lib<name>.so`, so a
       // plain `#library "helper"` names a file the `-l` spelling would never
       // find: the one that is actually there is asked for by name (**L§12.2**).
+      // `-l:<file>` is GNU ld's spelling and `ld64` has none, so on Darwin the
+      // file is named by its path instead.
       None => match library_file(library) {
-        Some(file) => format!("-l:{file}"),
+        Some(file) => match (request.target.is_darwin(), library.directory.as_ref()) {
+          (true, Some(directory)) => directory.join(file).display().to_string(),
+          _ => format!("-l:{file}"),
+        },
         None => format!("-l{name}"),
       },
     };
@@ -176,14 +182,22 @@ pub fn link_line(request: &Request) -> LinkLine {
   arguments.push(String::from("-lm"));
 
   // The reference links every executable so that it finds its own libraries
-  // and so that its symbols are visible to `dlopen` (**C§11**).
-  arguments.push(String::from("-Wl,-rpath,$ORIGIN"));
-  arguments.push(String::from("-Wl,--export-dynamic"));
-  arguments.push(String::from("-Wl,--build-id"));
+  // and so that its symbols are visible to `dlopen` (**C§11**). `ld64` spells
+  // both differently, and has no build id to ask for: it always writes a UUID.
+  if request.target.is_darwin() {
+    arguments.push(String::from("-Wl,-rpath,@loader_path"));
+    if request.output_type == OutputType::Executable {
+      arguments.push(String::from("-Wl,-export_dynamic"));
+    }
+  } else {
+    arguments.push(String::from("-Wl,-rpath,$ORIGIN"));
+    arguments.push(String::from("-Wl,--export-dynamic"));
+    arguments.push(String::from("-Wl,--build-id"));
+  }
   arguments.extend(request.additional_arguments.iter().cloned());
 
   LinkLine {
-    program: driver(),
+    program: driver(request.target),
     arguments,
   }
 }
@@ -288,6 +302,23 @@ pub fn default_output_name(source: &Path) -> String {
 mod tests {
   use super::*;
 
+  /// How the host's linker spells "look beside the executable".
+  fn origin_rpath() -> &'static str {
+    if Target::HOST.is_darwin() {
+      "-Wl,-rpath,@loader_path"
+    } else {
+      "-Wl,-rpath,$ORIGIN"
+    }
+  }
+
+  fn export_dynamic() -> &'static str {
+    if Target::HOST.is_darwin() {
+      "-Wl,-export_dynamic"
+    } else {
+      "-Wl,--export-dynamic"
+    }
+  }
+
   fn request() -> Request {
     Request {
       objects: vec![PathBuf::from("first.o")],
@@ -302,11 +333,11 @@ mod tests {
     assert!(line.arguments.contains(&String::from("-o")));
     assert!(line.arguments.contains(&String::from("first")));
     assert!(line.arguments.contains(&String::from("first.o")));
-    assert!(line.arguments.contains(&String::from("-Wl,-rpath,$ORIGIN")));
+    assert!(line.arguments.contains(&String::from(origin_rpath())));
     assert!(
-      line
-        .arguments
-        .contains(&String::from("-Wl,--export-dynamic"))
+      line.arguments.contains(&String::from(export_dynamic())),
+      "{:?}",
+      line.arguments
     );
     assert!(!line.arguments.contains(&String::from("-shared")));
   }
@@ -330,7 +361,7 @@ mod tests {
     let line = link_line(&request());
     assert_eq!(
       line.arguments.contains(&String::from("-fuse-ld=lld")),
-      lld_available(),
+      lld_available() && !Target::HOST.is_darwin(),
       "{:?}",
       line.arguments
     );

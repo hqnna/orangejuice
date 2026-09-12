@@ -10,7 +10,7 @@ license.workspace = true
 oj-ir.workspace = true
 oj-types.workspace = true
 
-inkwell = { version = "0.10", default-features = false, features = ["llvm19-1", "target-x86"] }
+inkwell = { version = "0.10", default-features = false, features = ["llvm19-1", "target-x86", "target-aarch64"] }
 
 [dev-dependencies]
 oj-diag.workspace = true

@@ -1,13 +1,23 @@
-//! The System V x86-64 classification of a value passed across a `#c_call`
-//! boundary (**L§7.11**).
+//! How a value passed across a `#c_call` boundary travels (**L§7.11**).
 //!
 //! Between two Jai procedures the convention is orangejuice's own, and an
-//! aggregate goes by pointer. A `#c_call` has to follow the platform's, where
-//! an aggregate of at most two eightbytes travels in registers chosen by what
-//! its bytes are — so this is where the compiler works out which.
+//! aggregate goes by pointer. A `#c_call` has to follow the platform's, and
+//! the two platforms answer differently:
+//!
+//! * **System V x86-64** splits an aggregate of at most two eightbytes into
+//!   eightbytes classified by what their bytes are, and passes each in a
+//!   register of that class.
+//! * **AAPCS64** asks one question first — whether the aggregate is
+//!   *homogeneous*, every leaf a float of one width and at most four of them —
+//!   and passes such a thing in that many vector registers. Anything else of
+//!   at most sixteen bytes goes in general-purpose registers, and anything
+//!   larger goes indirectly.
+//!
+//! Which of the two is used is the type table's target (`docs/spec.md` §2.1).
 
 use crate::kind::{ArrayKind, FloatKind, MemberFlags, TypeId, TypeKind};
 use crate::table::Types;
+use crate::target::Cpu;
 
 /// What the register a value's eightbyte travels in has to be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,17 +34,111 @@ pub enum Eightbyte {
 pub enum Classification {
   /// It fits in registers: one per eightbyte, in order.
   Registers(Vec<Eightbyte>),
+  /// AAPCS64's homogeneous float aggregate: `count` vector registers, each
+  /// holding one element of this width. Two doubles and four floats are both
+  /// sixteen bytes and are not the same thing here, which is why this is not
+  /// spelled as eightbytes.
+  FloatRegisters { kind: FloatKind, count: u64 },
   /// It is copied into the caller's argument area, or written through storage
   /// the caller supplied.
   Memory,
 }
 
+impl Classification {
+  /// Whether the value travels in registers at all, whichever kind they are.
+  pub fn in_registers(&self) -> bool {
+    !matches!(self, Self::Memory)
+  }
+}
+
 /// The eightbyte classes before merging: `None` is the SysV NO_CLASS.
 type Slots = [Option<Eightbyte>; 2];
 
-/// Classifies a value of `type_id` (**L§7.11**). Anything wider than two
-/// eightbytes, and anything the compiler cannot measure, goes through memory.
+/// Classifies a value of `type_id` for the table's target (**L§7.11**).
+/// Anything the compiler cannot measure goes through memory.
 pub fn classify(types: &Types, type_id: TypeId) -> Classification {
+  match types.target().cpu {
+    Cpu::X64 => classify_system_v(types, type_id),
+    Cpu::Arm64 => classify_aapcs64(types, type_id),
+  }
+}
+
+/// AAPCS64, and Darwin's variant of it, for an aggregate: a homogeneous float
+/// aggregate of at most four elements travels in that many vector registers,
+/// anything else of at most sixteen bytes in general-purpose registers, and
+/// everything larger indirectly.
+fn classify_aapcs64(types: &Types, type_id: TypeId) -> Classification {
+  let Some(size) = types.size_of(type_id) else {
+    return Classification::Memory;
+  };
+  if size == 0 {
+    return Classification::Memory;
+  }
+  if let Some((kind, count)) = homogeneous_float(types, type_id, 0)
+    && count <= MAX_HOMOGENEOUS
+    && count * kind.size() == size
+  {
+    return Classification::FloatRegisters { kind, count };
+  }
+  if size > 16 {
+    return Classification::Memory;
+  }
+  // Whatever the bytes are, they arrive in general-purpose registers: AAPCS64
+  // has no per-eightbyte class.
+  Classification::Registers(vec![Eightbyte::Integer; size.div_ceil(8) as usize])
+}
+
+/// The element type and count of a homogeneous float aggregate, or `None` for
+/// anything that has a leaf which is not a float of the one width. A scalar
+/// float is one of one, which is what makes a struct wrapping a single
+/// `float64` travel in a vector register.
+fn homogeneous_float(types: &Types, type_id: TypeId, depth: u32) -> Option<(FloatKind, u64)> {
+  if depth > MAX_DEPTH {
+    return None;
+  }
+  let underlying = types.underlying(type_id);
+  match types.kind(underlying) {
+    TypeKind::Float(kind) => Some((*kind, 1)),
+    TypeKind::Array {
+      element,
+      kind: ArrayKind::Fixed(count),
+    } => {
+      let (element, count) = (*element, *count);
+      if count == 0 {
+        return None;
+      }
+      let (kind, each) = homogeneous_float(types, element, depth + 1)?;
+      Some((kind, each * count))
+    }
+    TypeKind::Struct(id) => {
+      let members = types.struct_info(*id).members.clone();
+      let mut found: Option<(FloatKind, u64)> = None;
+      for member in members.iter().filter(|member| {
+        member.imported_through.is_none()
+          && !member
+            .flags
+            .intersects(MemberFlags::CONSTANT | MemberFlags::IMPORTED)
+      }) {
+        let (kind, count) = homogeneous_float(types, member.type_id, depth + 1)?;
+        match found {
+          None => found = Some((kind, count)),
+          Some((seen, total)) if seen == kind => found = Some((seen, total + count)),
+          Some(_) => return None,
+        }
+      }
+      found
+    }
+    _ => None,
+  }
+}
+
+/// AAPCS64 stops at four: a wider homogeneous aggregate is passed the way any
+/// other large value is.
+const MAX_HOMOGENEOUS: u64 = 4;
+
+/// The System V x86-64 classification. Anything wider than two eightbytes, and
+/// anything the compiler cannot measure, goes through memory.
+fn classify_system_v(types: &Types, type_id: TypeId) -> Classification {
   let Some(size) = types.size_of(type_id) else {
     return Classification::Memory;
   };
@@ -176,6 +280,15 @@ impl FloatKind {
 mod tests {
   use super::*;
   use crate::kind::{StructInfo, StructMember, StructTextualFlags};
+  use crate::target::Target;
+
+  /// A table that classifies the way one target does, whichever machine the
+  /// test is running on.
+  fn table(target: Target) -> Types {
+    let mut types = Types::new();
+    types.set_target(target);
+    types
+  }
 
   /// A struct whose members sit where the test says, and whose size the test
   /// gives, so that classification is read off the layout alone.
@@ -196,7 +309,7 @@ mod tests {
 
   #[test]
   fn a_scalar_is_one_register_of_its_own_kind() {
-    let types = Types::new();
+    let types = table(Target::LINUX_X64);
     assert_eq!(
       classify(&types, TypeId::S64),
       Classification::Registers(vec![Eightbyte::Integer])
@@ -205,7 +318,7 @@ mod tests {
 
   #[test]
   fn two_words_of_integers_travel_in_two_general_purpose_registers() {
-    let mut types = Types::new();
+    let mut types = table(Target::LINUX_X64);
     let id = structure(&mut types, &[(TypeId::S64, 0), (TypeId::S64, 8)], 16);
     assert_eq!(
       classify(&types, id),
@@ -215,7 +328,7 @@ mod tests {
 
   #[test]
   fn a_pair_of_floats_travels_in_one_vector_register() {
-    let mut types = Types::new();
+    let mut types = table(Target::LINUX_X64);
     let float32 = types.float(FloatKind::F32);
     let id = structure(&mut types, &[(float32, 0), (float32, 4)], 8);
     assert_eq!(
@@ -226,7 +339,7 @@ mod tests {
 
   #[test]
   fn a_float_beside_an_integer_takes_one_register_of_each() {
-    let mut types = Types::new();
+    let mut types = table(Target::LINUX_X64);
     let float64 = types.float(FloatKind::F64);
     let id = structure(&mut types, &[(float64, 0), (TypeId::S64, 8)], 16);
     assert_eq!(
@@ -237,7 +350,7 @@ mod tests {
 
   #[test]
   fn an_integer_sharing_a_word_with_a_float_makes_it_a_general_purpose_one() {
-    let mut types = Types::new();
+    let mut types = table(Target::LINUX_X64);
     let float32 = types.float(FloatKind::F32);
     let id = structure(&mut types, &[(TypeId::S32, 0), (float32, 4)], 8);
     assert_eq!(
@@ -248,7 +361,7 @@ mod tests {
 
   #[test]
   fn anything_wider_than_two_words_goes_through_memory() {
-    let mut types = Types::new();
+    let mut types = table(Target::LINUX_X64);
     let id = structure(
       &mut types,
       &[(TypeId::S64, 0), (TypeId::S64, 8), (TypeId::S64, 16)],
@@ -259,10 +372,103 @@ mod tests {
 
   #[test]
   fn a_string_is_a_count_and_a_pointer() {
-    let types = Types::new();
+    let types = table(Target::LINUX_X64);
     assert_eq!(
       classify(&types, TypeId::STRING),
       Classification::Registers(vec![Eightbyte::Integer, Eightbyte::Integer])
     );
+  }
+
+  #[test]
+  fn aapcs64_puts_a_homogeneous_float_aggregate_in_a_vector_register_each() {
+    let mut types = table(Target::MACOS_ARM64);
+    let float32 = types.float(FloatKind::F32);
+    let four = structure(
+      &mut types,
+      &[(float32, 0), (float32, 4), (float32, 8), (float32, 12)],
+      16,
+    );
+    assert_eq!(
+      classify(&types, four),
+      Classification::FloatRegisters {
+        kind: FloatKind::F32,
+        count: 4
+      }
+    );
+    let float64 = types.float(FloatKind::F64);
+    let two = structure(&mut types, &[(float64, 0), (float64, 8)], 16);
+    assert_eq!(
+      classify(&types, two),
+      Classification::FloatRegisters {
+        kind: FloatKind::F64,
+        count: 2
+      }
+    );
+  }
+
+  #[test]
+  fn aapcs64_counts_a_nested_aggregate_and_an_array_as_its_leaves() {
+    let mut types = table(Target::MACOS_ARM64);
+    let float32 = types.float(FloatKind::F32);
+    let pair = structure(&mut types, &[(float32, 0), (float32, 4)], 8);
+    let nested = structure(&mut types, &[(pair, 0), (pair, 8)], 16);
+    assert_eq!(
+      classify(&types, nested),
+      Classification::FloatRegisters {
+        kind: FloatKind::F32,
+        count: 4
+      }
+    );
+    let array = types.array(float32, ArrayKind::Fixed(3));
+    let wrapped = structure(&mut types, &[(array, 0)], 12);
+    assert_eq!(
+      classify(&types, wrapped),
+      Classification::FloatRegisters {
+        kind: FloatKind::F32,
+        count: 3
+      }
+    );
+  }
+
+  #[test]
+  fn aapcs64_takes_five_floats_and_a_mixed_pair_in_general_purpose_registers() {
+    let mut types = table(Target::MACOS_ARM64);
+    let float32 = types.float(FloatKind::F32);
+    // Five is one more than AAPCS64 will spread across vector registers.
+    let array = types.array(float32, ArrayKind::Fixed(5));
+    let five = structure(&mut types, &[(array, 0)], 20);
+    assert_eq!(classify(&types, five), Classification::Memory);
+
+    // A float beside an integer is not homogeneous, so both halves arrive in
+    // general-purpose registers — which is where AAPCS64 and System V differ.
+    let float64 = types.float(FloatKind::F64);
+    let mixed = structure(&mut types, &[(float64, 0), (TypeId::S64, 8)], 16);
+    assert_eq!(
+      classify(&types, mixed),
+      Classification::Registers(vec![Eightbyte::Integer, Eightbyte::Integer])
+    );
+  }
+
+  #[test]
+  fn aapcs64_passes_anything_over_sixteen_bytes_indirectly() {
+    let mut types = table(Target::MACOS_ARM64);
+    let id = structure(
+      &mut types,
+      &[(TypeId::S64, 0), (TypeId::S64, 8), (TypeId::S64, 16)],
+      24,
+    );
+    assert_eq!(classify(&types, id), Classification::Memory);
+  }
+
+  #[test]
+  fn a_string_is_two_general_purpose_registers_on_either_target() {
+    for target in [Target::LINUX_X64, Target::MACOS_ARM64] {
+      let types = table(target);
+      assert_eq!(
+        classify(&types, TypeId::STRING),
+        Classification::Registers(vec![Eightbyte::Integer, Eightbyte::Integer]),
+        "{target}"
+      );
+    }
   }
 }

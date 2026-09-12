@@ -2,14 +2,16 @@ use inkwell::OptimizationLevel;
 use inkwell::targets::{
   CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
+use oj_types::{Cpu, Target as Machine};
 
 /// What the back end is asked to produce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
-  /// The target triple. orangejuice targets Linux x86-64 only
-  /// (`docs/spec.md` §2), so this is the default unless a test overrides it.
-  pub triple: String,
-  pub cpu: String,
+  /// What the module is built for, which is what its triple, its cpu name and
+  /// its data layout come from (`docs/spec.md` §2.1). The host unless a
+  /// metaprogram named another.
+  pub target: Machine,
+  /// The subtarget features LLVM is asked for, on top of the target's own cpu.
   pub features: String,
   /// `Llvm_Options.machine_code_optimization_setting` (**C§4**), `0`…`3`:
   /// what the target machine is built with, which is instruction selection and
@@ -115,8 +117,7 @@ pub struct PassOptions {
 impl Default for Options {
   fn default() -> Self {
     Self {
-      triple: String::from(DEFAULT_TRIPLE),
-      cpu: String::from("x86-64"),
+      target: Machine::HOST,
       features: String::new(),
       optimization: 0,
       bitcode: Bitcode::O0,
@@ -130,7 +131,11 @@ impl Default for Options {
   }
 }
 
-pub const DEFAULT_TRIPLE: &str = "x86_64-unknown-linux-gnu";
+/// The triple a build gets when nothing named a target: the host's, since
+/// that is what a `#run` has to execute on (`docs/spec.md` §2.1).
+pub fn default_triple() -> &'static str {
+  Machine::HOST.triple()
+}
 
 impl Options {
   fn level(&self) -> OptimizationLevel {
@@ -146,19 +151,35 @@ impl Options {
 /// The target machine every module is built against: its data layout is what
 /// `oj-types` computed the layouts for.
 pub fn target_machine(options: &Options) -> Result<TargetMachine, String> {
-  Target::initialize_x86(&InitializationConfig::default());
-  let triple = TargetTriple::create(&options.triple);
+  initialize(options.target.cpu);
+  let triple = TargetTriple::create(options.target.triple());
   let target = Target::from_triple(&triple).map_err(|error| error.to_string())?;
   target
     .create_target_machine(
       &triple,
-      &options.cpu,
+      options.target.cpu_name(),
       &options.features,
       options.level(),
       // A position-independent executable is what the reference links
-      // (**C§11**).
+      // (**C§11**), and on Darwin it is the only thing the linker will make.
       RelocMode::PIC,
       CodeModel::Default,
     )
-    .ok_or_else(|| format!("could not create a target machine for {}", options.triple))
+    .ok_or_else(|| {
+      format!(
+        "could not create a target machine for {}",
+        options.target.triple()
+      )
+    })
+}
+
+/// The LLVM back end a target needs, registered once each. Asking for one the
+/// build does not use costs its initializers for nothing, which is why this is
+/// per architecture rather than `initialize_all`.
+fn initialize(cpu: Cpu) {
+  let config = InitializationConfig::default();
+  match cpu {
+    Cpu::X64 => Target::initialize_x86(&config),
+    Cpu::Arm64 => Target::initialize_aarch64(&config),
+  }
 }

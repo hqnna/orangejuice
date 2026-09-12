@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn linker_is_available() -> bool {
-  Command::new(oj_link::driver())
+  Command::new(oj_link::driver(oj_types::Target::HOST))
     .arg("--version")
     .output()
     .is_ok_and(|output| output.status.success())

@@ -106,7 +106,7 @@ fn build(fixture: &Fixture, body: &str) -> Option<oj_driver::Report> {
 }
 
 fn linker_is_available() -> bool {
-  let driver = oj_link::driver();
+  let driver = oj_link::driver(oj_types::Target::HOST);
   if driver.is_absolute() {
     return driver.exists();
   }
