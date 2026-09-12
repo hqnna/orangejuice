@@ -79,11 +79,18 @@ let
       license = pkgs.lib.licenses.mit;
       mainProgram = "oj";
       maintainers = [ "Hanna Rose <me@hanna.lol>" ];
-      platforms = [ "x86_64-linux" ];
+      platforms = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
     };
   });
 
-  # The release artifact: one directory that runs on any x86_64 Linux.
+  # What a release artifact is called: the version and the platform it runs on.
+  platform =
+    if pkgs.stdenv.hostPlatform.isDarwin
+    then "${pkgs.stdenv.hostPlatform.qemuArch}-macos"
+    else "${pkgs.stdenv.hostPlatform.qemuArch}-linux";
+
+  # The release artifact: one directory that runs on any machine of its
+  # platform.
   #
   # A fully static build is not an option here. Compile-time execution resolves
   # a `#foreign` procedure through LLVM's process search generator, which is
@@ -91,11 +98,16 @@ let
   # every symbol, so `malloc` would be unreachable and no `#run` could execute
   # — `Default_Metaprogram`, which drives an ordinary build, is itself a `#run`.
   #
-  # The loader and the libraries travel with the compiler instead. `bin/oj` is
-  # a wrapper that runs the bundled `ld.so` against the bundled `lib/`, which
-  # is what frees the tree from the host's glibc: it works on a musl system
-  # too, because it brings its own.
-  portable = pkgs.runCommand "orangejuice-portable-${version}"
+  # The libraries travel with the compiler instead. How they are found back
+  # differs: see the two recipes below.
+  portable =
+    if pkgs.stdenv.hostPlatform.isDarwin then portableDarwin else portableLinux;
+
+  # On Linux the loader travels too. `bin/oj` is a wrapper that runs the
+  # bundled `ld.so` against the bundled `lib/`, which is what frees the tree
+  # from the host's glibc: it works on a musl system too, because it brings its
+  # own.
+  portableLinux = pkgs.runCommand "orangejuice-portable-${version}"
     {
       nativeBuildInputs = [ pkgs.patchelf pkgs.zstd pkgs.glibc.bin ];
       meta = oj.meta // {
@@ -103,7 +115,7 @@ let
       };
     }
     ''
-      root=orangejuice-${version}-x86_64-linux
+      root=orangejuice-${version}-${platform}
       mkdir -p "$root/bin" "$root/lib" "$root/modules"
 
       cp ${oj}/bin/oj "$root/bin/oj.real"
@@ -135,6 +147,72 @@ let
       WRAPPER
       sed -i 's/^      //' "$root/bin/oj"
       chmod +x "$root/bin/oj"
+
+      mkdir -p $out
+      tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@1 \
+        -cf - "$root" | zstd -19 -T0 -o "$out/$root.tar.zst"
+      ln -s "$root.tar.zst" "$out/orangejuice-portable.tar.zst"
+    '';
+
+  # On Darwin there is no loader to bundle: the system ABI is stable and
+  # `libSystem` and `libc++` are always there. What is not always there is the
+  # handful of libraries nix built, which a Mach-O names by absolute store
+  # path — so those are copied in and every reference to them rewritten to
+  # `@loader_path`, which the loader resolves against the file doing the
+  # referring rather than against the process.
+  #
+  # Editing a Mach-O invalidates its signature, and arm64 macOS will not run an
+  # unsigned one at all, so everything touched is re-signed ad-hoc afterwards.
+  portableDarwin = pkgs.runCommand "orangejuice-portable-${version}"
+    {
+      nativeBuildInputs = [ pkgs.darwin.cctools pkgs.darwin.sigtool pkgs.zstd ];
+      meta = oj.meta // {
+        description = "${oj.meta.description} (portable tarball)";
+      };
+    }
+    ''
+      root=orangejuice-${version}-${platform}
+      mkdir -p "$root/bin" "$root/lib" "$root/modules"
+
+      cp ${oj}/bin/oj "$root/bin/oj"
+      cp -r ${oj}/modules/. "$root/modules/"
+      cp ${src}/LICENSE "$root/LICENSE"
+      cp ${src}/README.md "$root/README.md"
+      chmod -R u+w "$root"
+
+      # Everything the binary names by store path, and everything those name in
+      # turn. `/usr/lib` is the system's and stays where it is.
+      collect() {
+        otool -L "$1" | tail -n +2 | awk '{ print $1 }' | grep '^/nix/store/' || true
+      }
+
+      pending=$(collect "$root/bin/oj")
+      while [ -n "$pending" ]; do
+        next=""
+        for lib in $pending; do
+          name=$(basename "$lib")
+          [ -e "$root/lib/$name" ] && continue
+          cp -L "$lib" "$root/lib/$name"
+          chmod u+w "$root/lib/$name"
+          next="$next $(collect "$lib")"
+        done
+        pending="$next"
+      done
+
+      # Each bundled library answers to its own name beside its referrer, and
+      # so does every reference between them.
+      for file in "$root/lib/"*.dylib; do
+        install_name_tool -id "@loader_path/$(basename "$file")" "$file"
+        for lib in $(otool -L "$file" | tail -n +2 | awk '{ print $1 }' | grep '^/nix/store/'); do
+          install_name_tool -change "$lib" "@loader_path/$(basename "$lib")" "$file"
+        done
+        codesign -f -s - "$file"
+      done
+
+      for lib in $(otool -L "$root/bin/oj" | tail -n +2 | awk '{ print $1 }' | grep '^/nix/store/'); do
+        install_name_tool -change "$lib" "@loader_path/../lib/$(basename "$lib")" "$root/bin/oj"
+      done
+      codesign -f -s - "$root/bin/oj"
 
       mkdir -p $out
       tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@1 \

@@ -144,6 +144,19 @@ impl Target {
     }
   }
 
+  /// The triple in the spelling the Rust ecosystem uses, which is what the
+  /// `cc` crate parses to find a compiler. It is not always LLVM's: Darwin is
+  /// `aarch64-apple-darwin` here and `arm64-apple-macosx` there, and handing
+  /// `cc` the LLVM spelling makes it panic rather than return an error.
+  pub fn cc_triple(self) -> &'static str {
+    match (self.os, self.cpu) {
+      (Os::Linux, Cpu::X64) => "x86_64-unknown-linux-gnu",
+      (Os::Linux, Cpu::Arm64) => "aarch64-unknown-linux-gnu",
+      (Os::Macos, Cpu::X64) => "x86_64-apple-darwin",
+      (Os::Macos, Cpu::Arm64) => "aarch64-apple-darwin",
+    }
+  }
+
   /// The LLVM cpu name, which is the baseline of the architecture rather than
   /// whatever the host happens to be: an executable is not built for this
   /// machine alone.
@@ -228,6 +241,17 @@ mod tests {
   fn the_host_is_not_cross_compiling_and_everything_else_may_be() {
     assert!(!Target::HOST.is_cross_compiling());
     assert_eq!(Target::default(), Target::HOST);
+  }
+
+  #[test]
+  fn the_cc_triple_is_the_rust_spelling_rather_than_llvms() {
+    // The `cc` crate panics on a triple it cannot parse, and Darwin is where
+    // the two spellings differ.
+    assert_eq!(Target::MACOS_ARM64.triple(), "arm64-apple-macosx");
+    assert_eq!(Target::MACOS_ARM64.cc_triple(), "aarch64-apple-darwin");
+    for target in [Target::LINUX_X64, Target::LINUX_ARM64] {
+      assert_eq!(target.triple(), target.cc_triple(), "{target}");
+    }
   }
 
   #[test]

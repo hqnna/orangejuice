@@ -49,6 +49,11 @@ pkgs.mkShell {
     pkgs.libffi
     pkgs.libxml2
     pkgs.ncurses
+    # The release artifact is a zstd tarball, and the workflow that builds one
+    # unpacks and checksums it from inside this shell — a macOS runner has
+    # neither `zstd` nor `sha256sum` of its own.
+    pkgs.zstd
+    pkgs.coreutils
   ]
   ++ debuggers
   ++ lib.optionals stdenv.hostPlatform.isLinux graphicsLibraries;

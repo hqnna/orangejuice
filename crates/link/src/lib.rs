@@ -61,9 +61,11 @@ pub fn driver(target: Target) -> PathBuf {
   if let Some(value) = std::env::var_os("CC").filter(|value| !value.is_empty()) {
     return PathBuf::from(value);
   }
+  // The `cc` crate's spelling, not LLVM's: it panics on a triple it cannot
+  // parse, and `$CC` being set is what hid that everywhere it is developed.
   let found = cc::Build::new()
-    .target(target.triple())
-    .host(Target::HOST.triple())
+    .target(target.cc_triple())
+    .host(Target::HOST.cc_triple())
     .opt_level(0)
     .cargo_metadata(false)
     .cargo_warnings(false)
@@ -416,6 +418,24 @@ mod tests {
       ..request()
     });
     assert_eq!(line.arguments.last(), Some(&String::from("-static")));
+  }
+
+  /// The `cc` crate panics — rather than returning an error — on a triple it
+  /// cannot parse, so a spelling it does not know takes the whole compiler
+  /// down at link time. It went unnoticed because `driver` answers `$CC`
+  /// first and every shell this is developed in sets it; a machine without it
+  /// got `invalid Apple target OS macosx` and an abort.
+  #[test]
+  fn every_target_triple_is_one_the_cc_crate_can_parse() {
+    for target in [Target::LINUX_X64, Target::LINUX_ARM64, Target::MACOS_ARM64] {
+      let _ = cc::Build::new()
+        .target(target.cc_triple())
+        .host(Target::HOST.cc_triple())
+        .opt_level(0)
+        .cargo_metadata(false)
+        .cargo_warnings(false)
+        .try_get_compiler();
+    }
   }
 
   #[test]

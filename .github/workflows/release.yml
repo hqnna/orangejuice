@@ -17,10 +17,26 @@ permissions:
   contents: write
 
 jobs:
+  # One job per platform orangejuice is both a host and a target for
+  # (`docs/spec.md` §2.1). Each builds its own artifact and checks it on the
+  # machine it is for — a cross-built tarball nobody ran is not a release.
   build:
-    name: build and publish
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+
+    strategy:
+      # A platform that fails should not cancel the others: which ones broke is
+      # the useful answer.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x86_64-linux
+            runner: ubuntu-latest
+          - platform: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - platform: aarch64-macos
+            runner: macos-14
 
     steps:
       - uses: actions/checkout@v4
@@ -59,32 +75,79 @@ jobs:
           ls -l dist
           echo "name=$(cd dist && echo *.tar.zst)" >> "$GITHUB_OUTPUT"
 
-      # What a downloader gets, so that a truncated transfer is visible.
+      # What a downloader gets, so that a truncated transfer is visible. Run
+      # from the dev shell: a macOS runner has `shasum` where Linux has
+      # `sha256sum`, and the release is one file of checksums either way.
       - name: Checksum
-        working-directory: dist
-        run: sha256sum *.tar.zst | tee SHA256SUMS
+        run: |
+          set -euo pipefail
+          nix develop --command \
+            sh -c 'cd dist && sha256sum ./*.tar.zst > SHA256SUMS'
+          cat dist/SHA256SUMS
 
       # The artifact is unpacked and run the way a downloader would. `env -i`
-      # is the whole point of the portable build: the tree carries its own
-      # loader and libraries, so it has to run with nothing set at all.
+      # on the first of the two is the whole point of the portable build: on
+      # Linux the tree carries its own loader and libraries, on macOS the
+      # libraries nix built, and either way it has to start with nothing set.
+      #
+      # `zstd` comes from the dev shell because macOS `tar --zstd` shells out
+      # to a `zstd` the runner does not have; the compiler under test does not,
+      # since what is being tested is that it needs nothing.
       - name: Smoke-test the artifact
         env:
           ARCHIVE: ${{ steps.stage.outputs.name }}
         run: |
           set -euo pipefail
-          tar --zstd -xf "dist/$ARCHIVE" -C "$RUNNER_TEMP"
+          # `$1`/`$2` are the inner `sh`'s, which is the point of passing them.
+          # shellcheck disable=SC2016
+          nix develop --command \
+            sh -c 'zstd -dc "$1" | tar -xf - -C "$2"' sh "dist/$ARCHIVE" "$RUNNER_TEMP"
           root="$RUNNER_TEMP/${ARCHIVE%.tar.zst}"
           env -i "$root/bin/oj" -- version
+          # Then a whole build, with the runner's environment: linking drives
+          # the platform C compiler (**C§11**), so this one needs a `PATH`.
+          # What it must *not* need is `CC` — a machine without it used to
+          # abort inside the `cc` crate rather than find a driver.
           printf '#import "Basic";\nmain :: () { print("release artifact works\\n"); }\n' > "$RUNNER_TEMP/hello.jai"
+          unset CC
           cd "$RUNNER_TEMP" && "$root/bin/oj" hello.jai -quiet -- run
 
       - uses: actions/upload-artifact@v4
         with:
-          name: orangejuice-portable
+          name: orangejuice-portable-${{ matrix.platform }}
           path: dist/*
 
+  # The release itself, once every platform has built and checked its own
+  # artifact. Notes come from the tag's message; the assets come from the jobs
+  # above.
+  publish:
+    name: publish
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: orangejuice-portable-*
+          path: downloaded
+
+      # Each job contributed its own tarball and its own SHA256SUMS; the
+      # release carries one of each tarball and one combined checksum file.
+      - name: Gather the artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find downloaded -name '*.tar.zst' -exec cp {} dist/ \;
+          (cd dist && sha256sum ./*.tar.zst | tee SHA256SUMS)
+          ls -l dist
+
       - name: Assemble the release notes
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           # `%(contents)` carries the signature of a signed tag, which is not
@@ -121,7 +184,6 @@ jobs:
       # A release published by hand keeps its own notes: this fills in only
       # what is missing, and always attaches the build.
       - name: Publish
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

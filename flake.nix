@@ -30,13 +30,6 @@
           oj = import ./nix/package.nix { inherit pkgs craneLib llvm; };
           inherit (oj.passthru) commonArgs cargoArtifacts;
 
-          # Every host builds `oj`, but only a host that is also a target can
-          # run what it builds: the package and the checks compile and execute
-          # real programs, and compile-time execution JITs target code into the
-          # compiler's own process (`docs/spec.md` §2.1). Elsewhere the dev
-          # shell is the whole output, and the suite is run from it knowing
-          # which five test binaries do not pass yet.
-          isTarget = system == "x86_64-linux";
         in
         {
           devShells.default = import ./nix/shell.nix {
@@ -44,22 +37,25 @@
             rust-analyzer = fenix.rust-analyzer;
           };
 
-          packages = lib.optionalAttrs isTarget {
+          # Every system in `systems` is both a host and a target
+          # (`docs/spec.md` §2.1), so every one of them builds the package, the
+          # release artifact and the whole check suite.
+          packages = {
             default = oj;
             oj = oj;
-            # The release artifact: `oj`, its loader and libraries, and the
+            # The release artifact: `oj`, the libraries it resolves and the
             # modules it ships, as one relocatable tree.
             portable = oj.passthru.portable;
           };
 
-          apps = lib.optionalAttrs isTarget {
+          apps = {
             default = {
               type = "app";
               program = lib.getExe oj;
             };
           };
 
-          checks = lib.optionalAttrs isTarget {
+          checks = {
             package = oj;
 
             clippy = craneLib.cargoClippy (commonArgs // {
