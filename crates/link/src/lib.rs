@@ -195,6 +195,17 @@ pub fn link_line(request: &Request) -> LinkLine {
     arguments.push(String::from("-Wl,-rpath,$ORIGIN"));
     arguments.push(String::from("-Wl,--export-dynamic"));
     arguments.push(String::from("-Wl,--build-id"));
+    // The reference links an executable at a fixed address (**C§11**). A
+    // position-independent one pays a 24-byte dynamic relocation for every
+    // pointer among its data, and the type table alone holds hundreds — a
+    // quarter of a small program's file was relocations. Darwin has no
+    // choice: arm64 macOS only loads position-independent executables.
+    if request.output_type == OutputType::Executable {
+      arguments.push(String::from("-no-pie"));
+    }
+    // DWARF is most of what a small program's file holds besides its code, and
+    // nothing reads it but a debugger, which inflates it itself.
+    arguments.push(String::from("-Wl,--compress-debug-sections=zlib"));
   }
   arguments.extend(request.additional_arguments.iter().cloned());
 
@@ -409,6 +420,41 @@ mod tests {
       Some(flags) => assert!(flags.iter().all(|flag| line.arguments.contains(flag))),
       None => assert!(line.arguments.contains(&String::from("-lz"))),
     }
+  }
+
+  #[test]
+  fn a_linux_executable_is_linked_at_a_fixed_address_with_its_debug_info_compressed() {
+    let line = link_line(&Request {
+      target: Target::LINUX_X64,
+      ..request()
+    });
+    assert!(line.arguments.contains(&String::from("-no-pie")));
+    assert!(
+      line
+        .arguments
+        .contains(&String::from("-Wl,--compress-debug-sections=zlib"))
+    );
+  }
+
+  #[test]
+  fn a_library_and_a_darwin_executable_stay_position_independent() {
+    let library = link_line(&Request {
+      target: Target::LINUX_X64,
+      output_type: OutputType::DynamicLibrary,
+      ..request()
+    });
+    assert!(!library.arguments.contains(&String::from("-no-pie")));
+    let darwin = link_line(&Request {
+      target: Target::MACOS_ARM64,
+      ..request()
+    });
+    assert!(!darwin.arguments.contains(&String::from("-no-pie")));
+    assert!(
+      !darwin
+        .arguments
+        .iter()
+        .any(|argument| argument.contains("compress-debug-sections"))
+    );
   }
 
   #[test]

@@ -322,3 +322,48 @@ fn a_c_call_body_returning_void_returns_nothing() {
   );
   assert!(listing.contains("procedure note (%0: s32) {"), "{listing}");
 }
+
+#[test]
+fn a_procedure_links_its_trace_node_through_one_generated_procedure() {
+  // The link is the same code for every procedure but the info record and the
+  // seed, so it is written once and called (**C§13**).
+  let listing = listing_of(
+    "leaf :: () -> int { return 1; }\n\
+     caller :: () -> int { return leaf(); }\n\
+     main :: () { caller(); }\n",
+  );
+  assert_eq!(
+    listing.matches("procedure __oj_trace_push").count(),
+    1,
+    "{listing}"
+  );
+  let caller = listing
+    .split("procedure caller")
+    .nth(1)
+    .and_then(|rest| rest.split("\n}\n").next())
+    .expect("caller should be lowered");
+  assert!(caller.contains("call __oj_trace_push("), "{caller}");
+}
+
+#[test]
+fn a_procedure_that_calls_nothing_keeps_no_trace_node() {
+  // Measured against the reference: a leaf reads its caller's node, because it
+  // was never given one of its own (**C§13**).
+  let listing = listing_of(
+    "leaf :: () -> int { return 1; }\n\
+     main :: () { leaf(); }\n",
+  );
+  let leaf = listing
+    .split("procedure leaf")
+    .nth(1)
+    .and_then(|rest| rest.split("\n}\n").next())
+    .expect("leaf should be lowered");
+  assert!(!leaf.contains("__oj_trace_push"), "{leaf}");
+  assert!(!leaf.contains("__oj_trace_info$leaf"), "{leaf}");
+  let init = listing
+    .split("procedure __oj_stack_trace_init")
+    .nth(1)
+    .and_then(|rest| rest.split("\n}\n").next())
+    .expect("the records should still be filled");
+  assert!(!init.contains("__oj_trace_info$leaf"), "{init}");
+}

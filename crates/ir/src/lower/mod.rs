@@ -312,6 +312,9 @@ struct Lowering<'c, 'p> {
   /// generated initializer writes into it.
   trace_infos: Vec<trace::TraceInfo>,
   trace_init: Option<ProcId>,
+  /// The generated procedure every node is linked in by, reserved the first
+  /// time a procedure keeps one.
+  trace_push: Option<ProcId>,
   /// The node the procedure in hand keeps, while it is being lowered.
   trace_frame: Option<trace::TraceFrame>,
   /// Where whatever is being lowered right now was written, which every
@@ -374,6 +377,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       trace_types: None,
       trace_infos: Vec::new(),
       trace_init: None,
+      trace_push: None,
       trace_frame: None,
       current_loc: None,
       debug_files: Vec::new(),
@@ -629,6 +633,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     // generated initializer needs before it can be written (**C§13**).
     self.emit_trace_info_init();
     self.place_type_table();
+    self.emit_trace_push();
     self.resolve_symbol_collisions();
     let type_table = crate::ir::TypeTableImage {
       symbol: self
@@ -1462,6 +1467,9 @@ impl Lowering<'_, '_> {
 /// The generated procedure that fills in the stack trace info records
 /// (**C§13**).
 const TRACE_INIT_SYMBOL: &str = "__oj_stack_trace_init";
+/// The generated procedure that links a procedure's `Stack_Trace_Node` into
+/// the context (**C§13**).
+const TRACE_PUSH_SYMBOL: &str = "__oj_trace_push";
 
 /// The symbol the `Type_Info` image takes (**L§17**).
 const TYPE_TABLE_SYMBOL: &str = "__oj_type_table";

@@ -12,6 +12,7 @@
 //! known to the module that generates it (**L§5.11**).
 
 use super::*;
+use crate::ir::{AbiParameter, ParameterKind};
 
 /// What the generated initializer writes into one procedure's info record.
 #[derive(Clone, Debug)]
@@ -87,6 +88,10 @@ impl Lowering<'_, '_> {
   }
 
   /// Links a node for the procedure being lowered into `context.stack_trace`.
+  /// The linking is one call to a generated procedure rather than written out
+  /// in every prologue: it is the same few dozen instructions for every
+  /// procedure but the info record and the seed, and at `-O0` written out it
+  /// was a seventh of a small program's code.
   pub(super) fn push_trace_node(
     &mut self,
     id: ProcId,
@@ -97,7 +102,7 @@ impl Lowering<'_, '_> {
     if !self.keeps_a_trace(flags) {
       return;
     }
-    let Some((node_type, _)) = self.trace_types() else {
+    let Some((node_type, info_type)) = self.trace_types() else {
       return;
     };
     let Some(context) = self.context_value else {
@@ -106,19 +111,186 @@ impl Lowering<'_, '_> {
     let Some((slot_offset, slot_type)) = self.member_of(self.context_type, "stack_trace") else {
       return;
     };
+    let Some((next_offset, next_type)) = self.member_of(node_type, "next") else {
+      return;
+    };
 
     let global = self.trace_info_global(id, at);
     let local = self.new_local(String::from("stack_trace_node"), node_type);
     let address = self.local_address(local);
-    self.clear(address, node_type);
-
     let slot = self.offset(context, slot_offset, slot_type);
+    let info_pointer = self.pointer_to(info_type);
+    let info = self.value(info_pointer);
+    self.emit(Inst::GlobalAddress { dest: info, global });
+    let seed_type = self.trace_seed_type(node_type);
+    let seed = self.constant(Constant::Int(trace_seed(id)), seed_type);
+    let seed = self.scalar(seed);
+
+    let push = self.reserve_trace_push(node_type, info_type, slot_type, seed_type);
+    let signature = self.procedures[push.0 as usize].type_id;
+    self.emit(Inst::Call {
+      dest: None,
+      callee: Callee::Direct(push),
+      signature,
+      arguments: vec![address, info, slot, seed],
+    });
+
+    let link = self.offset(address, next_offset, next_type);
+    let previous = self.value(next_type);
+    self.emit(Inst::Load {
+      dest: previous,
+      address: link,
+    });
+    self.trace_frame = Some(TraceFrame {
+      local,
+      context,
+      previous,
+    });
+  }
+
+  /// A procedure that makes no calls of its own keeps no node, the way the
+  /// reference compiles one (**C§13**): nothing it runs can walk the list, so
+  /// the node would only ever be read by the procedure itself, and it reads
+  /// its caller's. Whether it calls anything is only known once the body is
+  /// lowered, so the link it was given is taken back out here. `previous` is
+  /// then read from the context instead of from the node, which makes the
+  /// store every `return` does put back what was already there.
+  pub(super) fn drop_leaf_trace_node(&mut self, id: ProcId) {
+    let (Some(frame), Some(push)) = (self.trace_frame, self.trace_push) else {
+      return;
+    };
+    let is_push = |instruction: &Inst| matches!(instruction, Inst::Call { callee: Callee::Direct(callee), .. } if *callee == push);
+    let calls = self
+      .blocks
+      .iter()
+      .flat_map(|block| &block.instructions)
+      .filter(|instruction| matches!(instruction, Inst::Call { .. }) && !is_push(instruction))
+      .count();
+    if calls > 0 {
+      return;
+    }
+    let Some(arguments) = self
+      .blocks
+      .iter()
+      .flat_map(|block| &block.instructions)
+      .find_map(|instruction| match instruction {
+        Inst::Call { arguments, .. } if is_push(instruction) => Some(arguments.clone()),
+        _ => None,
+      })
+    else {
+      return;
+    };
+    let &[node, info, slot, seed] = arguments.as_slice() else {
+      return;
+    };
+    let mut dead = vec![node, info, seed];
+    for block in &mut self.blocks {
+      for instruction in &mut block.instructions {
+        if let Inst::Load { dest, address } = instruction
+          && *dest == frame.previous
+        {
+          dead.push(*address);
+          *address = slot;
+        }
+      }
+    }
+    for block in &mut self.blocks {
+      block.instructions.retain(|instruction| {
+        !is_push(instruction) && instruction.dest().is_none_or(|dest| !dead.contains(&dest))
+      });
+    }
+    self.trace_infos.retain(|info| info.procedure != id);
+  }
+
+  /// The type the node's hash is kept in, which is what the seed is passed as.
+  fn trace_seed_type(&mut self, node_type: TypeId) -> TypeId {
+    self
+      .member_of(node_type, "hash")
+      .map_or(TypeId::U64, |(_, type_id)| type_id)
+  }
+
+  /// Reserves `__oj_trace_push(node, info, slot, seed)`, whose body is written
+  /// once every procedure has been lowered.
+  fn reserve_trace_push(
+    &mut self,
+    node_type: TypeId,
+    info_type: TypeId,
+    slot_type: TypeId,
+    seed_type: TypeId,
+  ) -> ProcId {
+    if let Some(id) = self.trace_push {
+      return id;
+    }
+    let node_pointer = self.pointer_to(node_type);
+    let info_pointer = self.pointer_to(info_type);
+    let slot_pointer = self.pointer_to(slot_type);
+    let arguments = vec![node_pointer, info_pointer, slot_pointer, seed_type];
+    let mut signature = oj_types::ProcedureType::new(arguments.clone(), Vec::new());
+    signature.flags |= oj_types::ProcedureFlags::HAS_NO_CONTEXT;
+    let type_id = self.checker.types_table_mut().procedure(signature);
+    let parameters = arguments
+      .iter()
+      .map(|type_id| AbiParameter {
+        type_id: *type_id,
+        kind: ParameterKind::Value,
+        class: None,
+      })
+      .collect();
+    let id = ProcId(self.procedures.len() as u32);
+    self.procedures.push(Procedure {
+      symbol: String::from(TRACE_PUSH_SYMBOL),
+      name: String::from(TRACE_PUSH_SYMBOL),
+      type_id,
+      parameters: arguments,
+      returns: Vec::new(),
+      flags: ProcedureFlags::COMPILER_GENERATED | ProcedureFlags::NO_CONTEXT,
+      library: None,
+      abi: Abi {
+        parameters,
+        direct_return: None,
+        return_class: None,
+        variadic: false,
+        c_call: false,
+      },
+      locals: Vec::new(),
+      blocks: Vec::new(),
+      value_types: Vec::new(),
+      entry: BlockId(0),
+      location: None,
+    });
+    self.trace_push = Some(id);
+    id
+  }
+
+  /// The body of `__oj_trace_push`: clear the node, point it at its info
+  /// record and at the node it hides, count and hash the path, and make it the
+  /// context's (**C§13**).
+  pub(super) fn emit_trace_push(&mut self) {
+    let Some(id) = self.trace_push else {
+      return;
+    };
+    let Some((node_type, _)) = self.trace_types() else {
+      return;
+    };
+    let Some((_, slot_type)) = self.member_of(self.context_type, "stack_trace") else {
+      return;
+    };
+    let parameters = self.procedures[id.0 as usize].abi.parameters.clone();
+    self.start_procedure();
+    let incoming: Vec<ValueId> = parameters
+      .iter()
+      .map(|parameter| self.value(parameter.type_id))
+      .collect();
+    let &[address, info, slot, seed] = incoming.as_slice() else {
+      return;
+    };
+
+    self.clear(address, node_type);
     let previous = self.value(slot_type);
     self.emit(Inst::Load {
       dest: previous,
       address: slot,
     });
-
     if let Some((offset, type_id)) = self.member_of(node_type, "next") {
       let field = self.offset(address, offset, type_id);
       self.emit(Inst::Store {
@@ -128,25 +300,23 @@ impl Lowering<'_, '_> {
     }
     if let Some((offset, type_id)) = self.member_of(node_type, "info") {
       let field = self.offset(address, offset, type_id);
-      let info = self.value(type_id);
-      self.emit(Inst::GlobalAddress { dest: info, global });
       self.emit(Inst::Store {
         address: field,
         value: info,
       });
     }
-
-    self.fill_depth_and_hash(node_type, address, previous, slot_type, id);
-
+    self.fill_depth_and_hash(node_type, address, previous, slot_type, seed);
     self.emit(Inst::Store {
       address: slot,
       value: address,
     });
-    self.trace_frame = Some(TraceFrame {
-      local,
-      context,
-      previous,
-    });
+    self.terminate(Terminator::Return(Vec::new()));
+
+    let procedure = &mut self.procedures[id.0 as usize];
+    procedure.locals = std::mem::take(&mut self.locals);
+    procedure.blocks = std::mem::take(&mut self.blocks);
+    procedure.value_types = std::mem::take(&mut self.value_types);
+    procedure.entry = BlockId(0);
   }
 
   /// `call_depth` counts from the outermost node and `hash` mixes the caller's
@@ -159,15 +329,13 @@ impl Lowering<'_, '_> {
     address: ValueId,
     previous: ValueId,
     pointer_type: TypeId,
-    id: ProcId,
+    seed: ValueId,
   ) {
     let depth = self.member_of(node_type, "call_depth");
     let hash = self.member_of(node_type, "hash");
     if depth.is_none() && hash.is_none() {
       return;
     }
-    let seed = i128::from(id.0) * 0x9e37_79b9 + 0x632b_e59b;
-
     let null = self.constant(Constant::Null, pointer_type);
     let null = self.scalar(null);
     let condition = self.value(TypeId::BOOL);
@@ -236,12 +404,10 @@ impl Lowering<'_, '_> {
       });
     }
     if let Some((offset, type_id)) = hash {
-      let value = self.constant(Constant::Int(seed), type_id);
-      let value = self.scalar(value);
       let field = self.offset(address, offset, type_id);
       self.emit(Inst::Store {
         address: field,
-        value,
+        value: seed,
       });
     }
     self.terminate(Terminator::Jump(join));
@@ -250,9 +416,7 @@ impl Lowering<'_, '_> {
 
   /// `(outer ^ seed) * prime`, which is the FNV step: cheap, and different for
   /// every path through the program.
-  fn mix_hash(&mut self, outer: ValueId, seed: i128, type_id: TypeId) -> ValueId {
-    let seed = self.constant(Constant::Int(seed), type_id);
-    let seed = self.scalar(seed);
+  fn mix_hash(&mut self, outer: ValueId, seed: ValueId, type_id: TypeId) -> ValueId {
     let mixed = self.value(type_id);
     self.emit(Inst::Binary {
       dest: mixed,
@@ -496,4 +660,10 @@ impl Lowering<'_, '_> {
     procedure.value_types = std::mem::take(&mut self.value_types);
     procedure.entry = BlockId(0);
   }
+}
+
+/// What a procedure's node hash starts from, different for every procedure of
+/// the program (**C§13**).
+fn trace_seed(id: ProcId) -> i128 {
+  i128::from(id.0) * 0x9e37_79b9 + 0x632b_e59b
 }

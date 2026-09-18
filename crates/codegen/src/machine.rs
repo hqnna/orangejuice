@@ -80,14 +80,20 @@ pub enum Bitcode {
 impl Bitcode {
   /// The pass pipeline LLVM parses, or `None` when there is nothing to run —
   /// `default<O0>` still costs a walk over the module for no gain.
+  ///
+  /// Each level ends with `globalopt,globaldce`. LLVM's own pipeline looks for
+  /// globals nothing reads before it inlines, and the `#Context`
+  /// `__jai_runtime_init` fills in only becomes one afterwards: its address is
+  /// an argument until then. Deleting it deletes the type table its
+  /// `context_info` points at, which was most of a `print("hi")`.
   pub fn pipeline(self) -> Option<&'static str> {
     match self {
       Self::O0 => None,
-      Self::O1 => Some("default<O1>"),
-      Self::O2 => Some("default<O2>"),
-      Self::O3 => Some("default<O3>"),
-      Self::Os => Some("default<Os>"),
-      Self::Oz => Some("default<Oz>"),
+      Self::O1 => Some("default<O1>,globalopt,globaldce"),
+      Self::O2 => Some("default<O2>,globalopt,globaldce"),
+      Self::O3 => Some("default<O3>,globalopt,globaldce"),
+      Self::Os => Some("default<Os>,globalopt,globaldce"),
+      Self::Oz => Some("default<Oz>,globalopt,globaldce"),
     }
   }
 

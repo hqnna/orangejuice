@@ -209,6 +209,7 @@ impl Lowering<'_, '_> {
       }
     }
 
+    self.drop_leaf_trace_node(id);
     let procedure = &mut self.procedures[id.0 as usize];
     procedure.abi = abi;
     procedure.locals = std::mem::take(&mut self.locals);

@@ -160,11 +160,52 @@ isFormatter :: (info: *Type_Info_Struct) -> *Type_Info_Struct_Member {
 
 // --------------------------------------------------------------- the API ---
 
+// `print("text")` with nothing else is this one: a candidate without varargs
+// beats one with them when both match (**L§7.5**), so a program that only ever
+// prints text never reaches the formatter — not even in a build that inlines
+// nothing. It takes the format string alone on purpose: `print("x", true)`
+// prints `xtrue`, and a second parameter here would take the `true`.
+print :: (format_string: string) -> (bytes_printed: s64) {
+    return write_unformatted(format_string, false);
+} @PrintLike
+
 print :: (format_string: string, args: .. Any, to_standard_error := false) -> (bytes_printed: s64) {
+    if !args.count  return write_unformatted(format_string, to_standard_error);
     builder: String_Builder;
     print_to_builder(*builder, format_string, ..args);
     return write_builder(*builder, to_standard_error = to_standard_error);
 } @PrintLike
+
+// What `format_to_builder` makes of a format string with no arguments, written
+// straight out: `%%` is one `%`, and a `%` or `%N` with nothing to name is a
+// `%` of its own. Nothing here needs a builder or the context, so a `print`
+// that is only ever handed text costs what `write_string` does.
+write_unformatted :: (format: string, to_standard_error: bool) -> s64 #no_context {
+    written := 0;
+    at := 0;
+    while at < format.count {
+        start := at;
+        while at < format.count && format[at] != #char "%"  at += 1;
+        if at > start {
+            run: string;
+            run.data = format.data + start;
+            run.count = at - start;
+            write_string(run, to_standard_error);
+            written += run.count;
+        }
+        if at == format.count  break;
+
+        at += 1;
+        if at < format.count && format[at] == #char "%" {
+            at += 1;
+        } else {
+            while at < format.count && format[at] >= #char "0" && format[at] <= #char "9"  at += 1;
+        }
+        write_string("%", to_standard_error);
+        written += 1;
+    }
+    return written;
+}
 
 // The formatted text in storage the caller owns, out of `context.allocator`.
 sprint :: (format_string: string, args: .. Any) -> string #must {

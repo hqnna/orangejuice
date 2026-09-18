@@ -53,6 +53,12 @@ struct Built {
 }
 
 fn build_and_run(body: &str) -> Option<Built> {
+  build_and_run_with(body, oj_driver::BuildOptions::new()).map(|(built, _)| built)
+}
+
+/// Builds with the options given and runs the result, handing back the
+/// executable's bytes too.
+fn build_and_run_with(body: &str, options: oj_driver::BuildOptions) -> Option<(Built, Vec<u8>)> {
   if !linker_is_available() {
     eprintln!("skipping: no C driver on PATH to link with");
     return None;
@@ -62,7 +68,6 @@ fn build_and_run(body: &str) -> Option<Built> {
   let path = directory.path().join("program.jai");
   std::fs::write(&path, format!("{PRELUDE}\n{body}")).expect("the input should be writable");
 
-  let options = oj_driver::BuildOptions::new();
   // SAFETY: the tests in this file are the only ones that read it, and cargo
   // runs each integration test binary in its own process.
   unsafe {
@@ -78,10 +83,14 @@ fn build_and_run(body: &str) -> Option<Built> {
   let output = Command::new(&executable)
     .output()
     .expect("the produced program should run");
-  Some(Built {
-    output: String::from_utf8_lossy(&output.stdout).into_owned(),
-    status: output.status.code().unwrap_or(-1),
-  })
+  let bytes = std::fs::read(&executable).expect("the executable should be readable");
+  Some((
+    Built {
+      output: String::from_utf8_lossy(&output.stdout).into_owned(),
+      status: output.status.code().unwrap_or(-1),
+    },
+    bytes,
+  ))
 }
 
 fn linker_is_available() -> bool {
@@ -3897,6 +3906,19 @@ fn every_procedure_keeps_a_stack_trace_node() {
 }
 
 #[test]
+fn a_procedure_that_calls_nothing_reads_its_callers_trace_node() {
+  // Measured against the reference: a leaf keeps no node of its own, so
+  // `context.stack_trace` inside one is the frame that called it (**C§13**).
+  assert_output(
+    "#import \"Basic\";\n\
+     leaf :: () -> string { return context.stack_trace.info.name; }\n\
+     caller :: () { name := leaf(); put(name); put(\"\\n\"); }\n\
+     main :: () { caller(); }\n",
+    "caller\n",
+  );
+}
+
+#[test]
 fn a_stack_trace_node_counts_its_depth_and_names_the_calling_line() {
   // The node's `call_depth` counts from the outermost frame and its
   // `line_number` is the line of the call that frame is making (**C§13**).
@@ -5906,4 +5928,57 @@ fn an_ifx_branch_written_as_a_bare_literal_takes_the_other_branchs_type() {
      }\n",
     "7\n0\n",
   );
+}
+
+#[test]
+fn print_without_arguments_writes_what_the_formatter_would() {
+  // `print` hands text with nothing to format straight to `write_string`, and
+  // that has to be byte for byte what `format_to_builder` makes of it: `%%` is
+  // one `%`, and a `%` or `%N` naming nothing is a `%` of its own.
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       written := print(\"a%%b %1 c% d%0e 100%\\n\");\n  \
+       none: [] Any;\n  \
+       spread := print(\"a%%b %1 c% d%0e 100%\\n\", ..none);\n  \
+       formatted := sprint(\"a%%b %1 c% d%0e 100%\\n\");\n  \
+       write_string(formatted);\n  \
+       put_number(written);\n  \
+       put_number(spread);\n  \
+       put_number(formatted.count);\n\
+     }\n",
+    "a%b % c% d%e 100%\na%b % c% d%e 100%\na%b % c% d%e 100%\n18\n18\n18\n",
+  );
+}
+
+#[test]
+fn a_print_of_plain_text_costs_what_write_string_does() {
+  // `print("hi")` binds to the overload without varargs (**L§7.5**), so the
+  // formatter is not reached even where nothing is inlined. Optimized, nothing
+  // in it reads the context either, and the context is what kept the type
+  // table in the executable (**C§13**): what is left is a `write`, the way
+  // `write_string` is.
+  let mut release = oj_driver::BuildOptions::new();
+  release.optimization = oj_driver::Optimization::Optimized;
+  release.stack_trace = false;
+  for (options, optimized) in [(oj_driver::BuildOptions::new(), false), (release, true)] {
+    let Some((built, bytes)) = build_and_run_with(
+      "#import \"Basic\";\nmain :: () { print(\"hi\\n\"); }\n",
+      options,
+    ) else {
+      return;
+    };
+    assert_eq!(built.output, "hi\n");
+    let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+    assert!(
+      !contains(b"format_to_builder"),
+      "the formatter should be gone"
+    );
+    if optimized {
+      assert!(
+        !contains(b"__oj_type_table"),
+        "the type table should be gone"
+      );
+    }
+  }
 }

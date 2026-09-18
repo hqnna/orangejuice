@@ -99,7 +99,6 @@ check_print_calls :: (tc: Typechecked(Code_Procedure_Body)) {
         // A header whose shape makes no sense is the `#PrintLike` itself being
         // wrong, which is not this call's fault.
         if format_string_index < 0  continue;
-        if varargs_index       < 0  continue;
         if format_string_index >= call.arguments_sorted.count  continue;
         if varargs_index       >= call.arguments_sorted.count  continue;
 
@@ -111,15 +110,18 @@ check_print_calls :: (tc: Typechecked(Code_Procedure_Body)) {
 
         number_of_percents := count_percents(format_string._string, format_string);
 
-        va_expr := call.arguments_sorted[varargs_index];
-        if !va_expr  continue;
-        if va_expr.kind != .MAKE_VARARGS {
-            // An array in the slot is a spread we cannot count.
-            continue;
+        // A header with no `..` at all is one that is only ever given the format
+        // string — `Basic.print`'s overload for text with nothing to format.
+        number_of_varargs := 0;
+        if varargs_index >= 0 {
+            va_expr := call.arguments_sorted[varargs_index];
+            if !va_expr  continue;
+            if va_expr.kind != .MAKE_VARARGS {
+                // An array in the slot is a spread we cannot count.
+                continue;
+            }
+            number_of_varargs = (cast(*Code_Make_Varargs) va_expr).expressions.count;
         }
-
-        make := cast(*Code_Make_Varargs) va_expr;
-        number_of_varargs := make.expressions.count;
 
         if number_of_percents == number_of_varargs  continue;
 
@@ -152,7 +154,8 @@ is_printlike :: (header: *Code_Procedure_Header) -> bool {
     return false;
 }
 
-// The format string is the parameter before the `..` one.
+// The format string is the parameter before the `..` one, or the last one when
+// there is no `..`.
 get_argument_indices_of_format_string_and_varargs :: (proc: *Code_Procedure_Header) -> (format_string_index: int, varargs_index: int) {
     varargs_index := -1;
     for proc.arguments {
@@ -165,7 +168,7 @@ get_argument_indices_of_format_string_and_varargs :: (proc: *Code_Procedure_Head
         }
     }
 
-    if varargs_index == -1  return -1, -1;
+    if varargs_index == -1  return proc.arguments.count - 1, -1;
     // Varargs first leaves no room for a format string before it.
     if varargs_index == 0   return -1, 0;
 
