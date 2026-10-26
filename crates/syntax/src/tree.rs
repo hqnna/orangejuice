@@ -246,6 +246,10 @@ impl TreePrinter<'_> {
         self.optional("alignment", node.alignment_expression);
         self.children("modify", &node.modify_directives);
         self.children("note", &node.notes);
+        self.optional("tag", node.tag);
+        for binding in &node.bindings {
+          self.child("binding", binding.value);
+        }
         self.optional("block", node.block);
       }
       NodeData::CommaSeparatedArguments { arguments } => {

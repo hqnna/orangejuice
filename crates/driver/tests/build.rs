@@ -7106,3 +7106,49 @@ fn a_code_value_in_a_variable_reaches_a_macro_as_what_it_holds() {
     "a_constant :: 10\n",
   );
 }
+
+#[test]
+fn a_tagged_union_lays_its_tag_before_its_variants_and_describes_them() {
+  // **L§8.8**: the tag first, the variants together after it; literals and
+  // defaults through the tag; `Type_Info` lists the bindings, at compile time
+  // and at runtime; `print` shows the variant the tag selects.
+  assert_output(
+    "#import \"Basic\";\n\
+     Kind :: enum u8 { BOOL; INT; STR; }\n\
+     Value :: union kind: Kind = .INT { .BOOL,, b: bool; .INT,, i: s64; .STR,, s: string; }\n\
+     Tags :: enum s8 { FIRST; SECOND; THIRD :: -33; }\n\
+     Group :: union tag: Tags { first: string; .SECOND,, second: s32 = ---; .THIRD,, third: u8 = ---; }\n\
+     Typed :: union kind: Type = u16 { u16,, a: s8; s32,, b: u16; }\n\
+     Holder :: struct { x: u8; union tag: enum { A; B; } { .A,, a: string; .B,, b: float64; }; y: u8; }\n\
+     offset :: (T: Type, name: string) -> s64 {\n\
+       info := cast(*Type_Info_Struct) T;\n\
+       for info.members  if it.name == name  return it.offset_in_bytes;\n\
+       return -1;\n\
+     }\n\
+     describe :: (T: Type) -> string {\n\
+       info := cast(*Type_Info_Struct) T;\n\
+       b: String_Builder;\n\
+       print_to_builder(*b, \"% % %\", info.name, (info.textual_flags & .UNION_IS_TAGGED) != 0, info.members[0].name);\n\
+       for info.tagged_union_bindings {\n\
+         if info.members[0].type.type == .TYPE  print_to_builder(*b, \" %=%\", info.members[it.member_index].name, (cast(*Type_Info) it.constant_value).type);\n\
+         else print_to_builder(*b, \" %=%\", info.members[it.member_index].name, cast(s64) it.constant_value);\n\
+       }\n\
+       return builder_to_string(*b);\n\
+     }\n\
+     AT_COMPILE_TIME :: #run describe(Group);\n\
+     main :: () {\n\
+       print(\"% % % %\\n\", size_of(Value), offset(Value, \"kind\"), offset(Value, \"i\"), offset(Value, \"s\"));\n\
+       print(\"% % %\\n\", size_of(Holder), offset(Holder, \"y\"), size_of(Group));\n\
+       v: Value;\n\
+       print(\"% %\\n\", v.kind, v);\n\
+       v = .{kind = .STR, s = \"hi\"};\n\
+       print(\"% % %\\n\", v.s, v, Typed.{kind = s32, b = 300});\n\
+       h: Holder;\n\
+       h.tag = .B; h.b = 2.5;\n\
+       print(\"% % %\\n\", h.tag, h.b, Group.{tag = .THIRD, third = 9});\n\
+       print(\"%\\n%\\n%\\n\", describe(Value), AT_COMPILE_TIME, describe(Typed));\n\
+     }\n",
+    "24 0 8 8\n40 32 24\nINT {INT, 0}\nhi {STR, \"hi\"} {s32, 300}\nB 2.5 {THIRD, 9}\n\
+     Value true kind b=0 i=1 s=2\nGroup true tag second=1 third=-33\nTyped true kind a=INTEGER b=INTEGER\n",
+  );
+}

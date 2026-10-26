@@ -536,6 +536,8 @@ bitflags! {
     const TYPE_INFO_NONE = 0x8;
     const TYPE_INFO_NO_SIZE_COMPLAINT = 0x10;
     const TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS = 0x20;
+    /// `union kind: Kind { … }` (**L§8.8**).
+    const UNION_IS_TAGGED = 0x40;
   }
 }
 
@@ -825,6 +827,19 @@ pub struct StructNode {
   pub notes: Vec<NodeId>,
   pub textual_flags: StructFlags,
   pub alignment_expression: Option<NodeId>,
+  /// A tagged union's tag (`union kind: Kind { … }`, **L§8.8**): a
+  /// declaration that is also the first statement of `block`, so that it is
+  /// declared, typed and initialized the way any member is.
+  pub tag: Option<NodeId>,
+  /// The variants a tagged union binds to a tag value: `.INT ,, value: s64;`.
+  pub bindings: Vec<UnionBinding>,
+}
+
+/// One `value ,, member` of a tagged union's body (**L§8.8**).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UnionBinding {
+  pub value: NodeId,
+  pub member: NodeId,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -67,6 +67,7 @@ struct Records {
   array: Option<Record>,
   enumeration: Option<Record>,
   variant: Option<Record>,
+  binding: Option<Record>,
   tags: HashMap<String, u32>,
 }
 
@@ -288,6 +289,10 @@ impl TypeTable {
       || set & TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS != 0;
     let members = self.member_array(checker, definition, &info.members, erase);
     self.write_field_view(checker, record, at, "members", members);
+    if !info.tag_bindings.is_empty() {
+      let bindings = self.binding_array(checker, &info);
+      self.write_field_view(checker, record, at, "tagged_union_bindings", bindings);
+    }
 
     // A struct that starts as anything other than all zeroes describes that
     // with a generated `initializer_of(T)` (**L§17**), so that a program
@@ -365,6 +370,52 @@ impl TypeTable {
       self.write_field_i64(checker, record, at, "offset_into_constant_storage", -1);
     }
     (base, count as u64)
+  }
+
+  /// A tagged union's `tagged_union_bindings` (**L§8.8**). A binding names its
+  /// member by index into the `members` view, which lists only the members
+  /// the struct declares itself.
+  fn binding_array(&mut self, checker: &mut Checker, info: &oj_types::StructInfo) -> (u64, u64) {
+    let Some(record) = self.records(checker).binding else {
+      return (0, 0);
+    };
+    let (size, alignment) = match checker.layout(record.type_id) {
+      Some(layout) => (layout.size.max(1), layout.alignment.max(1)),
+      None => return (0, 0),
+    };
+    let declared_index = |member: usize| {
+      info.members[..member]
+        .iter()
+        .filter(|member| !member.flags.contains(oj_types::MemberFlags::IMPORTED))
+        .count() as i64
+    };
+    let entries: Vec<(i64, oj_types::TagValue)> = info
+      .tag_bindings
+      .iter()
+      .map(|binding| (declared_index(binding.member), binding.value))
+      .collect();
+    let types: Vec<Option<u64>> = entries
+      .iter()
+      .map(|(_, value)| match value {
+        oj_types::TagValue::Type(type_id) => Some(self.offset_of(checker, *type_id)),
+        oj_types::TagValue::Int(_) => None,
+      })
+      .collect();
+    let base = self.place(size * entries.len() as u64, alignment);
+    for (index, ((member, value), described)) in entries.into_iter().zip(types).enumerate() {
+      let at = base + size * index as u64;
+      self.write_field_i64(checker, record, at, "member_index", member);
+      match (value, described) {
+        (_, Some(target)) => {
+          self.write_field_pointer(checker, record, at, "constant_value", target)
+        }
+        (oj_types::TagValue::Int(number), None) => {
+          self.write_field_i64(checker, record, at, "constant_value", number as i64)
+        }
+        _ => {}
+      }
+    }
+    (base, info.tag_bindings.len() as u64)
   }
 
   fn fill_enum(
@@ -661,6 +712,7 @@ impl Records {
       array: lookup(checker, "Type_Info_Array"),
       enumeration: lookup(checker, "Type_Info_Enum"),
       variant: lookup(checker, "Type_Info_Variant"),
+      binding: lookup(checker, "Type_Info_Tagged_Union_Binding"),
       tags,
     }
   }

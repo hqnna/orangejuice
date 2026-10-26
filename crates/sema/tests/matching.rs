@@ -700,6 +700,16 @@ fn a_must_return_value_that_is_dropped_is_reported() {
 }
 
 #[test]
+fn a_tagged_union_binds_its_variants_to_constants() {
+  // **L§8.8**: a binding is a constant of the tag's type.
+  accepts("K :: enum { A; B; }\nU :: union k: K { .A ,, a: s64; .B ,, b: float; }\n");
+  assert_eq!(
+    errors("n := 1;\nU :: union k: s64 { n ,, a: s64; }\n"),
+    vec!["A tagged union binds a variant to a constant.".to_string()]
+  );
+}
+
+#[test]
 fn a_return_may_leave_out_the_values_that_have_defaults() {
   accepts(
     "

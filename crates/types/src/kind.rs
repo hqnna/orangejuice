@@ -274,6 +274,9 @@ bitflags! {
     const TYPE_INFO_NONE = 0x8;
     const TYPE_INFO_NO_SIZE_COMPLAINT = 0x10;
     const TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS = 0x20;
+    /// A tagged union (**L§8.8**): not a bit 0.2.009 has, so not one whose
+    /// value was measured.
+    const UNION_IS_TAGGED = 0x40;
   }
 }
 
@@ -344,6 +347,24 @@ pub struct StructInfo {
   /// positional struct literal stops before them.
   pub overlay_from: Option<usize>,
   pub polymorph_source: Option<StructId>,
+  /// A tagged union's variants that were bound to a tag value (**L§8.8**),
+  /// by index into `members`. The tag is `members[0]`.
+  pub tag_bindings: Vec<TagBinding>,
+}
+
+/// One `value ,, member` of a tagged union (**L§8.8**).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TagBinding {
+  pub member: usize,
+  pub value: TagValue,
+}
+
+/// What a tag value is: a number for an integer or enum tag, a type for a
+/// `Type` one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TagValue {
+  Int(i128),
+  Type(TypeId),
 }
 
 impl StructInfo {
@@ -358,11 +379,18 @@ impl StructInfo {
       complete: false,
       overlay_from: None,
       polymorph_source: None,
+      tag_bindings: Vec::new(),
     }
   }
 
   pub fn is_union(&self) -> bool {
     self.textual_flags.contains(StructTextualFlags::UNION)
+  }
+
+  pub fn is_tagged_union(&self) -> bool {
+    self
+      .textual_flags
+      .contains(StructTextualFlags::UNION_IS_TAGGED)
   }
 
   pub fn member(&self, name: Symbol) -> Option<&StructMember> {

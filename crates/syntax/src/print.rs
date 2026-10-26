@@ -1484,10 +1484,54 @@ impl Printer<'_> {
       self.expression(*note);
     }
 
+    if let Some(tag) = node.tag {
+      self.write(" ");
+      self.declaration(tag, true);
+      if let Some(block) = node.block {
+        self.write(" ");
+        self.tagged_union_body(block, tag, &node.bindings);
+      }
+      return;
+    }
+
     if let Some(block) = node.block {
       self.write(" ");
       self.block(block, BlockForm::Statements);
     }
+  }
+
+  /// A tagged union's body without its tag, which the header wrote, and with
+  /// each bound variant's `value ,,` in front of it (**L§8.8**).
+  fn tagged_union_body(&mut self, block: NodeId, tag: NodeId, bindings: &[UnionBinding]) {
+    let NodeData::Block(body) = self.ast.data(block) else {
+      return;
+    };
+    let statements = body.statements.clone();
+    self.write("{\n");
+    self.depth += 1;
+    for (index, statement) in statements.iter().copied().enumerate() {
+      if statement == tag {
+        continue;
+      }
+      self.indent();
+      if let Some(binding) = bindings.iter().find(|binding| binding.member == statement) {
+        self.expression(binding.value);
+        self.write(" ,, ");
+      }
+      self.expression(statement);
+      // A binding value after a statement that ends in a brace would read as
+      // an operand of it (`struct { … } -12`), so the `;` is written anyway.
+      let next_is_bound = statements
+        .get(index + 1)
+        .is_some_and(|next| bindings.iter().any(|binding| binding.member == *next));
+      if needs_semicolon(self.ast, statement) || next_is_bound {
+        self.write(";");
+      }
+      self.write("\n");
+    }
+    self.depth -= 1;
+    self.indent();
+    self.write("}");
   }
 
   fn enum_node(&mut self, node: &EnumNode) {

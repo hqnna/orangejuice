@@ -144,6 +144,10 @@ Type_Info_Struct :: struct {
     initializer:             (*void) #no_context;
     constant_storage:        [] u8;
     notes:                   [] string;
+    // A tagged union's variants that were bound to a tag value (L§8.8): not
+    // a member 0.2.009 has, and the betas after it do not say where theirs
+    // sits, so it is last.
+    tagged_union_bindings:   [] Type_Info_Tagged_Union_Binding;
 
     Struct_Status_Flags :: enum_flags u32 {
         INCOMPLETE :: 0x1;
@@ -164,7 +168,16 @@ Type_Info_Struct :: struct {
         TYPE_INFO_NONE :: 0x8;
         TYPE_INFO_NO_SIZE_COMPLAINT :: 0x10;
         TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS :: 0x20;
+        UNION_IS_TAGGED :: 0x40;
     }
+}
+
+// One `value ,, member` of a tagged union (L§8.8): the index of the member
+// in `members`, and the tag value that selects it — the integer for an
+// integer or enum tag, the `*Type_Info` for a `Type` one.
+Type_Info_Tagged_Union_Binding :: struct {
+    member_index:   s64;
+    constant_value: u64;
 }
 
 Type_Info_Array :: struct {

@@ -30,6 +30,14 @@ fn ends_with_a_here_string(ast: &Ast, statement: NodeId) -> bool {
 fn final_node(ast: &Ast, statement: NodeId) -> NodeId {
   let mut node = statement;
   match ast.data(statement) {
+    // `apple: struct { … } = ---;` ends in `---`, not in the struct's brace.
+    NodeData::Declaration(declaration)
+      if declaration
+        .flags
+        .contains(crate::ast::DeclarationFlags::IS_UNINITIALIZED) =>
+    {
+      return statement;
+    }
     NodeData::Declaration(declaration) => match (declaration.expression, declaration.type_inst) {
       (Some(expression), _) => node = expression,
       (None, Some(type_inst)) => node = type_inst,

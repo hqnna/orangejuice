@@ -938,10 +938,18 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
         return member.offset_in_bytes >= covered || member.type.runtime_size <= 0;
     }
 
+    // A tagged union shows its tag and the variant the tag selects (L§8.8).
+    tagged := (info.textual_flags & .UNION_IS_TAGGED) != 0;
+    active := ifx tagged then active_variant(data, info) else -1;
+    skipped :: (index: s64) -> bool #expand {
+        return tagged && index != 0 && index != active;
+    }
+
     printable := 0;
     covered := 0;
     for * member: info.members {
-        if !shown(member, covered)  continue;
+        if skipped(it_index)  continue;
+        if !tagged && !shown(member, covered)  continue;
         printable += 1;
         covered = max(covered, member.offset_in_bytes + member.type.runtime_size);
     }
@@ -958,7 +966,8 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
     written := 0;
     covered = 0;
     for * member: info.members {
-        if !shown(member, covered)  continue;
+        if skipped(it_index)  continue;
+        if !tagged && !shown(member, covered)  continue;
         covered = max(covered, member.offset_in_bytes + member.type.runtime_size);
 
         // Long form puts a separator after every field, the last one included;
@@ -985,6 +994,44 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
     }
     append(builder, format.end_string);
 }
+// Which member of a tagged union its tag selects (L§8.8): the one bound to
+// the tag's value, or else — for an integer or enum tag — the variant whose
+// position the value is. -1 when it selects none.
+active_variant :: (data: *void, info: *Type_Info_Struct) -> s64 {
+    if !info.members.count  return -1;
+    tag := *info.members[0];
+    at := cast(*u8) data + tag.offset_in_bytes;
+    bits: u64;
+    numeric := true;
+    if tag.type.type == {
+        case .TYPE;
+            bits = cast(u64) (cast(**Type_Info) at).*;
+            numeric = false;
+        case .ENUM;
+            internal := (cast(*Type_Info_Enum) tag.type).internal_type;
+            bits = cast(u64) read_tag_integer(at, internal.runtime_size, internal.signed);
+        case .INTEGER;
+            integer := cast(*Type_Info_Integer) tag.type;
+            bits = cast(u64) read_tag_integer(at, integer.runtime_size, integer.signed);
+        case;
+            return -1;
+    }
+    for info.tagged_union_bindings  if it.constant_value == bits  return it.member_index;
+    if !numeric  return -1;
+    position := cast(s64) bits + 1;
+    if position < 1 || position >= info.members.count  return -1;
+    return position;
+}
+
+read_tag_integer :: (at: *u8, size: s64, signed: bool) -> s64 {
+    if size == {
+        case 1; return ifx signed then cast(s64) (cast(*s8) at).* else cast(s64) at.*;
+        case 2; return ifx signed then cast(s64) (cast(*s16) at).* else cast(s64) (cast(*u16) at).*;
+        case 4; return ifx signed then cast(s64) (cast(*s32) at).* else cast(s64) (cast(*u32) at).*;
+        case;   return (cast(*s64) at).*;
+    }
+}
+
 // A long array is cut short rather than filling the terminal; -1 never stops.
 append_array :: (builder: *String_Builder, data: *void, info: *Type_Info_Array, format: FormatArray) {
     count: s64;

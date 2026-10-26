@@ -1794,6 +1794,10 @@ impl Parser<'_> {
   fn parse_postfix(&mut self, start: u32, mut expression: NodeId) -> Option<NodeId> {
     loop {
       match self.kind() {
+        // A struct or enum written out ends at its brace: in a body whose
+        // members need no `;` after one, `.next ,, …` on the next line is the
+        // next statement, not a member of the type (Focus).
+        TokenKind::DOT if self.is_braced_aggregate(expression) => break,
         TokenKind::DOT => {
           if self.kind_at(1) == TokenKind::OPEN_PAREN {
             self.bump();
@@ -2973,6 +2977,8 @@ impl Parser<'_> {
       notes: Vec::new(),
       textual_flags: StructFlags::empty(),
       alignment_expression: None,
+      tag: None,
+      bindings: Vec::new(),
     };
     if is_union {
       structure.textual_flags |= StructFlags::UNION;
@@ -3024,7 +3030,25 @@ impl Parser<'_> {
     let notes = self.parse_notes();
     structure.notes = notes;
 
-    if self.at(TokenKind::OPEN_BRACE) {
+    // `union kind: Kind = .A { .A ,, a: s64; … }` declares a tagged union
+    // (**L§8.8**): the tag is a declaration of its own, and a variant may be
+    // bound to the tag value that selects it.
+    if is_union && self.at(TokenKind::IDENT) && self.kind_at(1) == TokenKind::COLON {
+      let tag_start = self.span().start;
+      let token = self.bump();
+      let name = self.ident_node(&token);
+      let elements = vec![CommaArgument {
+        node: name,
+        modifier: CommaModifier::None,
+      }];
+      let tag = self.parse_declaration_tail(tag_start, elements, false)?;
+      self.attach_trailing_notes(tag);
+      structure.tag = Some(tag);
+      structure.textual_flags |= StructFlags::UNION_IS_TAGGED;
+      let (block, bindings) = self.parse_tagged_union_body(tag)?;
+      structure.block = Some(block);
+      structure.bindings = bindings;
+    } else if self.at(TokenKind::OPEN_BRACE) {
       structure.block =
         Some(self.parse_braced_block(BlockType::DataDeclarations, BlockFlags::empty())?);
     }
@@ -3050,6 +3074,89 @@ impl Parser<'_> {
     let node = self.push(self.span_from(start), NodeData::Struct(Box::new(structure)));
     self.attach_trailing_notes(node);
     Some(node)
+  }
+
+  fn is_braced_aggregate(&self, node: NodeId) -> bool {
+    match self.ast.data(node) {
+      NodeData::Struct(structure) => structure.block.is_some(),
+      NodeData::Enum(enumeration) => enumeration.block.is_some(),
+      _ => false,
+    }
+  }
+
+  /// A tagged union's body: its tag first, then the statements written, each
+  /// of which may be a variant bound to a tag value with `value ,,`.
+  fn parse_tagged_union_body(&mut self, tag: NodeId) -> Option<(NodeId, Vec<UnionBinding>)> {
+    let start = self.span().start;
+    self.expect(TokenKind::OPEN_BRACE, "'{'")?;
+    let mut statements = vec![tag];
+    let mut bindings = Vec::new();
+    while !self.at(TokenKind::CLOSE_BRACE) && !self.at_end() {
+      let before = self.position;
+      if self.eat(TokenKind::SEMICOLON) {
+        continue;
+      }
+      let value = match self.binding_ahead() {
+        true => {
+          let value = self.parse_expression();
+          self.expect(TokenKind::DOUBLE_COMMA, "',,'");
+          value
+        }
+        false => None,
+      };
+      match self.parse_statement_in(BlockType::DataDeclarations) {
+        Some(statement) => {
+          if let Some(value) = value {
+            bindings.push(UnionBinding {
+              value,
+              member: statement,
+            });
+          }
+          statements.push(statement);
+        }
+        None => self.recover(),
+      }
+      if self.position == before {
+        self.bump();
+      }
+    }
+    self.expect(TokenKind::CLOSE_BRACE, "'}'")?;
+    let block = self.push(
+      self.span_from(start),
+      NodeData::Block(Block {
+        block_type: BlockType::DataDeclarations,
+        block_flags: BlockFlags::empty(),
+        statements,
+      }),
+    );
+    self.ast.add_flags(block, NodeFlags::IS_PARENTHESIZED);
+    Some((block, bindings))
+  }
+
+  /// Whether the statement ahead starts `value ,,`: a `,,` before anything
+  /// that would end or declare it.
+  fn binding_ahead(&self) -> bool {
+    let mut depth = 0usize;
+    for ahead in 0.. {
+      match self.kind_at(ahead) {
+        TokenKind::DOUBLE_COMMA if depth == 0 => return true,
+        TokenKind::OPEN_PAREN | TokenKind::OPEN_BRACKET => depth += 1,
+        TokenKind::CLOSE_PAREN | TokenKind::CLOSE_BRACKET => match depth {
+          0 => return false,
+          _ => depth -= 1,
+        },
+        TokenKind::SEMICOLON
+        | TokenKind::COLON
+        | TokenKind::OPEN_BRACE
+        | TokenKind::CLOSE_BRACE
+        | TokenKind::END_OF_INPUT => return false,
+        _ => {}
+      }
+      if self.position + ahead >= self.tokens.len() {
+        return false;
+      }
+    }
+    false
   }
 
   fn parse_enum(&mut self) -> Option<NodeId> {
@@ -4439,6 +4546,29 @@ mod tests {
   }
 
   #[test]
+  fn a_tagged_union_keeps_its_tag_and_bindings() {
+    let source = "Value :: struct {\n\
+                  union kind := Kind.TABLE {\n\
+                  .BOOL ,, flag: bool;\n\
+                  .TABLE ,, table: [..] int;\n\
+                  other: s64;\n\
+                  };\n\
+                  }\n\
+                  Details :: union type: enum u8 { A; B; } = .B @Note {\n\
+                  .A ,, a: struct { x: s64; } = ---;\n\
+                  u16 ,, b: s8;\n\
+                  }\n";
+    let text = printed(source);
+    assert!(text.contains("union kind := Kind.TABLE {"), "{text}");
+    assert!(text.contains(".BOOL ,, flag: bool;"), "{text}");
+    assert!(text.contains("} = ---;"), "{text}");
+    assert!(text.contains("u16 ,, b: s8;"), "{text}");
+    let shape = tree(source);
+    assert_eq!(shape.matches("binding:").count(), 4, "{shape}");
+    assert!(shape.contains("tag: DECLARATION"), "{shape}");
+  }
+
+  #[test]
   fn an_ifx_statement_may_assign_in_its_branches() {
     let shape = tree("f :: () { ifx leap then days = 29 else days = 28; }");
     assert_eq!(shape.matches("BINARY_OPERATOR =").count(), 2, "{shape}");
@@ -4446,6 +4576,15 @@ mod tests {
       printed("f :: () { ifx leap then days = 29 else days = 28; }"),
       "f :: () {\n    ifx leap then days = 29 else days = 28;\n}\n"
     );
+  }
+
+  #[test]
+  fn a_written_out_struct_type_ends_at_its_brace() {
+    // A member whose type is `struct { … }` needs no `;`, so a `.name` on the
+    // next line starts the next statement.
+    let shape = tree("U :: union t: E { .a ,, a: struct { x: s64; }\n.b ,, c: s64; }");
+    assert!(!shape.contains("BINARY_OPERATOR ."), "{shape}");
+    assert_eq!(shape.matches("binding:").count(), 2, "{shape}");
   }
 
   #[test]

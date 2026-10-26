@@ -154,7 +154,10 @@ fn the_standard_module_layouts_are_the_sizes_they_were_measured_at() {
   const EXPECTED: [(&str, u64); 17] = [
     ("Type_Info", 16),
     ("Type_Info_Integer", 24),
-    ("Type_Info_Struct", 128),
+    // 128 when measured against 0.2.009; the 16 more are the view of
+    // tagged-union bindings orangejuice adds after the measured members
+    // (**L§8.8**).
+    ("Type_Info_Struct", 128 + 16),
     ("Type_Info_Struct_Member", 64),
     ("Type_Info_Enum", 80),
     ("Type_Info_Procedure", 56),

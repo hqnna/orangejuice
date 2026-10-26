@@ -15,8 +15,8 @@ pub use abi::{Classification, Eightbyte, classify, eightbyte_size};
 pub use kind::{
   ArrayKind, EnumId, EnumInfo, EnumMember, EnumTypeFlags, FloatKind, IntKind, MemberFlags,
   PolymorphId, PolymorphInfo, ProcedureFlags, ProcedureType, StructId, StructInfo, StructMember,
-  StructNontextualFlags, StructTextualFlags, TypeId, TypeKind, VariantFlags, VariantId,
-  VariantInfo,
+  StructNontextualFlags, StructTextualFlags, TagBinding, TagValue, TypeId, TypeKind, VariantFlags,
+  VariantId, VariantInfo,
 };
 pub use layout::{Layout, LayoutBuilder, align_forward};
 pub use table::Types;

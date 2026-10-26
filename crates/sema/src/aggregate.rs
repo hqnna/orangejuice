@@ -6,7 +6,8 @@ use oj_scope::{DeclId, ScopeId};
 use oj_syntax::ast::{DeclarationFlags, NodeData, NodeId, OperatorType, StructFlags};
 use oj_types::{
   EnumInfo, EnumMember, EnumTypeFlags, IntKind, Layout, LayoutBuilder, MemberFlags, StructId,
-  StructInfo, StructMember, StructNontextualFlags, StructTextualFlags, TypeId,
+  StructInfo, StructMember, StructNontextualFlags, StructTextualFlags, TagBinding, TagValue,
+  TypeId,
 };
 
 use crate::checker::{Checker, DeclType, MemberDefault, PathStep};
@@ -131,9 +132,12 @@ impl Checker<'_> {
       return;
     };
 
+    // A tagged union is a struct of its tag and a union of its variants
+    // (**L§8.8**), so its own builder lays members out one after another.
+    let tagged = payload.tag.is_some();
     let mut state = Members {
       builder: LayoutBuilder::new(
-        payload.textual_flags.contains(StructFlags::UNION),
+        payload.textual_flags.contains(StructFlags::UNION) && !tagged,
         payload.textual_flags.contains(StructFlags::NO_PADDING),
       ),
       members: Vec::new(),
@@ -143,8 +147,15 @@ impl Checker<'_> {
       scope,
       source,
     };
+    let mut tag_bindings = Vec::new();
     if let Some(block) = payload.block {
-      self.struct_statements(&mut state, block);
+      match payload.tag {
+        Some(tag) => {
+          let bindings = payload.bindings.clone();
+          tag_bindings = self.tagged_union_statements(&mut state, block, tag, &bindings);
+        }
+        None => self.struct_statements(&mut state, block),
+      }
     }
 
     let layout = state.builder.finish();
@@ -154,6 +165,7 @@ impl Checker<'_> {
     let info = self.types_mut().struct_info_mut(definition);
     info.members = state.members;
     info.overlay_from = overlay_from;
+    info.tag_bindings = tag_bindings;
     self
       .types_mut()
       .finish_struct(definition, layout.size, layout.alignment);
@@ -320,6 +332,116 @@ impl Checker<'_> {
         state.source = previous;
       }
       _ => {}
+    }
+  }
+
+  /// A tagged union's body (**L§8.8**): the tag laid out first, then every
+  /// variant at one offset after it, aligned for the most demanding of them —
+  /// a union placed behind the tag. Returns the variants bound to a tag value.
+  fn tagged_union_statements(
+    &mut self,
+    state: &mut Members,
+    block: NodeId,
+    tag: NodeId,
+    bindings: &[oj_syntax::ast::UnionBinding],
+  ) -> Vec<TagBinding> {
+    let Some(ast) = self.ast(state.source) else {
+      return Vec::new();
+    };
+    let statements: Vec<NodeId> = match ast.data(block) {
+      NodeData::Block(body) => body.statements.clone(),
+      _ => Vec::new(),
+    };
+    self.struct_statement(state, tag);
+    let tag_type = state.members.first().map(|member| member.type_id);
+    let variants_from = state.members.len();
+    let outer = std::mem::replace(&mut state.builder, LayoutBuilder::new(true, false));
+    for statement in statements
+      .iter()
+      .copied()
+      .filter(|statement| *statement != tag)
+    {
+      self.struct_statement(state, statement);
+    }
+    let variants = std::mem::replace(&mut state.builder, outer).finish();
+    let base = state.builder.place(variants, None);
+    for member in &mut state.members[variants_from..] {
+      member.offset += base;
+    }
+
+    let Some(tag_type) = tag_type else {
+      return Vec::new();
+    };
+    let mut bound = Vec::new();
+    for binding in bindings {
+      let Some(member) = self.bound_member(state, variants_from, binding.member) else {
+        continue;
+      };
+      let Some(value) = self.tag_value(state, tag_type, binding.value) else {
+        continue;
+      };
+      bound.push(TagBinding { member, value });
+    }
+    bound
+  }
+
+  /// The index of the member a binding's statement declared.
+  fn bound_member(&mut self, state: &Members, from: usize, statement: NodeId) -> Option<usize> {
+    let name = match self.ast(state.source)?.data(statement) {
+      NodeData::Declaration(declaration) => self.ident_name(state.source, declaration.name?)?,
+      NodeData::Using(using) => {
+        let expression = using.expression;
+        let NodeData::Declaration(declaration) = self.ast(state.source)?.data(expression) else {
+          return None;
+        };
+        self.ident_name(state.source, declaration.name?)?
+      }
+      _ => return None,
+    };
+    state.members[from..]
+      .iter()
+      .position(|member| member.name == name && !member.flags.contains(MemberFlags::IMPORTED))
+      .map(|index| index + from)
+  }
+
+  /// The tag value a binding names, as the tag's type has it.
+  fn tag_value(&mut self, state: &Members, tag_type: TypeId, node: NodeId) -> Option<TagValue> {
+    let (scope, source) = (state.scope, state.source);
+    let value = self.expression(scope, source, node);
+    let Some(constant) = value.constant else {
+      if let Some(span) = self.span_of(source, node) {
+        self.error(
+          source,
+          span,
+          "A tagged union binds a variant to a constant.",
+        );
+      }
+      return None;
+    };
+    if let Value::Type(type_id) = constant.value {
+      return Some(TagValue::Type(type_id));
+    }
+    if let Some(type_id) = value.denoted {
+      return Some(TagValue::Type(type_id));
+    }
+    let converted = constant
+      .clone()
+      .convert(self.types(), tag_type)
+      .unwrap_or(constant);
+    match converted.value {
+      Value::Int(number) => Some(TagValue::Int(number)),
+      Value::Bool(flag) => Some(TagValue::Int(i128::from(flag))),
+      _ => {
+        if let Some(span) = self.span_of(source, node) {
+          let wanted = self.type_name(tag_type);
+          self.error(
+            source,
+            span,
+            format!("This binding is not a value of the tag's type, {wanted}."),
+          );
+        }
+        None
+      }
     }
   }
 

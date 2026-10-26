@@ -649,6 +649,8 @@ x := ifx renderer.sample_count == renderer.max_sample_count
 
 An `ifx` used as an expression is not followed by its own semicolon (it is part of the enclosing statement). `return ifx ...;` is fine. Branches of `void`/zero-sized type are allowed. `ifx` with an unknown-enum branch resolves against the other branch, and so does one written `null`, `xx e`, or an undesignated `.{…}`/`.[…]` — none of which names a type of its own (§5.10 downward flow). Exported as `Code_If` with `if_flags.IS_IFX`.
 
+An `ifx` written as a statement may assign in its branches — `ifx leap then days = 29 else days = 28;` (toml-jai) — which reads as an `if` whose branches are those assignments.
+
 `#ifx cond then a; else b;` — a `;` between the branches of a *static* `#ifx` — is what The Way to Jai 26.5 (written against 0.2.024) writes; orangejuice accepts it as `#ifx cond then a else b;`. A plain `ifx` does not take the `;`, since `if c  v = ifx a then 1; else w();` gives the `else` to the `if`. Not measured against a reference.
 
 ### 5.14 Compile-time query expressions
@@ -1217,9 +1219,35 @@ Holder :: struct (N: int, T: Type) #modify { if N < 8 N = 8; return true; } { ..
 
 `#align N` is *not* a struct directive: the reference rejects it on a struct declaration ("#align does not have any meaning on constant declarations, since they do not have storage."), so a struct's alignment only ever comes from its members (3.14).
 
-These flags live in `Type_Info_Struct.textual_flags` (`FOREIGN 1, UNION 2, NO_PADDING 4, TYPE_INFO_NONE 8, TYPE_INFO_NO_SIZE_COMPLAINT 0x10, TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS 0x20`) and may also be set from a metaprogram with `compiler_set_type_info_flags(T, .NO_TYPE_INFO | .PROCEDURES_ARE_VOID_POINTERS | .NO_SIZE_COMPLAINT)`. `nontextual_flags`: `NOT_INSTANTIABLE 4, ALL_MEMBERS_UNINITIALIZED 0x40, POLYMORPHIC 0x100`; `status_flags`: `INCOMPLETE 1, LOCAL 4`.
+These flags live in `Type_Info_Struct.textual_flags` (`FOREIGN 1, UNION 2, NO_PADDING 4, TYPE_INFO_NONE 8, TYPE_INFO_NO_SIZE_COMPLAINT 0x10, TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS 0x20`, and orangejuice's `UNION_IS_TAGGED 0x40` of 8.8) and may also be set from a metaprogram with `compiler_set_type_info_flags(T, .NO_TYPE_INFO | .PROCEDURES_ARE_VOID_POINTERS | .NO_SIZE_COMPLAINT)`. `nontextual_flags`: `NOT_INSTANTIABLE 4, ALL_MEMBERS_UNINITIALIZED 0x40, POLYMORPHIC 0x100`; `status_flags`: `INCOMPLETE 1, LOCAL 4`.
 
 Only the types passed to `type_info()` (and those they reference) get full `Type_Info` in the executable (`Build_Options.runtime_storageless_type_info`).
+
+### 8.8 Tagged unions
+
+Not in 0.2.009: the betas after it have them, and toml-jai, Focus, the Jails parser and jai-format write them. Nothing about them was measured against a reference, so this section is orangejuice's reading of how that code uses them, and it is marked as such where it chooses.
+
+```
+Value :: struct {
+    Kind :: enum u8 { BOOL; INT; TABLE; }
+    union kind := Kind.TABLE {               // tag `kind`, its type from its default
+        .BOOL  ,, bool_value: bool;           // `value ,,` binds a variant to a tag value
+        .INT   ,, int_value:  s64;
+        .TABLE ,, table:      [..] KeyValue;
+    };
+}
+Group :: union tag: Tags = .SECOND { first: string; .SECOND ,, second: Guy = ---; }
+S8    :: union kind: s8 = 4 { 4 ,, a: u8; b: string = ---; -12 ,, c: s16 = ---; }
+Typed :: union kind: Type = u16 { u16 ,, a: s8; s32 ,, b: u16; }
+Inner :: union @Note tag: enum @Note { A; B; } @Note { a: int; b: float; } @Note
+```
+
+- After `union` (and its notes) a name and `:` declare the **tag**: `tag: T`, `tag: T = default` or `tag := default`, where `T` may be written out (`enum { A; B; }`). The tag is an ordinary member and comes first. Every other member is a **variant**; a declaration in the body may be prefixed `value ,,` to bind it to a tag value, which is a constant of the tag's type — an enum or integer value, or a type for a `Type` tag. Nested declarations (`test :: struct { … }`) may stand among the variants.
+- **Layout** (ours): the tag first, then every variant at one offset, the first one after the tag aligned for the most demanding variant; the size rounds up to the largest alignment. `Holder :: struct { x: u8; union tag: enum { A; B; } { a: string; b: float64; }; y: u8; }` puts the anonymous tagged union at 8 (its tag at 8, its variants at 16) and `y` at 32.
+- Variants are read and written like a union's members; nothing checks them against the tag. A variable starts with the tag's default and each variant's default applied in order, the way a union's members' are, which is why the code that writes them puts `= ---` on the ones the default tag does not select. A literal names the tag and a variant: `Group.{tag = .SECOND, second = g}`. An anonymous tagged union inside a struct contributes its tag and variants to the struct the way an anonymous union does.
+- **`Type_Info`** (ours, read by toml-jai): `textual_flags` has `UNION | UNION_IS_TAGGED` (`UNION_IS_TAGGED` is `0x40`, a bit not measured); `members[0]` is the tag and the variants follow; `tagged_union_bindings: [] Type_Info_Tagged_Union_Binding { member_index: s64; constant_value: u64; }`, the last member of `Type_Info_Struct` — which makes it 144 bytes against the 128 measured at 0.2.009 — lists the bound variants only — `constant_value` is the integer for an enum or integer tag and the `*Type_Info` for a `Type` one.
+- **`print`** (ours) shows the tag and the variant it selects: the one bound to the tag's value, or else, for an integer or enum tag, the variant at that position (`{STR, "hi"}`).
+- In `Code_*` a tagged union is exported as the union it is, with its tag as the first member declaration; **C§5.3** knows no field for the bindings.
 
 ---
 
