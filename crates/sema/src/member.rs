@@ -239,7 +239,10 @@ impl Checker<'_> {
             checker.member_in_scope(arguments, name)
           });
           if !found.is_unknown() {
-            return found;
+            return Expr {
+              overload_instance: Some(instance),
+              ..found
+            };
           }
         }
       }
@@ -275,6 +278,31 @@ impl Checker<'_> {
       // `using data: struct { magic: … }` is answered from there.
       if let Some(member) = self.types().struct_info(definition).member(name).cloned() {
         return Expr::value(member.type_id);
+      }
+      // What a `using` member's type declares beyond its members — a baked
+      // struct's parameters, a constant, a nested type — is reached through
+      // it too: `using _t: SomeTrait(#this, get, set)` gives the struct its
+      // `get` and `set` (**L§8.4**, **L§8.5**).
+      let used: Vec<TypeId> = self
+        .types()
+        .struct_info(definition)
+        .members
+        .iter()
+        .filter(|member| {
+          member.flags.contains(MemberFlags::USING) && member.imported_through.is_none()
+        })
+        .map(|member| member.type_id)
+        .collect();
+      for base in used {
+        let base = self.types().pointee(base).unwrap_or(base);
+        if self.types().underlying(base) == underlying || !self.enter() {
+          continue;
+        }
+        let found = self.member_of_type(base, name);
+        self.leave();
+        if !found.is_unknown() {
+          return found;
+        }
       }
     }
     Expr::UNKNOWN

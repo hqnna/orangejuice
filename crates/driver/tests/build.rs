@@ -6894,3 +6894,32 @@ fn the_compiler_module_names_completion_the_way_c_does() {
     "1 2 procedure (s64)\n",
   );
 }
+
+#[test]
+fn a_struct_reached_through_using_as_is_its_base_family() {
+  // `using #as _t: SomeTrait(#this, ex_get, ex_set)` gives the struct the
+  // parameters of the instantiation it uses — `f.get` is `ex_get` — and makes
+  // it a `$A/SomeTrait` (**L§7.8**, **L§8.4**, **L§8.5**; The Way to Jai 23.8).
+  assert_output(
+    "#import \"Basic\";\n\
+     SomeTrait :: struct (type: Type, get: (a: type, int) -> int, set: (a: *type, int, int) -> ()) {}\n\
+     get :: (a: $A/SomeTrait, i: int) -> int { return a.get(a, i); }\n\
+     set :: (a: *$A/SomeTrait, i: int, val: int) { a.set(a, i, val); }\n\
+     Ex :: struct {\n\
+       using #as _t: SomeTrait(#this, ex_get, ex_set);\n\
+       data: [4] int;\n\
+     }\n\
+     ex_get :: (f: Ex, i: int) -> int { return f.data[i]; }\n\
+     ex_set :: (f: *Ex, i: int, val: int) { f.data[i] = val; }\n\
+     P :: struct (N: int, f: (int) -> int) { x: int; }\n\
+     dbl :: (a: int) -> int { return a * 2; }\n\
+     main :: () {\n\
+       f: Ex;\n\
+       f.set(*f, 1, 42);\n\
+       set(*f, 3, 7);\n\
+       p: P(3, dbl);\n\
+       print(\"% % % % %\\n\", f.get(f, 1), get(f, 3), f.data, p.N, p.f(5));\n\
+     }\n",
+    "42 7 [0, 42, 0, 7] 3 10\n",
+  );
+}

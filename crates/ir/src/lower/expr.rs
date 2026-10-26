@@ -2097,9 +2097,17 @@ impl Lowering<'_, '_> {
     want: Option<TypeId>,
   ) -> Option<Val> {
     // A name reached through a module or a type is a declaration, not storage
-    // (**L§5.3**).
+    // (**L§5.3**). One reached through a baked struct means what it means
+    // under that specialization: `p.f` is the procedure `p`'s type was given.
     if let [only] = info.overloads[..] {
-      return self.declaration_value(source, node, only, info.type_id);
+      let entered = info
+        .overload_instance
+        .map(|instance| self.checker.enter_instance(Some(instance)));
+      let value = self.declaration_value(source, node, only, info.type_id);
+      if let Some(previous) = entered {
+        self.checker.enter_instance(previous);
+      }
+      return value;
     }
     // An overload set reached through a module is narrowed the same way a bare
     // name is: `set_scissor = Simp.set_scissor;` means the one the slot's type

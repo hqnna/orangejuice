@@ -13,7 +13,7 @@ use oj_diag::SourceId;
 use oj_lexer::Symbol;
 use oj_scope::{DeclId, ProcedureScopes, ScopeId};
 use oj_syntax::ast::{DeclarationFlags, NodeData, NodeId};
-use oj_types::{ArrayKind, PolymorphId, TypeId, TypeKind};
+use oj_types::{ArrayKind, MemberFlags, PolymorphId, TypeId, TypeKind};
 
 use crate::checker::{Checker, Expr};
 use crate::constants::{Const, Value};
@@ -654,7 +654,32 @@ impl Checker<'_> {
     if self.types().pointee(actual).is_some() && self.types().pointee(restriction).is_none() {
       return false;
     }
-    self.as_conversion(actual, restriction, 0).is_some()
+    if self.as_conversion(actual, restriction, 0).is_some() {
+      return true;
+    }
+    // `using #as _t: SomeTrait(#this, get, set)` makes the struct a
+    // `SomeTrait`, which a restriction to the family accepts the way it
+    // accepts any of its instantiations (**L§7.8**, **L§8.4**).
+    let Some(definition) = self.types().struct_of(self.types().underlying(actual)) else {
+      return false;
+    };
+    self.complete_struct(definition);
+    let bases: Vec<TypeId> = self
+      .types()
+      .struct_info(definition)
+      .members
+      .iter()
+      .filter(|member| member.flags.contains(MemberFlags::AS) && member.imported_through.is_none())
+      .map(|member| member.type_id)
+      .collect();
+    bases.into_iter().any(|base| {
+      if base == actual || !self.enter() {
+        return false;
+      }
+      let found = self.satisfies_restriction(base, restriction, false);
+      self.leave();
+      found
+    })
   }
 
   /// Whether `actual` declares every member the interface struct does, with
