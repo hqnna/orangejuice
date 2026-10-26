@@ -53,11 +53,12 @@ Pool :: struct {
     free_memblocks_on_reset := false;
 }
 
+// Just the link: a block is `memblock_size` bytes and an oversized one is not
+// needed again once freed. The Way to Jai's 34.4 (0.2.024) shows 65504 bytes
+// left after one 24-byte allocation in a fresh 65536-byte pool, which is an
+// eight-byte header — a best guess at the reference's layout, to be measured.
 Memblock :: struct {
     next: *Memblock;
-    // How big the allocation was, header included, so `release` can hand the
-    // same number back to the allocator.
-    total_size: s64;
 }
 
 // Says where the pool's blocks come from. Calling it is optional — the first
@@ -126,7 +127,7 @@ reset :: (pool: *Pool) {
     block := pool.used_memblocks;
     while block {
         next := block.next;
-        if pool.overwrite_memory  pool_stamp(block);
+        if pool.overwrite_memory  pool_stamp(pool, block);
         pool_push(*pool.unused_memblocks, block);
         block = next;
     }
@@ -192,7 +193,6 @@ pool_oversized :: (pool: *Pool, nbytes: s64) -> *void {
     if !memory  return null;
 
     block := cast(*Memblock) memory;
-    block.total_size = total;
     pool_push(*pool.out_of_band_allocations, block);
     return cast(*u8) memory + header;
 }
@@ -217,19 +217,18 @@ pool_new_block :: (pool: *Pool) -> bool {
         if !memory  return false;
         block = cast(*Memblock) memory;
         block.next = null;
-        block.total_size = pool.memblock_size;
     }
 
     pool.current_memblock = block;
     pool.current_pos = cast(*u8) block + header;
-    pool.bytes_left = block.total_size - header;
+    pool.bytes_left = pool.memblock_size - header;
     return true;
 }
 
-pool_stamp :: (block: *Memblock) {
+pool_stamp :: (pool: *Pool, block: *Memblock) {
     header := size_of(Memblock);
-    if block.total_size <= header  return;
-    memset(cast(*u8) block + header, STAMP, block.total_size - header);
+    if pool.memblock_size <= header  return;
+    memset(cast(*u8) block + header, STAMP, pool.memblock_size - header);
 }
 
 pool_free_list :: (pool: *Pool, list: **Memblock) {
@@ -254,10 +253,10 @@ calculate_used_memory :: (pool: Pool) -> (inband_size: s64, outband_count: s64) 
     inband := 0;
     block := pool.used_memblocks;
     while block {
-        inband += block.total_size;
+        inband += pool.memblock_size;
         block = block.next;
     }
-    if pool.current_memblock  inband += pool.current_memblock.total_size;
+    if pool.current_memblock  inband += pool.memblock_size;
 
     outband := 0;
     extra := pool.out_of_band_allocations;

@@ -128,7 +128,7 @@ random_get_zero_to_one_open_new :: inline () -> float64 {
 // Anywhere in [min, max]. The two may be given either way round.
 random_get_within_range :: inline (state: *Random_State, min: float, max: float) -> float {
     randint := random_get(state) & MASK;
-    result := min + (randint / cast(float) MASK) * (max - min);
+    result := min + (randint / cast(float) RANDRANGE) * (max - min);
 
     // The multiply can land a hair outside the range it was scaled into.
     if result > max  result = max;

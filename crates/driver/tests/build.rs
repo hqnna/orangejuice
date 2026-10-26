@@ -7534,3 +7534,26 @@ fn the_newer_betas_guesses_from_the_way_to_jai() {
   );
 }
 
+#[test]
+fn random_and_pool_match_the_way_to_jai() {
+  // The default stream and `random_get_within_range` (6.6), and an eight-byte
+  // block header in `Pool` (34.4): what the book prints on 0.2.024.
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Random\";\n\
+     #import \"Pool\";\n\
+     P :: struct { name: string; age: int; }\n\
+     pool: Pool;\n\
+     main :: () {\n\
+       print(\"% % %\\n\", random_get(), random_get_zero_to_one(), random_get_within_range(0, 100));\n\
+       set_allocators(*pool);\n\
+       a: Allocator;\n\
+       a.proc = pool_allocator_proc;\n\
+       a.data = *pool;\n\
+       p := New(P, allocator = a);\n\
+       print(\"%\\n\", pool.bytes_left);\n\
+     }\n",
+    "1137526400306752306 0.709799 75.796494\n65504\n",
+  );
+}
+
