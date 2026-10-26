@@ -120,6 +120,9 @@ pub struct BuildOptions {
   pub dead_code_elimination: bool,
   pub output_executable_name: Option<String>,
   pub output_path: Option<PathBuf>,
+  /// `Build_Options.intermediate_path` (**C§4**): where the object files go.
+  /// `None` is `.build` beside the output.
+  pub intermediate_path: Option<PathBuf>,
   /// `Build_Options.output_type` (**C§4**): what the program is linked into.
   pub output_type: oj_link::OutputType,
   /// `Build_Options.append_executable_filename_extension`.
@@ -227,6 +230,16 @@ pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
       options.compile_time_command_line = arguments[index..].to_vec();
       break;
     }
+    // `+Name` loads a plugin, the way `-plug Name` does, and the arguments
+    // after it up to the next `+`, a lone `-` or the compiler's `--` are that
+    // plugin's own, handed to its `init` (**C§3.4**). They are the plugin's to
+    // reject, so none of them is read as an option or a file here.
+    if argument.len() > 1 && argument.starts_with('+') {
+      while index < arguments.len() && !ends_plugin_options(&arguments[index]) {
+        index += 1;
+      }
+      continue;
+    }
     // Anything that is not an option is a file to compile (**C§2.1**).
     if !argument.starts_with('-') {
       files.push(std::path::PathBuf::from(argument));
@@ -261,6 +274,9 @@ pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
       "-help" | "-?" => options.print_help = true,
       "-exe" => options.output_executable_name = Some(take("-exe")?),
       "-output_path" => options.output_path = Some(PathBuf::from(take("-output_path")?)),
+      "-intermediate_path" => {
+        options.intermediate_path = Some(PathBuf::from(take("-intermediate_path")?));
+      }
       "-import_dir" => options
         .import_dirs
         .push(PathBuf::from(take("-import_dir")?)),
@@ -313,6 +329,13 @@ pub fn parse(arguments: &[String]) -> Result<ParsedOptions, OptionError> {
     files,
     warnings,
   })
+}
+
+/// Where the options of a `+Name` plugin stop (**C§3.4**): at the next plugin,
+/// at the lone `-` that starts the program's own arguments, or at the
+/// compiler's `--`/`---`.
+fn ends_plugin_options(argument: &str) -> bool {
+  (argument.len() > 1 && argument.starts_with('+')) || matches!(argument, "-" | "--" | "---")
 }
 
 /// What `-x64` gets instead of the reference's native back end, which
@@ -408,6 +431,43 @@ mod tests {
   fn add_and_run_are_the_strings_the_reference_builds_from_them() {
     let parsed = parse_of(&["-add", "x := 1", "-run", "main()"]).expect("it should parse");
     assert_eq!(parsed.options.build_strings, ["x := 1;", "#run main();"]);
+  }
+
+  #[test]
+  fn a_plus_plugin_and_the_arguments_after_it_are_neither_options_nor_files() {
+    // `+Name` and what follows it up to the next `+`, `-` or `--` belong to
+    // the plugin (**C§3.4**), so `-intermediate_path`'s value and an option
+    // nobody here knows are left alone.
+    let parsed = parse_of(&[
+      "main.jai",
+      "+jails_diagnostics",
+      "-intermediate_path",
+      "out",
+      "-whatever",
+      "+other",
+      "x",
+      "-",
+      "program",
+    ])
+    .expect("it should parse");
+    assert_eq!(parsed.files, vec![PathBuf::from("main.jai")]);
+    assert_eq!(
+      parsed.options.compile_time_command_line,
+      vec![String::from("program")]
+    );
+    assert!(parsed.options.intermediate_path.is_none());
+
+    let parsed = parse_of(&["main.jai", "-intermediate_path", "objects"]).expect("it should parse");
+    assert_eq!(
+      parsed.options.intermediate_path,
+      Some(PathBuf::from("objects"))
+    );
+    assert_eq!(
+      parse_of(&["-intermediate_path"])
+        .expect_err("the path is not optional")
+        .message,
+      "Command line: Missing argument to -intermediate_path."
+    );
   }
 
   #[test]

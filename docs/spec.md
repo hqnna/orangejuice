@@ -168,6 +168,8 @@ Effects name `Build_Options` fields (**C§4**) on the target workspace unless st
 |---|---|---|
 | `-` | — | the rest of the command line becomes `compile_time_command_line` (user args, also visible to `#run`s); option processing stops |
 | `-plug NAME`, `-plugin NAME` | required | import `NAME` as a metaprogram plugin; `NAME(param=value)` is allowed |
+| `+NAME` | the plugin's own, up to the next `+NAME`, a lone `-` or `--`/`---` | the later betas' spelling of `-plug NAME`: the arguments after it are handed to the plugin's `init` and are neither files nor options here (**C§3.4**). `Default_Metaprogram` reads them with `Metaprogram_Plugins.parse_plugin_arguments`, so the CLI only has to skip them |
+| `-intermediate_path DIR` | required | `intermediate_path`: where the object files go, instead of `.build` beside the output. Named in the 2026 review's work order and used by the Jails LSP's diagnostics plugin; whether the reference's `Default_Metaprogram` takes it itself is not recorded, so it is listed as orangejuice's |
 | `-ps5` | — | adds the `ps5_build` plugin, which a distribution without one warns about |
 | `-no_check` | — | do not add the `Check` plugin (pass 1 only) |
 | `-no_check_bindings`, `-check_bindings` | — | select `Check(CHECK_BINDINGS=false)` or `Check` (pass 1 only; `Check` is the default) |

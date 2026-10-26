@@ -1190,6 +1190,11 @@ Metaprogram_Plugin :: struct {
     // messages it sees, and the one it would add source to.
     workspace: Workspace;
 
+    // Called once, before anything else, with the arguments that followed the
+    // plugin's `+Name` on the command line (**C§3.4**). Returning false fails
+    // the build.
+    init:              (p: *Metaprogram_Plugin, options: [] string) -> bool;
+
     before_intercept:  (p: *Metaprogram_Plugin, flags: *Intercept_Flags);
     add_source:        (p: *Metaprogram_Plugin);
     // The workspace is not passed, because it is on the message.

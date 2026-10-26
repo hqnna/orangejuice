@@ -538,7 +538,10 @@ fn run_workspace_once(
           .map(Path::to_path_buf)
           .unwrap_or_else(|| PathBuf::from("."))
       });
-      let build = directory.join(".build");
+      let build = options
+        .intermediate_path
+        .clone()
+        .unwrap_or_else(|| directory.join(".build"));
       if let Err(error) = std::fs::create_dir_all(&build) {
         return Report::failure(format!("could not create {}: {error}", build.display()));
       }
@@ -968,6 +971,15 @@ fn workspace_input(
   if let Some(output_type) = workspace.option_u8(layout, |layout| layout.output_type) {
     nested.output_type = output_type_of(output_type);
   }
+  // A fresh `Build_Options` already names `.build` beside the metaprogram's
+  // own first file (**C§4**); only a path the metaprogram chose instead says
+  // where this workspace's objects go.
+  let seeded = directory.join(".build");
+  nested.intermediate_path = workspace
+    .option_string(layout, |layout| layout.intermediate_path)
+    .filter(|path| !path.is_empty() && Path::new(path) != seeded)
+    .map(PathBuf::from)
+    .or(nested.intermediate_path.take());
   if let Some(append) =
     workspace.option_u8(layout, |layout| layout.append_executable_filename_extension)
   {

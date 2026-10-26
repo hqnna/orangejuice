@@ -1523,6 +1523,156 @@ fn the_check_plugin_reports_a_format_string_that_does_not_match_its_arguments() 
 }
 
 #[test]
+fn a_plus_plugin_is_loaded_and_handed_the_arguments_after_it() {
+  // `+Name` is `-plug Name` with the arguments up to the next `+`, `-` or `--`
+  // handed to the plugin's `init` (**C§3.4**). The plugin here records what it
+  // was given in the program it adds source to, and the program prints it.
+  if !linker_is_available() {
+    eprintln!("skipping: no C driver on PATH to link with");
+    return;
+  }
+  // SAFETY: as the test above.
+  unsafe { oj_testsupport::use_own_modules() };
+  let metaprogram =
+    oj_driver::default_metaprogram().expect("the distribution ships a Default_Metaprogram");
+
+  let fixture = Fixture::new();
+  fixture.write(
+    "plugins/recorder.jai",
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     Recorder :: struct { #as using base: Metaprogram_Plugin; seen: string; }\n\
+     get_plugin :: () -> *Metaprogram_Plugin {\n  \
+       p := New(Recorder);\n  \
+       p.init = init;\n  \
+       p.add_source = add_source;\n  \
+       return p;\n\
+     }\n\
+     init :: (p: *Metaprogram_Plugin, options: [] string) -> bool {\n  \
+       r := cast(*Recorder) p;\n  \
+       builder: String_Builder;\n  \
+       for options  print_to_builder(*builder, \"%;\", it);\n  \
+       r.seen = builder_to_string(*builder);\n  \
+       return true;\n\
+     }\n\
+     add_source :: (p: *Metaprogram_Plugin) {\n  \
+       r := cast(*Recorder) p;\n  \
+       add_build_string(tprint(\"SEEN :: \\\"%\\\";\", r.seen), p.workspace);\n\
+     }\n",
+  );
+  fixture.write(
+    "program.jai",
+    "#import \"Basic\";\nmain :: () { print(\"%\\n\", SEEN); }\n",
+  );
+  let mut options = oj_driver::BuildOptions::new();
+  options.import_dirs = vec![fixture.path("plugins")];
+  let arguments: Vec<String> = [
+    "-quiet",
+    "+recorder",
+    "-intermediate_path",
+    "objects",
+    "x",
+    "-no_check",
+  ]
+  .iter()
+  .map(|word| word.to_string())
+  .collect();
+  let report = oj_driver::run_through_metaprogram(
+    &metaprogram,
+    &[fixture.path("program.jai")],
+    &arguments,
+    &options,
+    oj_driver::Stage::Executable,
+  );
+  let executable = fixture.path("program");
+  assert_built(&report, &executable);
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the program runs");
+  assert_eq!(
+    String::from_utf8_lossy(&output.stdout),
+    "-intermediate_path;objects;x;-no_check;\n"
+  );
+}
+
+#[test]
+fn a_build_script_written_for_the_current_plugin_protocol_builds() {
+  // `asmvik/spaced`'s `build.jai`, as written for a 2026 beta: a nameless
+  // workspace, `parse_plugin_arguments` taking two of its three results,
+  // `init_plugins` over what it found, and the usual plugin loop around a
+  // message loop that stops at `COMPLETE`. Only the CPU it targets is the
+  // host's here, since the script names its author's machine.
+  let fixture = Fixture::new();
+  fixture.write(
+    "src/main.jai",
+    "#import \"Basic\";\nmain :: () { print(\"spaced % %\\n\", MEMORY_VISUALIZER, MEMORY_LEAK_REPORT); }\n",
+  );
+  let Some(report) = build(
+    &fixture,
+    "TARGET_PATH :: \"bin\";\n\
+     TARGET_NAME :: \"spaced\";\n\
+     #run,stallable build();\n\
+     build :: () {\n  \
+       w := compiler_create_workspace();\n  \
+       args := get_build_options().compile_time_command_line;\n  \
+       options := get_build_options(w);\n  \
+       copy_commonly_propagated_fields(get_build_options(), *options);\n  \
+       success, plugins_to_create := parse_plugin_arguments(args);\n  \
+       if !success { log_error(\"Failed to parse plugin arguments.\\n\"); exit(1); }\n  \
+       success = init_plugins(plugins_to_create, *plugins, w);\n  \
+       if !success { log_error(\"A plugin init() failed. Exiting.\\n\"); exit(0); }\n  \
+       memory_visualizer  := false;\n  \
+       memory_leak_report := false;\n  \
+       for args {\n    \
+         if it == \"-memory_visualizer\" { memory_visualizer = true; break; }\n    \
+         else if it == \"-memory_leak_report\" { memory_leak_report = true; break; }\n  \
+       }\n  \
+       options.output_path = TARGET_PATH;\n  \
+       options.output_executable_name = TARGET_NAME;\n  \
+       options.cpu_target = CPU;\n  \
+       set_working_directory(#filepath);\n  \
+       make_directory_if_it_does_not_exist(TARGET_PATH);\n  \
+       set_build_options(options, w);\n  \
+       set_build_options_dc(.{do_output=false});\n  \
+       intercept_flags: Intercept_Flags;\n  \
+       for plugins if it.before_intercept then it.before_intercept(it, *intercept_flags);\n  \
+       compiler_begin_intercept(w, intercept_flags);\n  \
+       for plugins if it.add_source then it.add_source(it);\n  \
+       add_build_string(tprint(\"MEMORY_VISUALIZER  :: %;\\n\", memory_visualizer),  w);\n  \
+       add_build_string(tprint(\"MEMORY_LEAK_REPORT :: %;\\n\", memory_leak_report), w);\n  \
+       add_build_file(\"src/main.jai\", w);\n  \
+       message_loop(w);\n  \
+       compiler_end_intercept(w);\n  \
+       for plugins if it.finish   then it.finish  (it);\n  \
+       for plugins if it.shutdown then it.shutdown(it);\n\
+     }\n\
+     message_loop :: (w: Workspace) {\n  \
+       while true {\n    \
+         message := compiler_wait_for_message();\n    \
+         for plugins if it.message it.message(it, message);\n    \
+         if message.kind == .COMPLETE break;\n  \
+       }\n\
+     }\n\
+     plugins: [..] *Metaprogram_Plugin;\n\
+     #import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     #import \"Metaprogram_Plugins\";\n\
+     #import \"File\";\n",
+  ) else {
+    return;
+  };
+  let executable = fixture.path("bin/spaced");
+  assert_built(&report, &executable);
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the program runs");
+  assert_eq!(
+    String::from_utf8_lossy(&output.stdout),
+    "spaced false false\n"
+  );
+}
+
+#[test]
 fn a_metaprogram_fills_a_placeholder_of_the_compilation_it_is_part_of() {
   // `Metaprogram_Plugins` bootstraps this way: it fills the `#placeholder` its
   // own body waits on from inside a `#run`. The reference stalls that `#run`

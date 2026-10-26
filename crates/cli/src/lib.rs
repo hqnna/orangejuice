@@ -659,6 +659,38 @@ mod tests {
   }
 
   #[test]
+  fn a_plus_plugin_is_handed_to_the_metaprogram_rather_than_compiled() {
+    // What Jails runs its diagnostics with (**C§3.4**): the plugin and its own
+    // options go to the metaprogram verbatim, and only the build root is a
+    // file.
+    let invocation = parse_argv(&[
+      "build.jai",
+      "-quiet",
+      "+jails_diagnostics",
+      "-intermediate_path",
+      "/tmp/out",
+      "---",
+      "import_dir",
+      "metaprogram",
+    ]);
+    assert_eq!(invocation.files, vec![PathBuf::from("build.jai")]);
+    assert_eq!(
+      invocation.metaprogram,
+      [
+        "build.jai",
+        "-quiet",
+        "+jails_diagnostics",
+        "-intermediate_path",
+        "/tmp/out"
+      ]
+    );
+    assert_eq!(
+      invocation.compiler.import_dirs,
+      vec![PathBuf::from("metaprogram")]
+    );
+  }
+
+  #[test]
   fn version_line_names_the_jai_release_and_the_backend() {
     let line = version_line();
     assert!(line.contains(oj_driver::JAI_VERSION), "{line}");

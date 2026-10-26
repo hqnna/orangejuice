@@ -31,8 +31,11 @@ build :: () {
 
     // The Rust side has already validated these; what is read here is only
     // what the metaprogram itself has to act on.
+    // `+Name` and the arguments after it are a plugin and its own options
+    // (**C§3.4**); the rest is this metaprogram's to read.
+    plugins_ok, plugins_to_create, rest := parse_plugin_arguments(args);
     options_from_command_line: Command_Line_State;
-    parse_command_line(args, *options_from_command_line);
+    parse_command_line(rest, *options_from_command_line);
 
     if options_from_command_line.wants_help {
         log(HELP_STRING);
@@ -64,6 +67,9 @@ build :: () {
     if options_from_command_line.import_paths.count {
         options.import_path = options_from_command_line.import_paths;
     }
+    if options_from_command_line.intermediate_path.count {
+        options.intermediate_path = options_from_command_line.intermediate_path;
+    }
     if options_from_command_line.release {
         options.optimization_level = 2;
         options.stack_trace = false;
@@ -79,14 +85,15 @@ build :: () {
 
     // `Check` runs unless told not to, the way the reference runs it: a
     // checker nobody remembers to ask for is a checker nobody benefits from.
-    names: [..] string;
-    for options_from_command_line.plugin_names  array_add(*names, it);
-    if !options_from_command_line.no_check  array_add(*names, "Check");
+    to_create: [..] Plugin_To_Create;
+    for options_from_command_line.plugin_names  array_add(*to_create, .{name = it});
+    for plugins_to_create  array_add(*to_create, it);
+    if !options_from_command_line.no_check  array_add(*to_create, .{name = "Check"});
 
     plugins: [..] *Metaprogram_Plugin;
-    if names.count {
-        request_plugin_table(names);
-        init_plugins(names, *plugins, w);
+    if to_create.count && !init_plugins(to_create, *plugins, w) {
+        compiler_report("A plugin's init() rejected the arguments it was given.", mode = .ERROR);
+        return;
     }
 
     intercept_flags: Intercept_Flags;
@@ -134,6 +141,7 @@ Command_Line_State :: struct {
     files:                  [..] string;
     output_executable_name: string;
     output_path:            string;
+    intermediate_path:      string;
     import_paths:           [..] string;
     plugin_names:           [..] string;
     program_arguments:      [..] string;
@@ -198,6 +206,10 @@ parse_command_line :: (args: [] string, state: *Command_Line_State) {
                 if at + 1 < args.count  state.output_path = args[at + 1];
                 at += 2;
 
+            case "-intermediate_path";
+                if at + 1 < args.count  state.intermediate_path = args[at + 1];
+                at += 2;
+
             case "-import_dir";
                 if at + 1 < args.count  array_add(*state.import_paths, args[at + 1]);
                 at += 2;
@@ -250,7 +262,12 @@ Usage: oj <file.jai>... [options] [- program arguments] [-- compiler options]
     -exe <name>          Name the executable that gets written.
     -output_path <dir>   Choose where output goes.
     -import_dir <dir>    Add a directory to the module search path.
+    -intermediate_path <dir>
+                         Where the object files go (.build beside the output
+                         unless this says otherwise).
     -plug <module>       Load a metaprogram plugin.
+    +<module> [args...]  Load a metaprogram plugin and hand it the arguments
+                         that follow, up to the next +, - or --.
     -no_check            Do not load the Check plugin.
     -release             Optimize, and leave stack traces out.
     -add <code>          Compile this declaration along with the files.
