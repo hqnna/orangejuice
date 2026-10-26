@@ -60,7 +60,8 @@ impl Segments {
 
   /// The address of a global, allocating it the first time it is asked for.
   /// A second request with the same symbol gets the same address, which is how
-  /// two `#run`s share one global.
+  /// two `#run`s share one global — as long as what it asks for still fits
+  /// the storage the first one was given.
   pub fn allocate(
     &mut self,
     symbol: &str,
@@ -68,9 +69,10 @@ impl Segments {
     alignment: u64,
     segment: Segment,
     initial: &[u8],
-  ) -> usize {
+  ) -> Result<usize, String> {
     if let Some(index) = self.by_symbol.get(symbol) {
-      return self.allocations[*index].pointer as usize;
+      self.check_fits(symbol, size, alignment)?;
+      return Ok(self.allocations[*index].pointer as usize);
     }
     // A zero-sized global still needs a distinct address, since the JIT
     // resolves its symbol like any other.
@@ -98,7 +100,33 @@ impl Segments {
       segment,
       initial: bytes.into_boxed_slice(),
     });
-    pointer as usize
+    Ok(pointer as usize)
+  }
+
+  /// Whether a global this compilation already has storage for still fits it.
+  /// The JIT has bound the symbol to that address for good, so storage cannot
+  /// move; a later execution that sees the global bigger or more aligned than
+  /// it was — a struct an `#insert` grew in between — would write past what
+  /// was allocated, and is refused instead. A symbol with no storage here
+  /// fits trivially: it is not this crate's.
+  pub fn check_fits(&self, symbol: &str, size: u64, alignment: u64) -> Result<(), String> {
+    let Some(index) = self.by_symbol.get(symbol) else {
+      return Ok(());
+    };
+    let allocation = &self.allocations[*index];
+    if size.max(1) as usize > allocation.size {
+      return Err(format!(
+        "the global '{symbol}' is {size} bytes now, but an earlier compile-time execution gave it {} and it cannot move",
+        allocation.size
+      ));
+    }
+    if alignment.max(1) as usize > allocation.layout.align() {
+      return Err(format!(
+        "the global '{symbol}' needs {alignment}-byte alignment now, but an earlier compile-time execution placed it with {} and it cannot move",
+        allocation.layout.align()
+      ));
+    }
+    Ok(())
   }
 
   pub fn address(&self, symbol: &str) -> Option<usize> {
@@ -183,20 +211,45 @@ mod tests {
     let second = segments.allocate("x", 8, 8, Segment::Writable, &[]);
     assert_eq!(first, second);
     assert_eq!(segments.len(), 1);
+    let smaller = segments.allocate("x", 4, 4, Segment::Writable, &[]);
+    assert_eq!(smaller, first);
+  }
+
+  #[test]
+  fn a_global_that_grew_since_it_was_placed_is_refused() {
+    let mut segments = Segments::new();
+    segments
+      .allocate("x", 8, 8, Segment::Writable, &[])
+      .expect("a fresh global is placed");
+    let bigger = segments
+      .allocate("x", 16, 8, Segment::Writable, &[])
+      .expect_err("sixteen bytes do not fit in eight");
+    assert!(bigger.contains("'x' is 16 bytes now"), "{bigger}");
+    let stricter = segments
+      .check_fits("x", 8, 4096)
+      .expect_err("the placement cannot be realigned");
+    assert!(stricter.contains("4096-byte alignment"), "{stricter}");
+    assert_eq!(segments.check_fits("unknown", 1 << 20, 8), Ok(()));
   }
 
   #[test]
   fn an_allocation_starts_out_as_its_initializer() {
     let mut segments = Segments::new();
-    segments.allocate("x", 4, 4, Segment::Writable, &[1, 2, 3, 4]);
+    segments
+      .allocate("x", 4, 4, Segment::Writable, &[1, 2, 3, 4])
+      .expect("placed");
     assert_eq!(segments.bytes("x"), Some(&[1u8, 2, 3, 4][..]));
   }
 
   #[test]
   fn a_reset_restores_writable_data_and_leaves_no_reset_alone() {
     let mut segments = Segments::new();
-    let writable = segments.allocate("x", 4, 4, Segment::Writable, &[0, 0, 0, 0]);
-    let kept = segments.allocate("y", 4, 4, Segment::NoReset, &[0, 0, 0, 0]);
+    let writable = segments
+      .allocate("x", 4, 4, Segment::Writable, &[0, 0, 0, 0])
+      .expect("placed");
+    let kept = segments
+      .allocate("y", 4, 4, Segment::NoReset, &[0, 0, 0, 0])
+      .expect("placed");
     unsafe {
       std::ptr::write_bytes(writable as *mut u8, 7, 4);
       std::ptr::write_bytes(kept as *mut u8, 9, 4);
@@ -209,7 +262,9 @@ mod tests {
   #[test]
   fn alignment_is_honoured() {
     let mut segments = Segments::new();
-    let address = segments.allocate("aligned", 32, 16, Segment::ReadOnly, &[]);
+    let address = segments
+      .allocate("aligned", 32, 16, Segment::ReadOnly, &[])
+      .expect("placed");
     assert_eq!(address % 16, 0);
     assert_eq!(segments.segment("aligned"), Some(Segment::ReadOnly));
   }

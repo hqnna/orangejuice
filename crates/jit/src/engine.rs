@@ -386,6 +386,9 @@ impl Engine {
         continue;
       }
       if !state.defined.insert(global.symbol.clone()) {
+        state
+          .segments
+          .check_fits(&global.symbol, global.size, global.alignment)?;
         continue;
       }
       let segment = match &global.init {
@@ -402,7 +405,7 @@ impl Engine {
         global.alignment,
         segment,
         &initial,
-      );
+      )?;
       // An image's pointers into itself only become addresses once it has one.
       if let GlobalInit::Image { relocations, .. } = &global.init {
         for (at, target) in relocations {
