@@ -365,6 +365,17 @@ First baseline, at the commit that added the sweep (x86-64 Linux):
 | Advent of Code (`mimhufford`, 11 years) | 10 | 0 | 1 |
 | toml-jai (7 examples) | 0 | 7 | 0 |
 
+After the fixes the sweep itself turned up — global struct defaults, a
+`#run`'s own global initializer, `\%` in `print`, `#align` on a variable,
+literal-to-overload ranking, `@notes` in the type table, `New`'s allocator
+and the rest of 9f90a0b through 98da115:
+
+| Sweep | Passed | Failed | Skipped |
+|---|---|---|---|
+| The Way to Jai | 166 | 79 | 36 |
+| Advent of Code | 10 | 0 | 1 |
+| toml-jai | 0 | 7 | 0 |
+
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
 book program that prints a workspace number expects to be driven by
