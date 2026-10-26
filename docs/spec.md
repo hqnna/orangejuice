@@ -693,6 +693,7 @@ compiles.
 | `Window_Creation` | `create_window`, `get_dimensions`, `get_mouse_pointer_position`, `toggle_fullscreen` | `X11` on `x_global_display`; the visual from `glXChooseVisual` when there is GLX |
 | `Input` | `update_window_events`, `events_this_frame`, `input_button_states`, `get_window_resizes`, the mouse deltas, `Key_Code` | the X event queue of `x_global_display` |
 | `Simp` | `set_render_target`, the `immediate_*` batch, shaders, `Texture`/`Bitmap`, `Dynamic_Font`, `swap_buffers` | OpenGL 3.3 through `GL` and GLX; `stb_image`; `freetype` |
+| `GetRect` | immediate-mode `button`, `slider`, `dropdown` and `draw_popups` over a `Rect`, with `Overall_Theme` and `default_theme_procs` | `Simp`, `Input`'s events, `Window_Creation`'s pointer |
 
 Choices that are ours, since nothing a program does pins them: a `Key_Code`
 of a letter is its upper-case ASCII value, the control keys keep theirs and
@@ -703,16 +704,26 @@ the default texture coordinates shows it upright; glyph atlases are one
 channel swizzled to white-with-coverage, so text draws with the image shader;
 and a texture or font made before there is a render target keeps its pixels
 and uploads them when first drawn — The Way to Jai loads both without a
-window.
+window. GetRect's names are the ones the book calls (`ui_init`,
+`getrect_handle_event`, `ui_per_frame_update`, `get_rect`, `button`,
+`slider`, `dropdown`, `draw_popups`, `set_default_theme`,
+`default_theme_procs[.Grayscale]`, `button_theme.label_theme.alignment`,
+`slider_theme.foreground.alignment`); what is ours is everything behind them:
+a widget is identified by its `#caller_location` and an `identifier`, a click
+is the left button going down and up over the same widget, a dropdown's list
+is drawn by `draw_popups` and keeps the widgets under it from answering the
+mouse for as long as it is open, and the font is whatever `fc-match sans`
+names (or a common path), since the distribution ships none.
 
 `crates/driver/tests/simp.rs` sends the program's own window synthetic X
 events and checks what `Input` reports, and reads back the framebuffer after
 each way of drawing. On a machine whose OpenGL driver was built against a
 newer C library than the dev shell's, GLX looks absent to the program;
 `OJ_TEST_GL_LOADER` names the system's dynamic loader to run it through.
-With `OJ_TTWJ_DIR` set it also builds the book's graphical programs: nine of
-fifteen build, and the rest need `GetRect`, `Sound_Player`, `Windows` or
-`Windows_Resources`, or (33.12) make a float64 of `2*PI/30 * it`.
+With `OJ_TTWJ_DIR` set it also builds the book's graphical programs: eleven
+of fifteen build, and the rest need `Sound_Player`, `Windows` or
+`Windows_Resources`, or (33.12) make a float64 of `2*PI/30 * it`. GetRect is
+driven frame by frame on the test's own display and read back the same way.
 
 ### 10.2 Gaps found while writing our own modules
 

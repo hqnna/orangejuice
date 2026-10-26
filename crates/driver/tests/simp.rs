@@ -580,6 +580,188 @@ fn simp_draws_into_a_window_and_reads_back_what_it_drew() {
   eprintln!("skipping the drawing half: no display with GLX (see OJ_TEST_GL_LOADER)");
 }
 
+const GETRECT_JAI: &str = r##"#import "Basic";
+#import "Math";
+#import "Input";
+#import "Window_Creation";
+#import "Simp";
+#import "GetRect";
+#import "GL";
+X :: #import "X11";
+
+W :: 320;
+H :: 240;
+
+pixel_at :: (x: float, y: float) -> [4] u8 {
+    immediate_flush();
+    pixel: [4] u8;
+    glReadPixels(xx x, xx y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data);
+    return pixel;
+}
+
+as_bytes :: (c: Vector4) -> [4] u8 {
+    return .[cast(u8) (c.x * 255 + .5), cast(u8) (c.y * 255 + .5), cast(u8) (c.z * 255 + .5), cast(u8) (c.w * 255 + .5)];
+}
+
+near :: (a: [4] u8, b: [4] u8) -> bool {
+    for 0..3  if abs(cast(int) a[it] - cast(int) b[it]) > 2  return false;
+    return true;
+}
+
+mouse_event :: (pressed: bool) -> Event {
+    event: Event;
+    event.type = .KEYBOARD;
+    event.key_code = .MOUSE_BUTTON_LEFT;
+    event.key_pressed = xx pressed;
+    return event;
+}
+
+value := 0.5;
+choice: s32 = 0;
+clicks := 0;
+under := 0;
+
+window: Window_Type;
+
+// One frame: the button goes down and/or up, the pointer is where it is
+// asked to be, and the widgets are drawn.
+frame :: (x: float, y: float, press := false, release := false, warp := false) -> (button_clicked: bool, slid: bool, state: *Dropdown_State) {
+    update_window_events();
+    if warp {
+        X.XWarpPointer(X.x_global_display, 0, window, 0, 0, 0, 0, xx x, xx (H - y));
+        X.XSync(X.x_global_display, X.False);
+    }
+    if press    getrect_handle_event(mouse_event(true));
+    if release  getrect_handle_event(mouse_event(false));
+    clear_render_target(0, 0, 0, 1);
+    ui_per_frame_update(window, W, H, get_time());
+    if !warp  ui_set_mouse(x, y);
+
+    clicked := button(get_rect(10, 200, 140, 30), "Button");
+    if clicked  clicks += 1;
+    slid := slider(get_rect(10, 160, 140, 30), *value, 0.0, 1.0, 0.25, prefix = "v ");
+    state := dropdown(get_rect(10, 120, 140, 30), .["one", "two", "three"], *choice);
+    if button(get_rect(10, 60, 140, 30), "Under")  under += 1;
+    draw_popups();
+    return clicked, slid, state;
+}
+
+main :: () {
+    args := get_command_line_arguments();
+    window = create_window(W, H, "GetRect test");
+    set_render_target(window);
+    if !context.simp.current_window {
+        print("no context\n");
+        return;
+    }
+    ui_init();
+    theme := default_theme();
+    button_theme := theme.button_theme;
+
+    frame(160, 10);
+    print("idle %\n", near(pixel_at(14, 215), as_bytes(button_theme.surface_color)));
+    // The pointer itself is only moved on a display of the test's own.
+    frame(75, 215, warp = args.count > 1 && args[1] == "warp");
+    print("hover %\n", near(pixel_at(14, 215), as_bytes(button_theme.surface_color_over)));
+    frame(75, 215, press = true);
+    print("held %\n", near(pixel_at(14, 215), as_bytes(button_theme.surface_color_down)));
+    clicked := frame(75, 215, release = true);
+    print("clicked % %\n", clicked, clicks);
+    frame(75, 215, press = true);
+    frame(200, 30, release = true);
+    print("released elsewhere %\n", clicks);
+    clicked = frame(75, 215, press = true, release = true);
+    print("one-frame click % %\n", clicked, clicks);
+
+    _, slid := frame(10 + 140 * .8, 175, press = true);
+    print("slider % %\n", slid, value);
+    _, slid = frame(10 + 140 * .1, 175);
+    print("dragged % %\n", slid, value);
+    frame(300, 175, release = true);
+    print("let go %\n", value);
+    frame(10 + 140 * .9, 175);
+    print("not held %\n", value);
+
+    _, _, state := frame(75, 135, press = true, release = true);
+    print("open %\n", state.open);
+    item_theme := theme.dropdown_theme.item_theme;
+    print("list drawn % %\n", near(pixel_at(14, 45), as_bytes(item_theme.surface_color)), near(pixel_at(14, 75), as_bytes(item_theme.surface_color)));
+    frame(75, 75, press = true, release = true);
+    print("covered button % choice %\n", under, choice);
+    _, _, state = frame(75, 135, press = true, release = true);
+    _, _, state = frame(75, 45, press = true, release = true);
+    print("picked % open %\n", choice, state.open);
+    frame(75, 75, press = true, release = true);
+    print("uncovered button %\n", under);
+
+    swap_buffers(window);
+    print("GL error %\n", glGetError());
+}
+"##;
+
+const GETRECT_DRAWN: &str = "idle true\n\
+  hover true\n\
+  held true\n\
+  clicked true 1\n\
+  released elsewhere 1\n\
+  one-frame click true 2\n\
+  slider true 0.75\n\
+  dragged true 0\n\
+  let go 1\n\
+  not held 1\n\
+  open true\n\
+  list drawn true true\n\
+  covered button 0 choice 1\n\
+  picked 2 open false\n\
+  uncovered button 1\n\
+  GL error 0\n";
+
+/// GetRect's widgets on a display with GLX, frame by frame: a button shows
+/// whether the pointer is over it (on the test's own display, read from where
+/// `XWarpPointer` put it) and whether it is held, clicks only when the button goes up over the
+/// widget it went down on, a slider follows a drag in steps and stops when
+/// let go, and a dropdown opens a list that lies over the button under it and
+/// sets the choice it was clicked on.
+#[test]
+fn getrect_widgets_answer_the_mouse_and_draw_their_state() {
+  if !system_has(&["gl", "x11", "freetype2"]) {
+    return;
+  }
+  let Some(built) = build(GETRECT_JAI) else {
+    return;
+  };
+  let output = stdout_of(&run(&built, None, &[], None));
+  assert_eq!(output, "no context\n");
+
+  let server = VirtualDisplay::start();
+  let mut displays: Vec<String> = server.iter().map(|server| server.display.clone()).collect();
+  if let Ok(display) = std::env::var("DISPLAY")
+    && !display.is_empty()
+  {
+    displays.push(display);
+  }
+  let loader = gl_loader();
+  for display in &displays {
+    let own = server
+      .as_ref()
+      .is_some_and(|server| &server.display == display);
+    let arguments: &[&str] = if own { &["warp"] } else { &[] };
+    let mut output = stdout_of(&run(&built, None, arguments, Some(display)));
+    if output.ends_with("no context\n")
+      && let Some(loader) = &loader
+    {
+      output = stdout_of(&run(&built, Some(loader), arguments, Some(display)));
+    }
+    if output.ends_with("no context\n") {
+      eprintln!("{display} has no GLX this program can use");
+      continue;
+    }
+    assert_eq!(output, GETRECT_DRAWN);
+    return;
+  }
+  eprintln!("skipping: no display with GLX (see OJ_TEST_GL_LOADER)");
+}
+
 const SHAPES_JAI: &str = r##"#import "Basic";
 #import "Math";
 #import "Input";
@@ -754,10 +936,7 @@ const TTWJ_PROGRAMS: &[(&str, Option<&str>)] = &[
     "33/33.2C_simp_window.jai",
     Some("imports Windows_Resources, which is Windows-only"),
   ),
-  (
-    "33/33.3_getrect_buttons.jai",
-    Some("needs GetRect, which the distribution does not ship"),
-  ),
+  ("33/33.3_getrect_buttons.jai", None),
   (
     "33/33.6_window_creation_events.jai",
     Some("imports the Windows module"),
@@ -766,7 +945,7 @@ const TTWJ_PROGRAMS: &[(&str, Option<&str>)] = &[
   ("33/33.9_load_texture.jai", None),
   (
     "33/33.10_play_sound.jai",
-    Some("needs Sound_Player and Wav_File, which the distribution does not ship"),
+    Some("needs Sound_Player, which the distribution does not ship"),
   ),
   ("33/33.11_colored_triangle.jai", None),
   (
@@ -776,10 +955,7 @@ const TTWJ_PROGRAMS: &[(&str, Option<&str>)] = &[
   ("33/33.13_drawing_board.jai", None),
   ("33/33.14_moving_shape.jai", None),
   ("33/33.15_drawing_texture.jai", None),
-  (
-    "51/51.2_game_of_life_gui.jai",
-    Some("needs GetRect, which the distribution does not ship"),
-  ),
+  ("51/51.2_game_of_life_gui.jai", None),
   ("52/52.1_simp_pong.jai", None),
 ];
 
