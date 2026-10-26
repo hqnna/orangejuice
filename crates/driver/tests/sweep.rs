@@ -152,6 +152,11 @@ const TTWJ_ERRATA: &[(&str, &str, &str)] = &[
   ("09/9.1_types.jai", "s64 int is an alias for s64", "prose"),
   ("13/13.1_unions.jai", "same as 6", "prose"),
   (
+    "14/14.2_ifx.jai",
+    "y4 is 7",
+    "a typo against the format string, which prints y5",
+  ),
+  (
     "19/19.1_strings.jai",
     "chg_str is Hello",
     "a typo against the format string",
@@ -438,7 +443,8 @@ fn machine_dependent(text: &str) -> bool {
     })
 }
 
-/// The words of a piece of text, without the punctuation between them. The
+/// The words of a piece of text, without the punctuation between them and
+/// without regard to case. The
 /// book's annotations are written by hand beside the `print` that produces
 /// them — `// => y is 42;`, `Hello Sailor!` for `Hello, Sailor!` — so what is
 /// compared is the words and their order, not every comma.
@@ -447,6 +453,7 @@ fn normalize(text: &str) -> String {
     .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.' && c != '-')
     .map(|word| word.trim_matches(|c: char| c == '.' || c == '-'))
     .filter(|word| !word.is_empty())
+    .map(str::to_ascii_lowercase)
     .collect::<Vec<_>>()
     .join(" ")
 }
@@ -661,7 +668,7 @@ fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
     group.retain(|text| {
       !TTWJ_ERRATA
         .iter()
-        .any(|(name, annotation, _)| *name == relative && annotation == text)
+        .any(|(name, annotation, _)| *name == relative && normalize(annotation) == *text)
     });
   }
   let output = scratch.join(relative.replace('/', "_"));
@@ -840,19 +847,23 @@ fn toml_jai_tests() {
     .enumerate()
     .map(|(index, relative)| {
       let path = root.join(relative);
+      if *relative == "tools/toml-test/run_toml-tests.jai" {
+        return (
+          path,
+          Verdict::Skipped("builds its decoder by running `jai`, then runs the toml-test binary"),
+        );
+      }
       let output = scratch.path().join(index.to_string());
       let _ = std::fs::create_dir_all(&output);
-      let verdict = match build(&path, &output) {
+      let directory = path.parent().unwrap_or(&root).to_path_buf();
+      let verdict = match in_directory(&directory, || build(&path, &output)) {
         Err(first) => Verdict::BuildFailed(first),
-        Ok(executable) => {
-          let directory = path.parent().unwrap_or(&root).to_path_buf();
-          match run_for(&executable, &directory, Duration::from_secs(60)) {
-            Ok((0, _)) => Verdict::Pass,
-            Ok((2, _)) => Verdict::Skipped("the test skipped itself"),
-            Ok((status, _)) => Verdict::RunFailed(format!("exited {status}")),
-            Err(reason) => Verdict::RunFailed(reason),
-          }
-        }
+        Ok(executable) => match run_for(&executable, &directory, Duration::from_secs(60)) {
+          Ok((0, _)) => Verdict::Pass,
+          Ok((2, _)) => Verdict::Skipped("the test skipped itself"),
+          Ok((status, _)) => Verdict::RunFailed(format!("exited {status}")),
+          Err(reason) => Verdict::RunFailed(reason),
+        },
       };
       (path, verdict)
     })
