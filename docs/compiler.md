@@ -226,6 +226,8 @@ Optimization_Type :: enum u8 { DEBUG; VERY_DEBUG; OPTIMIZED; VERY_OPTIMIZED; OPT
 
 `set_optimization` for non-debug levels sets bounds/cast/null/overflow checks OFF, frame pointers on (macOS/debug/preserve_debug_info), `enable_split_modules = false`, `x64_options.enable_unix_runtime_frame_information = false`, and LLVM bitcode/machine-code levels per level (`O2`/`DEFAULT` for OPTIMIZED, `O3`/`AGGRESSIVE` for VERY_OPTIMIZED, `OS`/`OZ` for the small variants); it leaves `stack_trace` on (set it to false manually for maximum speed). Bitcode optimization and machine-code optimization are independent (O1 bitcode + no machine-code optimization halves LLVM time). New workspaces get **default** options, not the parent's (since 0.1.043); `copy_commonly_propagated_fields` copies the `Commonly_Propagated` subset.
 
+orangejuice's `modules/Compiler` declares every member above, flat rather than through `using Commonly_Propagated`, so a build script written for the reference sets them; the ones the driver acts on are `output_type`, `output_executable_name`, `output_path`, `intermediate_path`, `append_executable_filename_extension`, `os_target`/`cpu_target`, `runtime_support_definitions` (numbered `AUTO 0; ENTRY_POINT_AND_INIT 1; ONLY_INIT 2; OMIT 3` as above), `use_custom_link_command`, `import_path`, `compile_time_command_line` and `context_size_max` (an `s64` there). The rest are accepted and ignored. It keeps one member of its own, `optimization_level: s32`, and `Llvm_Options.code_gen_optimization: s32`, which `set_optimization` writes beside the reference's two settings.
+
 ---
 
 ## 5. Front end

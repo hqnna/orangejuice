@@ -987,24 +987,53 @@ Output_Type :: enum u8 {
 }
 
 Runtime_Support_Definitions :: enum u8 {
-    ENTRY_POINT_AND_INIT :: 0;
-    ONLY_INIT            :: 1;
-    OMIT                 :: 2;
+    AUTO                 :: 0;
+    ENTRY_POINT_AND_INIT :: 1;
+    ONLY_INIT            :: 2;
+    OMIT                 :: 3;
 }
 
-Backend :: enum u8 {
+Backend :: enum u32 {
     X64  :: 0;
     LLVM :: 1;
 }
 
+Debug_Info_Type :: enum u32 {
+    NONE     :: 0;
+    DWARF    :: 1;
+    CODEVIEW :: 2;
+    DEFAULT  :: 3;
+}
+
 Llvm_Options :: struct {
-    enable_split_modules      := true;
-    target_system_triple:     string;
-    target_system_features:   string;
-    code_gen_optimization:    s32;
+    bitcode_optimization_setting:      Llvm_Bitcode_Optimization_Setting;
+    machine_code_optimization_setting: Llvm_Machine_Code_Optimization_Setting;
+
     function_sections         := false;
+    enable_tail_calls         := false;
+    enable_loop_unrolling     := false;
+    enable_slp_vectorization  := false;
+    enable_loop_vectorization := false;
+    preserve_debug_info       := true;
+    merge_functions           := false;
     disable_inlining          := false;
+    disable_mem2reg           := false;
+    enable_split_modules      := true;
     enable_bitcode            := false;
+
+    output_bitcode_before_optimizations := false;
+    output_llvm_ir_before_optimizations := false;
+    output_bitcode                      := false;
+    output_llvm_ir                      := false;
+
+    // An orangejuice name for the machine-code level, as a number; kept so
+    // that what `set_optimization` writes reads the same either way.
+    code_gen_optimization:    s32;
+
+    target_system_triple:     string;
+    target_system_cpu:        string;
+    target_system_features:   string;
+    command_line:             [] string;
 }
 
 Import_Path_Entry :: struct {
@@ -1013,28 +1042,46 @@ Import_Path_Entry :: struct {
 
 // @Volatile: nothing about this is written down in Rust — orangejuice folds a
 // fresh one out of these defaults and finds the members it acts on by name at
-// the offsets the checker computed (**C§4**).
+// the offsets the checker computed (**C§4**). The members are the reference's;
+// what orangejuice does not act on is accepted and ignored, which is what lets
+// a build script written for the reference set it.
 Build_Options :: struct {
     output_type                              := Output_Type.EXECUTABLE;
     output_executable_name:                   string;
     output_path:                              string;
     intermediate_path:                        string;
+    entry_point_name                          := "main";
+    compile_time_command_line:                [] string;
     append_executable_filename_extension      := true;
+    use_custom_link_command                   := false;
+    temporary_storage_size:                   s64 = 32768;
+    import_path:                              [] string;
+    additional_linker_arguments:              [] string;
 
-    // Default to what this compiler is building for; `OS` and `CPU` are
-    // injected by the compiler (**L§4.3**).
-    os_target                                 := OS;
-    cpu_target                                := CPU;
+    user_data_u64:                            u64;
+    user_data_string:                         string;
+    user_data_pointer:                        *void;
+    user_data_pointer_size:                   s32;
 
-    backend                                   := Backend.LLVM;
-    llvm_options:                             Llvm_Options;
-
-    optimization_level:                       s32;
-    emit_debug_info                           := true;
-    stack_trace                               := true;
+    // The `Commonly_Propagated` part (**C§4**): what
+    // `copy_commonly_propagated_fields` hands a fresh workspace.
+    write_added_strings                       := true;
+    runtime_storageless_type_info             := false;
+    shorten_filenames_in_error_messages       := false;
+    use_visual_studio_message_format          := false;
+    use_natvis_compatible_types               := false;
+    minimum_os_version:                       struct { major: u8; minor: u8; };
+    lazy_foreign_function_lookups             := false;
+    disable_redzone                           := false;
     enable_bytecode_inliner                   := true;
+    enable_bytecode_deduplication             := true;
+    stack_trace                               := true;
+    use_ansi_color                            := true;
+    interactive_bytecode_debugger             := false;
+    debug_for_expansions                      := false;
+    enable_frame_pointers                     := true;
 
-    runtime_support_definitions               := Runtime_Support_Definitions.ENTRY_POINT_AND_INIT;
+    runtime_support_definitions               := Runtime_Support_Definitions.AUTO;
     // Only meaningful where Runtime_Support defines the entry point, since
     // that is what installs the handler.
     backtrace_on_crash:        enum u8 { OFF; ON; } = .ON;
@@ -1046,28 +1093,44 @@ Build_Options :: struct {
     cast_bounds_check:         enum u8 { OFF; NONFATAL; FATAL; } = .FATAL;
     null_pointer_check:        enum u8 { OFF; ON; }              = .ON;
     arithmetic_overflow_check: enum u8 { OFF; NONFATAL; FATAL; } = .OFF;
-
-    use_custom_link_command                   := false;
     dead_code_elimination:     enum u8 { NONE; ALL; MODULES_ONLY; } = .MODULES_ONLY;
 
-    import_path:                              [] string;
-    compile_time_command_line:                [] string;
-
-    text_output_flags:                        u32;
-    entry_point_name                          := "main";
-
-    temporary_storage_size:                   s64 = 32768;
+    max_bytecode_instructions_for_inlined_initializer: s32 = 8;
     context_size_max:                         s64 = 4096;
+    prevent_compile_time_calls_from_runtime   := false;
+    info_flags:                enum_flags u32 { POLYMORPH_MATCH :: 1; POLYMORPH_DEDUPLICATE :: 2; };
+    text_output_flags:         enum_flags u32 { OUTPUT_LINK_LINE :: 1; OUTPUT_TIMING_INFO :: 2; } = xx 3;
 
+    // Default to what this compiler is building for; `OS` and `CPU` are
+    // injected by the compiler (**L§4.3**).
+    os_target                                 := OS;
+    cpu_target                                := CPU;
+
+    backend                                   := Backend.LLVM;
     machine_options:                          [MACHINE_OPTIONS_SIZE] u8;
+    emit_debug_info                           := Debug_Info_Type.DEFAULT;
+    maximum_polymorph_depth:                  s32 = 100;
+    maximum_array_count_before_compile_time_returns_are_not_reflected_in_ast: s32 = 5000;
+
+    x64_options:                              X64_Options;
+    llvm_options:                             Llvm_Options;
+
+    // orangejuice's own: the level `set_optimization` chose, as a number.
+    optimization_level:                       s32;
 }
 
 Build_Options_During_Compile :: struct {
-    do_output                        := true;
-    write_added_strings              := true;
-    runtime_storageless_type_info    := false;
-    use_visual_studio_message_format := false;
-    stack_trace_on_error             := true;
+    do_output                            := true;
+    write_added_strings                  := true;
+    append_executable_filename_extension := true;
+    interactive_bytecode_debugger        := false;
+    append_linker_arguments:             [] string;
+    output_executable_name:              string;
+    output_path:                         string;
+
+    runtime_storageless_type_info        := false;
+    use_visual_studio_message_format     := false;
+    stack_trace_on_error                 := true;
 }
 
 // Copies the fields a workspace should inherit from the compilation that
@@ -1076,6 +1139,29 @@ Build_Options_During_Compile :: struct {
 // says otherwise, which is what lets one metaprogram build a library and then
 // a program that links it.
 copy_commonly_propagated_fields :: (from: Build_Options, to: *Build_Options) {
+    to.write_added_strings                 = from.write_added_strings;
+    to.runtime_storageless_type_info       = from.runtime_storageless_type_info;
+    to.shorten_filenames_in_error_messages = from.shorten_filenames_in_error_messages;
+    to.use_visual_studio_message_format    = from.use_visual_studio_message_format;
+    to.use_natvis_compatible_types         = from.use_natvis_compatible_types;
+    to.minimum_os_version                  = from.minimum_os_version;
+    to.lazy_foreign_function_lookups       = from.lazy_foreign_function_lookups;
+    to.disable_redzone                     = from.disable_redzone;
+    to.enable_bytecode_inliner             = from.enable_bytecode_inliner;
+    to.enable_bytecode_deduplication       = from.enable_bytecode_deduplication;
+    to.use_ansi_color                      = from.use_ansi_color;
+    to.interactive_bytecode_debugger       = from.interactive_bytecode_debugger;
+    to.debug_for_expansions                = from.debug_for_expansions;
+    to.enable_frame_pointers               = from.enable_frame_pointers;
+    to.runtime_support_definitions         = from.runtime_support_definitions;
+    to.max_bytecode_instructions_for_inlined_initializer = from.max_bytecode_instructions_for_inlined_initializer;
+    to.prevent_compile_time_calls_from_runtime = from.prevent_compile_time_calls_from_runtime;
+    to.info_flags                          = from.info_flags;
+    to.text_output_flags                   = from.text_output_flags;
+    to.machine_options                     = from.machine_options;
+    to.maximum_polymorph_depth             = from.maximum_polymorph_depth;
+    to.x64_options                         = from.x64_options;
+
     to.os_target                 = from.os_target;
     to.cpu_target                = from.cpu_target;
     to.backend                   = from.backend;
@@ -1150,20 +1236,37 @@ set_optimization :: (options: *Build_Options, type: Optimization_Type, preserve_
         options.cast_bounds_check         = .OFF;
         options.null_pointer_check        = .OFF;
         options.arithmetic_overflow_check = .OFF;
+        options.llvm_options.enable_split_modules = false;
+        options.x64_options.enable_unix_runtime_frame_information = false;
     }
 
-    options.stack_trace     = debug;
-    options.emit_debug_info = debug || preserve_debug_info;
+    if !debug && !preserve_debug_info  options.emit_debug_info = .NONE;
+    options.llvm_options.preserve_debug_info = preserve_debug_info;
 
     if type == {
+        case Optimization_Type.DEBUG;
+            options.llvm_options.bitcode_optimization_setting      = .O0;
+            options.llvm_options.machine_code_optimization_setting = .NONE;
         case Optimization_Type.VERY_DEBUG;
+            options.llvm_options.bitcode_optimization_setting      = .O0;
+            options.llvm_options.machine_code_optimization_setting = .NONE;
             options.llvm_options.disable_inlining = true;
+        case Optimization_Type.OPTIMIZED;
+            options.llvm_options.bitcode_optimization_setting      = .O2;
+            options.llvm_options.machine_code_optimization_setting = .DEFAULT;
+            options.llvm_options.code_gen_optimization = 2;
         case Optimization_Type.VERY_OPTIMIZED;
+            options.llvm_options.bitcode_optimization_setting      = .O3;
+            options.llvm_options.machine_code_optimization_setting = .AGGRESSIVE;
             options.llvm_options.code_gen_optimization = 3;
-        case Optimization_Type.OPTIMIZED_SMALL;       #through;
-        case Optimization_Type.OPTIMIZED_VERY_SMALL;
+        case Optimization_Type.OPTIMIZED_SMALL;
+            options.llvm_options.bitcode_optimization_setting      = .OS;
+            options.llvm_options.machine_code_optimization_setting = .DEFAULT;
             options.llvm_options.code_gen_optimization = 1;
-        case;
+        case Optimization_Type.OPTIMIZED_VERY_SMALL;
+            options.llvm_options.bitcode_optimization_setting      = .OZ;
+            options.llvm_options.machine_code_optimization_setting = .DEFAULT;
+            options.llvm_options.code_gen_optimization = 1;
     }
 }
 
@@ -1181,8 +1284,16 @@ Report :: enum u8 {
 }
 
 Intercept_Flags :: enum_flags u32 {
-    NONE     :: 0;
-    SKIP_ALL :: 0x1;
+    NONE                             :: 0;
+    SKIP_EXPRESSIONS_WITHOUT_NOTES   :: 0x1;
+    SKIP_DECLARATIONS                :: 0x2;
+    SKIP_PROCEDURE_HEADERS           :: 0x4;
+    SKIP_PROCEDURE_BODIES            :: 0x8;
+    SKIP_STRUCTS                     :: 0x10;
+    SKIP_OTHERS                      :: 0x20;
+    SKIP_ALL                         :: 0x3e;
+    DO_PERFORMANCE_REPORT_POLYMORPHS :: 0x1000;
+    DO_PERFORMANCE_REPORT_RUNS       :: 0x2000;
 }
 
 Workspace_Status_Flags :: enum_flags u32 {
