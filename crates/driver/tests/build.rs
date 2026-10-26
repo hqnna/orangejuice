@@ -6839,3 +6839,22 @@ fn debug_breakpoints_stop_only_under_a_debugger() {
     "false ran on\n",
   );
 }
+
+#[test]
+fn a_wav_header_is_read_back_from_what_was_written() {
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Wav_File\";\n\
+     main :: () {\n\
+       builder: String_Builder;\n\
+       write_wav_header(*builder, 8, 2, 22050);\n\
+       for 0..7  append(*builder, cast(u8) it);\n\
+       file := builder_to_string(*builder);\n\
+       format, samples, ok, extra := get_wav_header(file);\n\
+       print(\"% % % % % % %\\n\", ok, format.wFormatTag == WAVE_FORMAT_PCM, format.nChannels, format.nSamplesPerSec, format.nBlockAlign, format.wBitsPerSample, samples.count);\n\
+       _, _, bad := get_wav_header(\"RIFF0000WAVX\");\n\
+       print(\"% %\\n\", samples[7], bad);\n\
+     }\n",
+    "true true 2 22050 4 16 8\n7 false\n",
+  );
+}
