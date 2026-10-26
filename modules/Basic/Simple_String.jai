@@ -100,8 +100,11 @@ is_alpha :: (byte: u8) -> bool {
     return (byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z");
 }
 
+// An identifier's byte, so `_` counts: jai-utils continues an identifier with
+// `is_alnum` alone and starts one with `is_alpha(c) || c == "_"`, and
+// toml-jai's bare keys, which allow `_`, are checked with it.
 is_alnum :: (byte: u8) -> bool {
-    return is_alpha(byte) || is_digit(byte);
+    return is_alpha(byte) || is_digit(byte) || byte == #char "_";
 }
 
 // A byte that shows as itself on a terminal, space included — which is what

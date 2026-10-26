@@ -7326,3 +7326,14 @@ fn memcmp_answers_with_the_sign_of_the_difference() {
     "false 1 -1 0\n",
   );
 }
+
+#[test]
+fn is_alnum_takes_an_underscore_and_is_alpha_does_not() {
+  // jai-utils continues an identifier with `is_alnum` alone and begins one
+  // with `is_alpha(c) || c == "_"`; toml-jai's bare keys need `_` from it.
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () { print(\"% % % %\\n\", is_alnum(#char \"_\"), is_alpha(#char \"_\"), is_alnum(#char \"9\"), is_alnum(#char \"-\")); }\n",
+    "true false true false\n",
+  );
+}
