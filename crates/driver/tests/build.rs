@@ -6909,6 +6909,29 @@ fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
 }
 
 #[test]
+fn one_code_inserted_into_several_scopes_is_typed_in_each() {
+  // `#insert,scope() code` resolves the code's names where it is inserted,
+  // so the same snippet under four different `T`s is four programs
+  // (**L§13.2**, The Way to Jai 26.39).
+  assert_output(
+    "#import \"Basic\";\n\
+     each :: (code: Code, $types: ..Type) #expand {\n\
+       #insert -> string {\n\
+         builder: String_Builder;\n\
+         for types print_to_builder(*builder, \"{ T :: %; #insert,scope() code; }\\n\", it);\n\
+         return builder_to_string(*builder);\n\
+       }\n\
+     }\n\
+     main :: () {\n\
+       snippet :: #code { t: T; print(\"'%' \", t); };\n\
+       each(snippet, float32, bool, int, string);\n\
+       print(\"\\n\");\n\
+     }\n",
+    "'0' 'false' '0' '' \n",
+  );
+}
+
+#[test]
 fn an_array_view_with_no_count_runs_to_the_end() {
   // toml-jai writes `array_view(args, 2)` for everything from the third on.
   assert_output(

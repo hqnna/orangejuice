@@ -379,6 +379,10 @@ pub struct Checker<'a> {
   /// The runs being worked out right now, which is what makes a `#run` that
   /// depends on itself an error rather than a hang.
   pub(crate) runs_in_flight: HashSet<(Option<InstanceId>, SourceId, NodeId)>,
+  /// The scope each piece of quoted code was first spliced into by an
+  /// `#insert,scope()`. Its nodes are typed where they were spliced, so a
+  /// second scope gets a copy of its own (**L§13.2**).
+  pub(crate) redirected_code: HashMap<(SourceId, NodeId), ScopeId>,
   /// What each `#modify` answered for the constants it was handed, so that a
   /// block is compiled and run once rather than once per candidate an overload
   /// set offers at every call site (**L§7.8**).
@@ -520,6 +524,7 @@ impl<'a> Checker<'a> {
       run_tuples: HashMap::default(),
       compile_time_depth: 0,
       runs_in_flight: HashSet::default(),
+      redirected_code: HashMap::default(),
       modify_results: HashMap::default(),
       modify_reasons: HashMap::default(),
       modify_rejections: Vec::new(),

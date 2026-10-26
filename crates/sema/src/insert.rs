@@ -175,6 +175,28 @@ impl Checker<'_> {
             .directive_scope(code_source, code)
             .unwrap_or(code_scope),
         };
+        // Its nodes are typed in the scope they were spliced into, so the same
+        // code redirected into a second scope is a copy, printed and read
+        // again there: `T` is a different type in each (The Way to Jai 26.39).
+        if here {
+          let first = *self
+            .redirected_code
+            .entry((code_source, root))
+            .or_insert(scope);
+          if first != scope
+            && let Some(code_ast) = self.ast(code_source)
+            && matches!(code_ast.data(root), NodeData::Block(_))
+          {
+            let text = oj_syntax::print_source(code_ast, root, self.interner());
+            let kind = kind.unwrap_or_else(|| insert_kind(self, target));
+            return self.program().insert_source(
+              target,
+              kind,
+              (source, node, variant),
+              text.as_bytes(),
+            );
+          }
+        }
         // A `#code`'s contents were never walked — quoted code is typechecked
         // where it is inserted — so this is where its blocks open their scopes
         // and its declarations enter one (**L§13.1**).
