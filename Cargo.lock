@@ -286,6 +286,7 @@ dependencies = [
 name = "oj-jit"
 version = "0.4.1"
 dependencies = [
+ "cc",
  "inkwell",
  "libloading",
  "llvm-sys",

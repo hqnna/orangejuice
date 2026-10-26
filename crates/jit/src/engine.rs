@@ -72,10 +72,17 @@ impl Engine {
       ..oj_codegen::Options::default()
     };
     let machine = oj_codegen::target_machine(&options)?;
+    let orc = Orc::new(machine)?;
+    // A `#run` that calls `exit` stops the run, not the compiler: the symbol
+    // the C library would have answered is answered by the guard instead
+    // (`docs/spec.md` §6.5).
+    orc.define("exit", oj_guard_exit as *const () as usize as u64)?;
+    let mut state = State::default();
+    state.defined.insert(String::from("exit"));
     Ok(Self {
-      orc: Orc::new(machine)?,
+      orc,
       options,
-      state: RefCell::new(State::default()),
+      state: RefCell::new(state),
     })
   }
 
@@ -158,7 +165,18 @@ impl Engine {
 
     let mut buffer = Buffer::new(size, alignment);
     let entry: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(address as usize) };
-    entry(buffer.as_mut_ptr());
+    match call_guarded(entry, buffer.as_mut_ptr()) {
+      Ending::Returned => {}
+      Ending::Exited(0) if request.result == TypeId::VOID => return Ok(RunOutcome::Void),
+      ending => {
+        checker.push_diagnostic(Diagnostic::error(
+          request.source,
+          request.span,
+          ending.describe("'#run'"),
+        ));
+        return Err(String::new());
+      }
+    }
 
     if request.result == TypeId::VOID {
       return Ok(RunOutcome::Void);
@@ -277,7 +295,16 @@ impl Engine {
     let size = oj_ir::modify_result_size(request.variables.len());
     let mut buffer = Buffer::new(size, 8);
     let entry: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(address as usize) };
-    entry(buffer.as_mut_ptr());
+    if let ending @ (Ending::Crashed { .. } | Ending::Exited(_)) =
+      call_guarded(entry, buffer.as_mut_ptr())
+    {
+      checker.push_diagnostic(Diagnostic::error(
+        request.source,
+        request.span,
+        ending.describe("'#modify'"),
+      ));
+      return Err(String::new());
+    }
 
     let bytes = buffer.as_slice();
     let accepted =
@@ -530,6 +557,86 @@ impl Engine {
         }
       }
     }
+  }
+}
+
+unsafe extern "C" {
+  fn oj_guarded_call(
+    entry: extern "C" fn(*mut u8),
+    argument: *mut u8,
+    exit_status: *mut i32,
+    fault_address: *mut *mut std::ffi::c_void,
+  ) -> i32;
+  fn oj_guard_exit(status: i32);
+}
+
+/// How a compile-time call ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+  Returned,
+  /// A signal the program raised by faulting: a bad address, a division by
+  /// zero, an instruction the machine does not have.
+  Crashed {
+    signal: i32,
+    address: usize,
+  },
+  /// The program called `exit`.
+  Exited(i32),
+}
+
+/// What `oj_guarded_call` returns when the call reached `exit`.
+const EXITED: i32 = 1000;
+
+impl Ending {
+  /// The diagnostic a run that did not return is reported with, in the words
+  /// Runtime_Support's crash handler uses for the same signals.
+  fn describe(self, what: &str) -> String {
+    match self {
+      Ending::Returned => format!("This {what} returned."),
+      Ending::Exited(status) => format!(
+        "This {what} called exit({status}), which ends the {what} rather than the compiler."
+      ),
+      Ending::Crashed { signal, address } => {
+        let name = match signal {
+          SIGSEGV => "Segmentation fault",
+          SIGBUS => "Bus error",
+          SIGFPE => "Arithmetic exception (division by zero?)",
+          SIGILL => "Illegal instruction",
+          _ => "Signal",
+        };
+        format!("This {what} crashed: {name}. The faulty address is 0x{address:x}.")
+      }
+    }
+  }
+}
+
+const SIGILL: i32 = 4;
+const SIGFPE: i32 = 8;
+const SIGSEGV: i32 = 11;
+#[cfg(target_os = "macos")]
+const SIGBUS: i32 = 10;
+#[cfg(not(target_os = "macos"))]
+const SIGBUS: i32 = 7;
+
+/// Calls a compile-time entry point with the crash signals caught and `exit`
+/// intercepted, so that a run that faults fails its compilation rather than
+/// taking the compiler down with it. The handlers are the ones that were
+/// installed before, again, once the call is over.
+fn call_guarded(entry: extern "C" fn(*mut u8), argument: *mut u8) -> Ending {
+  let mut status = 0;
+  let mut address = std::ptr::null_mut();
+  // SAFETY: `oj_guarded_call` calls `entry(argument)` once and returns how it
+  // ended. A fault unwinds by `siglongjmp` through JIT-compiled frames only,
+  // which have nothing to drop; a `#compiler` procedure that faults would
+  // skip its own destructors, which is no worse than the process dying.
+  let caught = unsafe { oj_guarded_call(entry, argument, &mut status, &mut address) };
+  match caught {
+    0 => Ending::Returned,
+    EXITED => Ending::Exited(status),
+    signal => Ending::Crashed {
+      signal,
+      address: address as usize,
+    },
   }
 }
 

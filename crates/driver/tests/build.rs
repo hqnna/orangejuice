@@ -516,6 +516,55 @@ fn an_expression_too_deep_to_follow_is_reported_rather_than_crashing() {
 }
 
 #[test]
+fn a_run_that_crashes_fails_the_build_instead_of_the_compiler() {
+  // A fault in compile-time code is caught and reported where the `#run`
+  // stands (`docs/spec.md` §6.5); the compiler lives on to say so, and a
+  // second crashing run is reported as well.
+  let Some(diagnostics) = diagnostics_of(
+    "boom :: () -> int { p: *int; return p.*; }\n\
+     X :: #run boom();\n\
+     zero :: () -> int { return 0; }\n\
+     Y :: #run 10 / zero();\n\
+     main :: () { put_number(X + Y); }\n",
+  ) else {
+    return;
+  };
+  assert!(
+    diagnostics
+      .contains("Error: This '#run' crashed: Segmentation fault. The faulty address is 0x0."),
+    "{diagnostics}"
+  );
+  assert!(
+    diagnostics.contains("This '#run' crashed: Arithmetic exception"),
+    "{diagnostics}"
+  );
+}
+
+#[test]
+fn a_run_that_calls_exit_ends_the_run_rather_than_the_compiler() {
+  // `exit` from a `#run` is answered by the guard: a non-zero status is the
+  // run's failure, and zero is a run that finished early.
+  let Some(diagnostics) = diagnostics_of(
+    "exit :: (status: s32) #foreign libc;\n\
+     #run { put(\"before\\n\"); exit(3); put(\"after\\n\"); }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(
+    diagnostics
+      .contains("This '#run' called exit(3), which ends the '#run' rather than the compiler."),
+    "{diagnostics}"
+  );
+  assert_output(
+    "exit :: (status: s32) #foreign libc;\n\
+     #run { exit(0); }\n\
+     main :: () { put(\"built\\n\"); }\n",
+    "built\n",
+  );
+}
+
+#[test]
 fn a_run_computes_the_constant_a_declaration_was_waiting_for() {
   assert_output(
     "factorial :: (x: int) -> int {\n\
