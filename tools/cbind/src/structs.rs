@@ -24,7 +24,25 @@ fn main() {
 
     // `typedef ...;` on one line.
     if line.starts_with("typedef ") && line.ends_with(';') {
-      if let Some((name, rendered)) = typedef(&strip_attributes(&line[8..line.len() - 1])) {
+      // `typedef struct _XOC *XOC, *XFontSet;` declares two names over one
+      // base type; each is the one-name typedef of that base.
+      let body = strip_attributes(&line[8..line.len() - 1]);
+      if body.contains(',') && !body.contains('(') {
+        let mut parts = body.split(',').map(str::trim);
+        let first = parts.next().unwrap_or("");
+        let name_start = first.rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |i| i + 1);
+        let base = first[..name_start].trim_end_matches(|c: char| c == '*' || c.is_whitespace());
+        for declarator in std::iter::once(first[base.len()..].trim()).chain(parts) {
+          if let Some((name, rendered)) = typedef(&format!("{base} {declarator}")) {
+            if wanted.contains(&name) && emitted.insert(name) {
+              println!("{rendered}");
+            }
+          }
+        }
+        at += 1;
+        continue;
+      }
+      if let Some((name, rendered)) = typedef(&body) {
         if wanted.contains(&name) && emitted.insert(name) {
           println!("{rendered}");
         }
@@ -50,7 +68,8 @@ fn main() {
         end += 1;
       }
       if end < lines.len() {
-        let alias = lines[end].trim().trim_start_matches('}').trim().trim_end_matches(';').trim().to_string();
+        let tail = lines[end].trim().trim_start_matches('}').trim().trim_end_matches(';').trim().to_string();
+        let (alias, pointers) = split_aliases(&tail);
 
         let primary = if wanted.contains(&tag) { Some(tag.clone()) } else if wanted.contains(&alias) { Some(alias.clone()) } else { None };
         if let Some(primary) = primary {
@@ -65,6 +84,7 @@ fn main() {
               println!("{other} :: {primary};\n");
             }
           }
+          emit_pointer_aliases(&pointers, &primary, &wanted, &mut emitted);
         }
       }
       at = end + 1;
@@ -98,11 +118,15 @@ fn main() {
       }
       if end < lines.len() {
         let tail = lines[end].trim();
-        let name = tail.trim_start_matches('}').trim().trim_end_matches(';').trim().to_string();
+        let tail = tail.trim_start_matches('}').trim().trim_end_matches(';').trim().to_string();
+        let (name, pointers) = split_aliases(&tail);
         if !name.is_empty() && wanted.contains(&name) && emitted.insert(name.clone()) {
           println!("{name} :: {keyword} {{");
           emit_members(&lines[at + 1..end], 1);
           println!("}}\n");
+        }
+        if !name.is_empty() && emitted.contains(&name) {
+          emit_pointer_aliases(&pointers, &name, &wanted, &mut emitted);
         }
       }
       at = end + 1;
@@ -132,6 +156,22 @@ fn main() {
       continue;
     }
     at += 1;
+  }
+
+  // A tag the headers only ever name — `typedef struct FT_LibraryRec_
+  // *FT_Library;` with the struct private to the library — is opaque too.
+  for name in &wanted {
+    if emitted.contains(name) {
+      continue;
+    }
+    let named = ast.contains(&format!("struct {name} *"))
+      || ast.contains(&format!("struct {name};"))
+      || ast.contains(&format!("typedef struct {name} "));
+    let defined = ast.contains(&format!("struct {name} {{"));
+    if named && !defined && emitted.insert(name.clone()) {
+      println!("// Opaque: the library owns the contents.");
+      println!("{name} :: struct {{}}\n");
+    }
   }
 
   eprintln!("emitted {} of {}", emitted.len(), wanted.len());
@@ -189,7 +229,7 @@ fn member_name(name: &str) -> String {
     "bool", "float", "float32", "float64", "int", "s8", "s16", "s32", "s64", "string", "u8", "u16",
     "u32", "u64", "void",
   ];
-  match PRIMITIVES.contains(&name) {
+  match PRIMITIVES.contains(&name) || is_jai_keyword(name) {
     true => format!("_{name}"),
     false => name.to_string(),
   }
@@ -282,11 +322,17 @@ fn emit_members(lines: &[&str], indent: usize) {
       // An aggregate with no member name is placed inline, the way C does it.
       if tail.is_empty() {
         println!("{pad}using _anonymous_{at}: {keyword} {{");
+        emit_members(&lines[at + 1..end], indent + 1);
+        println!("{pad}}}");
       } else {
-        println!("{pad}{tail}: {keyword} {{");
+        // `struct { ... } min_aspect, max_aspect;` declares two members of
+        // one anonymous type, which Jai spells as two members.
+        for name in tail.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+          println!("{pad}{}: {keyword} {{", member_name(name));
+          emit_members(&lines[at + 1..end], indent + 1);
+          println!("{pad}}}");
+        }
       }
-      emit_members(&lines[at + 1..end], indent + 1);
-      println!("{pad}}}");
       at = end + 1;
       continue;
     }
@@ -295,5 +341,30 @@ fn emit_members(lines: &[&str], indent: usize) {
       println!("{pad}{rendered}");
     }
     at += 1;
+  }
+}
+
+/// `} XkbDescRec, *XkbDescPtr;` names an aggregate and a pointer to it: the
+/// first plain name, and the names that carry stars with how many.
+fn split_aliases(tail: &str) -> (String, Vec<(String, usize)>) {
+  let mut plain = String::new();
+  let mut pointers = Vec::new();
+  for part in tail.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+    let stars = part.chars().take_while(|&c| c == '*' || c.is_whitespace()).filter(|&c| c == '*').count();
+    let name = part.trim_start_matches(|c: char| c == '*' || c.is_whitespace()).to_string();
+    if stars == 0 && plain.is_empty() {
+      plain = name;
+    } else if stars > 0 {
+      pointers.push((name, stars));
+    }
+  }
+  (plain, pointers)
+}
+
+fn emit_pointer_aliases(pointers: &[(String, usize)], target: &str, wanted: &BTreeSet<String>, emitted: &mut BTreeSet<String>) {
+  for (name, stars) in pointers {
+    if wanted.contains(name) && emitted.insert(name.clone()) {
+      println!("{name} :: {}{target};\n", "*".repeat(*stars));
+    }
   }
 }

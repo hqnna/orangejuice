@@ -28,6 +28,11 @@ let
     pkgs.freetype
   ];
 
+  # A virtual X server, so that the tests of `X11`, `GL` and `Clipboard` run
+  # against a display of their own rather than the desktop's — owning the
+  # desktop's CLIPBOARD would overwrite whatever its user had copied.
+  displayServer = [ pkgs.xvfb ];
+
   # `gdb` and `valgrind` do not support Darwin on Apple silicon; `lldb`, which
   # LLVM ships, is the debugger there.
   debuggers =
@@ -56,7 +61,7 @@ pkgs.mkShell {
     pkgs.coreutils
   ]
   ++ debuggers
-  ++ lib.optionals stdenv.hostPlatform.isLinux graphicsLibraries;
+  ++ lib.optionals stdenv.hostPlatform.isLinux (graphicsLibraries ++ displayServer);
 
   env = {
     LLVM_SYS_191_PREFIX = "${llvm.llvm.dev}";

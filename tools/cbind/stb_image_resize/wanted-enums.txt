@@ -1,0 +1,4 @@
+stbir_colorspace
+stbir_datatype
+stbir_edge
+stbir_filter

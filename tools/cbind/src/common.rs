@@ -231,7 +231,27 @@ fn split_name(text: &str, index: usize) -> (String, String) {
   if bare.is_empty() || bare.chars().all(|c| c == 42 as char) {
     return unnamed();
   }
-  (candidate.to_string(), rest.to_string())
+  let reserved = is_jai_keyword(candidate)
+    || matches!(
+      candidate,
+      "bool" | "float" | "float32" | "float64" | "int" | "s8" | "s16" | "s32" | "s64" | "string" | "u8" | "u16" | "u32" | "u64" | "void"
+    );
+  let candidate = if reserved { format!("_{candidate}") } else { candidate.to_string() };
+  (candidate, rest.to_string())
+}
+
+/// A C name Jai reserves — FreeType's `FT_Matrix` has a member called `xx`,
+/// and stb hands a callback its `context` — which is emitted with a leading
+/// `_`, the way a member named after a primitive type is.
+#[allow(dead_code)]
+fn is_jai_keyword(word: &str) -> bool {
+  matches!(
+    word,
+    "if" | "xx" | "ifx" | "for" | "then" | "else" | "null" | "case" | "enum" | "true" | "cast" | "while" | "break"
+      | "using" | "defer" | "false" | "union" | "return" | "struct" | "remove" | "inline" | "size_of" | "type_of"
+      | "code_of" | "context" | "continue" | "operator" | "type_info" | "no_inline" | "interface" | "enum_flags"
+      | "is_constant" | "push_context" | "initializer_of"
+  )
 }
 
 #[allow(dead_code)]

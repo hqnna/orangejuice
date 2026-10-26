@@ -1,0 +1,6 @@
+XICCEncodingStyle
+XIMCaretDirection
+XIMCaretStyle
+XIMStatusDataType
+XOrientation
+XrmOptionKind

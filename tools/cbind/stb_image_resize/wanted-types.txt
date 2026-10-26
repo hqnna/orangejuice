@@ -1,0 +1,3 @@
+stbir_uint16
+stbir_uint32
+stbir_uint8

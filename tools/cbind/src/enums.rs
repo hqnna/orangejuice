@@ -11,6 +11,7 @@ use std::io::Read;
 fn main() {
   let args: Vec<String> = std::env::args().collect();
   let ast = std::fs::read_to_string(&args[1]).expect("ast file");
+  let aliases = args.get(2).is_some_and(|style| style == "aliases");
   let mut wanted = String::new();
   std::io::stdin().read_to_string(&mut wanted).unwrap();
   let wanted: BTreeSet<String> = wanted.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
@@ -106,6 +107,16 @@ fn main() {
     let from_prefix = name == prefix
       || (name.starts_with(&format!("{prefix}_")) && name[prefix.len() + 1..].chars().all(|c| c.is_ascii_digit()));
     let strip = head.is_empty() && from_prefix;
+    // In the alias style a named enum loses its prefix too, and the C spelling
+    // stays reachable inside it — unless a member would be left starting with
+    // a digit, which no Jai name can.
+    let alias = aliases
+      && !strip
+      && !prefix.is_empty()
+      && members.iter().all(|(member, _)| {
+        member.len() > prefix.len() + 1 && !member.as_bytes()[prefix.len() + 1].is_ascii_digit()
+      });
+    let strip = strip || alias;
 
     println!("{name} :: enum s32 {{");
     for (member, value) in &members {
@@ -113,6 +124,12 @@ fn main() {
       match value {
         Some(v) => println!("    {shown} :: {};", rewrite(v, &prefix, strip)),
         None => println!("    {shown};"),
+      }
+    }
+    if alias {
+      println!();
+      for (member, _) in &members {
+        println!("    {member} :: {};", &member[prefix.len() + 1..]);
       }
     }
     println!("}}");
@@ -156,7 +173,8 @@ fn rewrite(value: &str, prefix: &str, strip: bool) -> String {
     }
     out
   };
-  let value = stripped.as_str();
+  let uncast = c_casts_removed(&stripped);
+  let value = uncast.as_str();
   let trimmed = value.trim();
   if strip && trimmed.starts_with(prefix) && trimmed.len() > prefix.len() + 1 {
     return trimmed[prefix.len() + 1..].to_string();
@@ -176,4 +194,38 @@ fn common_prefix(members: &[(String, Option<String>)]) -> String {
     take -= 1;
   }
   String::new()
+}
+
+/// Takes off the C casts a value is spelled with and turns a character
+/// literal into its code, which is what a four-character tag such as
+/// FreeType's `FT_IMAGE_TAG` expands to: `((unsigned long)(unsigned char)('c')
+/// << 24) | ...` reads as `(((99) << 24) | ...` and folds the same.
+fn c_casts_removed(value: &str) -> String {
+  let chars: Vec<char> = value.chars().collect();
+  let mut out = String::new();
+  let mut i = 0;
+  while i < chars.len() {
+    if chars[i] == '\'' && i + 2 < chars.len() && chars[i + 2] == '\'' {
+      out.push_str(&(chars[i + 1] as u32).to_string());
+      i += 3;
+      continue;
+    }
+    if chars[i] == '(' {
+      if let Some(close) = chars[i + 1..].iter().position(|&c| c == ')') {
+        let inner: String = chars[i + 1..i + 1 + close].iter().collect();
+        let after = chars.get(i + close + 2).copied();
+        let words: Vec<&str> = inner.split_whitespace().collect();
+        let is_type = !words.is_empty()
+          && words.iter().all(|w| w.chars().all(|c| c.is_alphanumeric() || c == '_') && !w.chars().next().unwrap().is_ascii_digit())
+          && (words.len() > 1 || matches!(words[0], "char" | "short" | "int" | "long" | "unsigned" | "signed") || words[0].ends_with("_t") || words[0].starts_with("FT_"));
+        if is_type && matches!(after, Some('(') | Some('\'')) {
+          i += close + 2;
+          continue;
+        }
+      }
+    }
+    out.push(chars[i]);
+    i += 1;
+  }
+  out
 }

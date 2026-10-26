@@ -15,6 +15,11 @@ anyone's source.
 | `linux`  | epoll, inotify, input, statx, io_uring | `modules/Linux/generated.jai` |
 | `lz4`    | lz4, lz4hc, lz4frame | `modules/lz4/generated.jai` |
 | `darwin` | kqueue, sysctl, Mach time, dyld, libproc | `modules/Darwin/generated.jai` |
+| `x11`    | Xlib, Xutil, Xatom, Xresource, XKBlib, cursorfont, keysym | `modules/X11/generated.jai` |
+| `gl`     | `gl.h`, `glext.h` | `modules/GL/generated.jai` |
+| `glx`    | `glx.h`, `glxext.h` | `modules/GL/glx_generated.jai` |
+| `freetype` | `freetype.h` and its public siblings | `modules/freetype/generated.jai` |
+| `stb_image`, `stb_image_write`, `stb_image_resize` | the headers vendored in each module | `modules/<name>/generated.jai` |
 
 `posix` writes the file for the architecture it runs on, because that binding
 is the *architecture's* and not just the system's: 299 of its declarations
@@ -158,6 +163,46 @@ generator's fault:
 
 So run those two without `--write`, read the diff, and decide. `lz4` has
 lists but has never been run — its headers are not in the dev shell.
+
+### The graphical modules
+
+`x11`, `gl`, `glx`, `freetype` and the three stb modules all round-trip: each
+regenerates to `no change`. Their wanted lists were written by taking every
+name the module's own headers declare — every `X*` function of the X
+headers, every `gl*` of `gl.h` and `glext.h`, every macro of the module's
+headers that the C library headers they include do not also define — so they
+are the library's whole public surface rather than a selection. A few more
+pieces of data beside the lists say what the headers cannot:
+
+- `<module>/pkg-config` names the packages whose `--cflags` find the headers,
+  so `generate.sh x11` needs nothing in `CBIND_CFLAGS`.
+- `<module>/wanted-strings.txt` is the macros whose value is a string literal,
+  copied as that literal — `XNClientWindow :: "clientWindow";` — since the
+  constants program can only print numbers.
+- `<module>/enum-aliases` (empty; its presence is the switch) has a *tagged*
+  enum lose its members' common prefix the way an anonymous one does, and keep
+  each C spelling as an alias inside it: `FT_Render_Mode_.NORMAL` and
+  `.FT_RENDER_MODE_NORMAL` are one value, because programs written against the
+  reference use both.
+- `<module>/procedure-pointers` turns the procedures into the members of a
+  struct, for a library whose entry points are looked up at run time: its
+  first line names the struct (`GL_Procedures`), and every line after it is a
+  `bool` member — the `GL_VERSION_x_y` and extension names, which `gl_load`
+  sets from the context.
+- Every procedure binds to the module's own library (`libx11`, `libgl`,
+  `libfreetype`, `libstb_image`, ...), which `generate.sh` names per module and
+  the module's `module.jai` declares.
+
+The emitters learned what these headers needed, none of which changes what
+`posix` produces: a C name Jai reserves (`xx`, `context`) or a primitive's name
+(`string`) used as a member or parameter gets a leading `_`; a typedef that
+declares several names (`typedef struct _XOC *XOC, *XFontSet;`,
+`} XkbDescRec, *XkbDescPtr;`) declares each; an anonymous struct member
+shared by two names (`struct {...} min_aspect, max_aspect;`) is two members;
+a tag the headers only ever name and never define (`FT_LibraryRec_`) is
+emitted opaque; and an enum value spelled with C casts and character
+literals — FreeType's four-character tags — has the casts taken off and the
+characters turned into their codes, which folds to the same number.
 
 ## What is not generated
 

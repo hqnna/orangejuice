@@ -7,6 +7,8 @@
 #     tools/cbind/generate.sh linux
 #     tools/cbind/generate.sh darwin   # on a Mac; the others want Linux
 #     tools/cbind/generate.sh lz4      # needs lz4's headers; see README
+#     tools/cbind/generate.sh x11      # and gl, glx, freetype, stb_image,
+#                                      # stb_image_write, stb_image_resize
 #
 # What comes out is written beside the module's file as `<name>.new`, and the
 # diff against what is committed is printed. It is *not* moved into place:
@@ -43,9 +45,22 @@ case "$module" in
   socket) target=$root/modules/Socket/generated.jai      ; lib=libc ;;
   linux)  target=$root/modules/Linux/generated.jai       ; lib=libc ;;
   lz4)    target=$root/modules/lz4/generated.jai         ; lib=lz4lib ;;
+  gl)     target=$root/modules/GL/generated.jai          ; lib=libgl ;;
+  glx)    target=$root/modules/GL/glx_generated.jai      ; lib=libgl ;;
+  x11)    target=$root/modules/X11/generated.jai         ; lib=libx11 ;;
+  freetype)         target=$root/modules/freetype/generated.jai         ; lib=libfreetype ;;
+  stb_image)        target=$root/modules/stb_image/generated.jai        ; lib=libstb_image ;;
+  stb_image_write)  target=$root/modules/stb_image_write/generated.jai  ; lib=libstb_image_write ;;
+  stb_image_resize) target=$root/modules/stb_image_resize/generated.jai ; lib=libstb_image_resize ;;
   *) echo "unknown module: $module" >&2; exit 2 ;;
 esac
 : "$lib"
+
+# A module over a library the system ships names its `pkg-config` package,
+# which says where the headers are.
+if [ -f "$here/$module/pkg-config" ]; then
+  CBIND_CFLAGS="${CBIND_CFLAGS:-} $(pkg-config --cflags $(cat "$here/$module/pkg-config"))"
+fi
 
 for source in main structs enums consts; do
   out=$work/$(echo "$source" | sed 's/^main$/cbind/;s/^structs$/cstructs/;s/^enums$/cenums/;s/^consts$/cconsts/')
@@ -167,9 +182,51 @@ if [ -s "$work/flagmembers.txt" ]; then
   mv "$work/constants.tmp" "$work/constants.jai"
 fi
 
+# A macro whose value is a string literal cannot go through the constants
+# program, which would print an address; `wanted-strings.txt` names the ones
+# the module keeps, and they are copied as the literal the header wrote —
+# `XNClientWindow :: "clientWindow";`.
+if [ -f "$here/$module/wanted-strings.txt" ]; then
+  awk 'NR == FNR { want[$1] = 1; next }
+       ($1 in want) && $2 ~ /^"[^"\\]*"$/ && NF == 2 { print $1 " :: " $2 ";" }' \
+    "$here/$module/wanted-strings.txt" "$work/macros.txt" | sort >> "$work/constants.jai"
+fi
+
 wanted types      | "$work/cstructs" "$work/ast.txt" > "$work/types.jai"  2>/dev/null
-wanted enums      | "$work/cenums"   "$work/ast.txt" > "$work/enums.jai"  2>/dev/null
+# `enum-aliases` asks for a tagged enum's members to lose their common prefix
+# the way an anonymous enum's do, with the C spelling kept as an alias inside
+# the enum, so that `.NORMAL` and `.FT_RENDER_MODE_NORMAL` both name one value.
+enum_style=""
+[ -f "$here/$module/enum-aliases" ] && enum_style=aliases
+wanted enums      | "$work/cenums"   "$work/ast.txt" $enum_style > "$work/enums.jai"  2>/dev/null
 wanted procedures | "$work/cbind"    "$work/ast.txt" > "$work/procs.jai"  2>/dev/null
+
+# The emitters bind every procedure to `libc`; a module over a library of its
+# own names that library instead.
+if [ "$lib" != libc ]; then
+  sed -i "s/ #foreign libc;\$/ #foreign $lib;/" "$work/procs.jai"
+fi
+
+# A library whose entry points are looked up at run time — OpenGL's, which
+# `glXGetProcAddress` answers — is bound as a struct of procedure pointers
+# rather than as `#foreign` procedures. `procedure-pointers` names the struct
+# and, one per line after it, the `#define`s that name a version or an
+# extension: each of those becomes a `bool` member the loader fills in.
+pointers=$here/$module/procedure-pointers
+if [ -f "$pointers" ]; then
+  struct=$(head -n 1 "$pointers")
+  {
+    printf '%s :: struct {\n' "$struct"
+    tail -n +2 "$pointers" | while read -r flag; do
+      [ -z "$flag" ] && continue
+      printf '    %s: bool;\n' "$flag"
+    done
+    printf '\n'
+    sed -E 's/^([A-Za-z_][A-Za-z_0-9]*) :: (.*) #foreign [A-Za-z_0-9]+;$/    \1: \2 #c_call;/' "$work/procs.jai"
+    printf '}\n'
+  } > "$work/procs.tmp"
+  mv "$work/procs.tmp" "$work/procs.jai"
+fi
 
 # A C struct and a C function may share a name; Jai has one namespace for both,
 # so `renames.txt` says which keeps it. The emitters do not apply that — they

@@ -45,6 +45,15 @@ let
 
     nativeBuildInputs = [ pkgs.pkg-config ];
 
+    # What the tests of the `freetype`, `X11` and `GL` modules link against.
+    # There is no display in the build sandbox, so the parts that need one
+    # skip; what links and what the headers say is still checked.
+    checkInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+      pkgs.freetype
+      pkgs.libx11
+      pkgs.libGL
+    ];
+
     buildInputs = [
       llvm.llvm
       pkgs.zlib
@@ -70,9 +79,22 @@ let
     # `modules/Preload.jai` turns up — so an installed compiler needs the
     # distribution installed beside it. Without this there is no Preload and no
     # program compiles.
+    #
+    # The stb modules ship C source rather than a library, and build it the
+    # first time a program imports them — into the module's own directory,
+    # which an installed distribution cannot write to. So it is built here,
+    # with the same flags `modules/stb_image/c_library.jai` uses and into the
+    # place it looks.
     postInstall = ''
       cp -r ${src}/modules $out/modules
       chmod -R u+w $out/modules
+      for name in stb_image stb_image_write stb_image_resize; do
+        dir=$out/modules/$name/.build/${pkgs.stdenv.hostPlatform.system}
+        mkdir -p "$dir"
+        $CC -O2 -fPIC -w -c "$out/modules/$name/$name.c" -o "$dir/$name.o"
+        $AR rcs "$dir/$name.a" "$dir/$name.o"
+        rm "$dir/$name.o"
+      done
     '';
 
     passthru = { inherit commonArgs cargoArtifacts portable; };
