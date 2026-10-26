@@ -2197,6 +2197,30 @@ impl<'a> Program<'a> {
       branch: None,
       overloadable: false,
     });
+    // The module sees the name as it is declared where the poke was written:
+    // a `#placeholder` is filled by it, and a procedure joins the module's
+    // overload set of that name (**L§11.9**).
+    // Exported names live in the module scope rather than the file's, so both
+    // are where the poked name is looked for.
+    let mut origins = vec![target.scope];
+    if let Some(module) = self.tree.enclosing_module(target.scope)
+      && module != target.scope
+    {
+      origins.push(module);
+    }
+    for origin in origins {
+      self.tree.add_import(
+        destination,
+        ImportEdge {
+          target: origin,
+          only: vec![poked],
+          except: Vec::new(),
+          span,
+          source: Some(source),
+          transitive: true,
+        },
+      );
+    }
   }
 
   // ------------------------------------------------------------ static if ---

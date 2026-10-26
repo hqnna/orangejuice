@@ -539,9 +539,12 @@ impl ScopeTree {
       // outer scope declares.
       let declared = found.unwrap_or_default();
       let gathers = declared.is_empty()
-        || declared
-          .iter()
-          .all(|decl| self.decl(*decl).kind == DeclKind::Procedure);
+        || declared.iter().all(|decl| {
+          matches!(
+            self.decl(*decl).kind,
+            DeclKind::Procedure | DeclKind::Placeholder
+          )
+        });
       let mut here = declared;
       if gathers && let Some(imported) = self.lookup_through_imports(id, name) {
         for decl in imported {

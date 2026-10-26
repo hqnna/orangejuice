@@ -280,10 +280,10 @@ operator - :: (a: Vector4) -> Vector4 { return .{-a.x, -a.y, -a.z, -a.w}; }
 operator * :: (a: Vector4, s: float32) -> Vector4 #symmetric { return .{a.x * s, a.y * s, a.z * s, a.w * s}; }
 operator == :: (a: Vector4, b: Vector4) -> bool { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; }
 
-dot :: (a: Vector2, b: Vector2) -> float32 { return a.x * b.x + a.y * b.y; }
-dot :: (a: Vector3, b: Vector3) -> float32 { return a.x * b.x + a.y * b.y + a.z * b.z; }
-dot :: (a: Vector4, b: Vector4) -> float32 { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
-dot :: (a: Quaternion, b: Quaternion) -> float32 { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+dot_product :: (a: Vector2, b: Vector2) -> float32 { return a.x * b.x + a.y * b.y; }
+dot_product :: (a: Vector3, b: Vector3) -> float32 { return a.x * b.x + a.y * b.y + a.z * b.z; }
+dot_product :: (a: Vector4, b: Vector4) -> float32 { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+dot_product :: (a: Quaternion, b: Quaternion) -> float32 { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
 
 cross :: (a: Vector3, b: Vector3) -> Vector3 {
     return .{
@@ -476,7 +476,7 @@ half_to_float :: (h: u16) -> float {
 
 // ------------------------------------------------------------ the vectors ---
 
-dot_product :: dot;
+dot :: dot_product;
 cross_product :: cross;
 
 distance_squared :: inline (a: Vector2, b: Vector2) -> float { return length_squared(b - a); }

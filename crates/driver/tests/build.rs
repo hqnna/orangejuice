@@ -6858,3 +6858,23 @@ fn a_wav_header_is_read_back_from_what_was_written() {
     "true true 2 22050 4 16 8\n7 false\n",
   );
 }
+
+#[test]
+fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
+  // `#poke_name M name;` makes the program's `name` one the module sees: a
+  // `#placeholder` is filled by it and a procedure joins the module's own
+  // overloads, from inside the module and through `M.` alike (**L§11.9**).
+  assert_output(
+    "#import \"Basic\";\n\
+     M :: #import,string \"#placeholder answer;\\n\
+     call :: () -> int { return answer(); }\\n\
+     mix :: (a: int) -> int { return a; }\\n\
+     total :: mix;\\n\";\n\
+     answer :: () -> int { return 42; }\n\
+     mix :: (a: float) -> int { return 7; }\n\
+     #poke_name M answer;\n\
+     #poke_name M mix;\n\
+     main :: () { print(\"% % % %\\n\", M.call(), M.mix(1.5), M.mix(3), M.total(2.5)); }\n",
+    "42 7 3 7\n",
+  );
+}

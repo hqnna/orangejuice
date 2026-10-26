@@ -1378,7 +1378,7 @@ Data-scope declarations are resolved by a scheduler: each declaration waits for 
 
 ### 11.9 `#poke_name`
 
-`#poke_name Module_Name identifier;` injects a declaration `identifier` (visible in the current scope) into the *module scope* of the named import `Module_Name` (a named `#import` binding), so that the module can refer to a user-provided symbol (e.g. a hash function or a `#placeholder` filled from outside). Exported as `Code_Directive_Poke_Name { module_struct; name }`.
+`#poke_name Module_Name identifier;` injects a declaration `identifier` (visible in the current scope) into the *module scope* of the named import `Module_Name` (a named `#import` binding), so that the module can refer to a user-provided symbol (e.g. a hash function or a `#placeholder` filled from outside). orangejuice makes the name visible to the module the way an import does, from the scope the poke was written in: a `#placeholder` of that name is filled by it, a procedure joins the module's own overloads of that name (so `Math.dot` reaches a program's `dot_product` for its own vector type, since `Math` declares `dot :: dot_product`), and `Module.name` reaches it from outside. Exported as `Code_Directive_Poke_Name { module_struct; name }`.
 
 ### 11.10 Program parameters of interest
 
