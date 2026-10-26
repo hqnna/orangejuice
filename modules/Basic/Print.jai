@@ -745,6 +745,27 @@ append_format_float :: (builder: *String_Builder, value: Any, format: *FormatFlo
 
     places := ifx format.trailing_width >= 0 then cast(s64) format.trailing_width else 6;
     if places > 17  places = 17;
+
+    // `d.ddd` and a power of ten, the way C's `%e` writes it: one digit
+    // before the point, `places` after it, and an exponent of at least two
+    // digits with its sign. toml-jai's formatting example is what pins it:
+    // `0.000998` with no width is `9.98e-04`, and with a width of 0 `1e-03`.
+    exponent_of_ten := 0;
+    if format.mode == .SCIENTIFIC {
+        lead := 0;
+        while lead < decimal.count - 1 && decimal.digits[lead] == 0  lead += 1;
+        exponent_of_ten = (decimal.count - decimal.fraction) - 1 - lead;
+        if lead  for lead..decimal.count - 1  decimal.digits[it - lead] = decimal.digits[it];
+        decimal.count -= lead;
+        decimal.fraction = decimal.count - 1;
+        decimal_round(*decimal, places);
+        // Rounding up may make it `10.000`, which is `1.0000` one power up.
+        if decimal.count - decimal.fraction > 1 {
+            exponent_of_ten += 1;
+            decimal.fraction += 1;
+            decimal_round(*decimal, places);
+        }
+    }
     decimal_round(*decimal, places);
     decimal_pad(*decimal, places);
 
@@ -758,9 +779,20 @@ append_format_float :: (builder: *String_Builder, value: Any, format: *FormatFlo
         case .NO;                     // Keep what was asked for.
     }
 
+    if format.mode == .SCIENTIFIC {
+        magnitude := ifx exponent_of_ten < 0 then -exponent_of_ten else exponent_of_ten;
+        padding -= ifx magnitude >= 100 then 5 else 4;
+    }
     for 1..padding  append(builder, #char " ");
     append(builder, builder_to_string(*inner,, allocator = temp));
     decimal_append(builder, *decimal, format);
+    if format.mode == .SCIENTIFIC {
+        append(builder, format.exponent_character);
+        append(builder, ifx exponent_of_ten < 0 then #char "-" else #char "+");
+        magnitude := ifx exponent_of_ten < 0 then -exponent_of_ten else exponent_of_ten;
+        if magnitude < 10  append(builder, #char "0");
+        append_s64(builder, magnitude);
+    }
 }
 
 // Right-aligns what was built into a column `width` wide. A shorter width than

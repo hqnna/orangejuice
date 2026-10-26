@@ -7386,3 +7386,18 @@ fn the_address_of_it_in_an_array_loop_is_the_element() {
     "[{\"a\", 101}, {\"b\", 120}] [2, 4, 6]\n",
   );
 }
+
+#[test]
+fn a_scientific_float_is_one_digit_a_fraction_and_a_signed_exponent() {
+  // toml-jai's formatting example: `%e`'s shape, with the trailing zeros off
+  // unless asked to stay.
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       v: float64 = 0.000998;\n\
+       print(\"% % % %\\n\", formatFloat(v, mode=.SCIENTIFIC, trailing_width=0), formatFloat(v, mode=.SCIENTIFIC), formatFloat(cast(float32) 123456.7, mode=.SCIENTIFIC), formatFloat(9.9999999, mode=.SCIENTIFIC));\n\
+       print(\"[%] [%]\\n\", formatFloat(5.0, mode=.SCIENTIFIC, zero_removal=.NO), formatFloat(0.5, mode=.SCIENTIFIC, width=16));\n\
+     }\n",
+    "1e-03 9.98e-04 1.234567e+05 1e+01\n[5.000000e+00] [    5e-01]\n",
+  );
+}
