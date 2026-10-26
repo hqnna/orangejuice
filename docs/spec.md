@@ -482,6 +482,18 @@ type name (25.1, 29.3), how a tagged union prints (26.31), `#ifx … then a;
 else b;` (26.5) and `Pool`'s bookkeeping (34.4). toml-jai's six are its
 tagged unions.
 
+Taking the newer betas' syntax from how the corpus writes it (**L§8.8** tagged
+unions, `#string,\%`, `#assert cond, "message"`, `#ifx … then a; else b;`,
+bare `{ … }` literals, `#code` of a keyword statement and the rest) brought
+26.5 in: The Way to Jai is 226 / 6 / 49. Of the 1297 `.jai` files of the 24
+projects, 9 do not parse: deliberately broken test inputs of the Jails
+parser and the editor, the book's pre-0.1 `#foreign_library` bindings, a typo
+in forbear's calculator, and reflector's `#assert(cond, format, args…)`,
+whose arguments after the message orangejuice does not take. toml-jai now parses and
+stops at semantics of the betas after 0.2.009 — a one-character string
+literal where a `u8` is wanted, `>=` between a byte and one — which
+`TODO.md` lists.
+
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
 book program that prints a workspace number expects to be driven by
