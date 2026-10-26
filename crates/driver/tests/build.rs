@@ -745,6 +745,30 @@ fn a_failing_assertion_quotes_its_message() {
 }
 
 #[test]
+fn an_assertion_message_may_follow_a_comma() {
+  // `#assert cond, "message";` (Focus) is the newer betas' spelling, and the
+  // message may be a constant string rather than a literal (**L§12.2**).
+  let Some(text) = diagnostics_of(
+    "WHY :: \"named reason\";\n\
+     #assert 1 == 2, \"one is not two\";\n\
+     #assert 1 == 3, WHY;\n\
+     #assert 1 == 1, \"holds\";\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert!(
+    text.contains("Error: Compile-time assertion failed. \"one is not two\""),
+    "{text}"
+  );
+  assert!(
+    text.contains("Error: Compile-time assertion failed. \"named reason\""),
+    "{text}"
+  );
+  assert!(!text.contains("holds"), "{text}");
+}
+
+#[test]
 fn an_assertion_over_a_run_is_executed() {
   let Some(text) = diagnostics_of(
     "answer :: () -> int { return 41; }\n\

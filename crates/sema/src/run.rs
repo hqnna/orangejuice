@@ -341,7 +341,12 @@ impl Checker<'_> {
     };
     let message = run.assertion_string?;
     let NodeData::Literal(literal) = ast.data(message) else {
-      return None;
+      // `#assert cond, MESSAGE;` may name a constant string.
+      let scope = self.scope_of(source, message)?;
+      return match self.expression_type(scope, source, message).constant?.value {
+        crate::constants::Value::String(text) => Some(String::from_utf8_lossy(&text).into_owned()),
+        _ => None,
+      };
     };
     match &literal.value {
       oj_syntax::ast::LiteralValue::Text(text) => {

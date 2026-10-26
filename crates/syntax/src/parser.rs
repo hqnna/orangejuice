@@ -3867,6 +3867,10 @@ impl Parser<'_> {
 
     let assertion_string = if assertion_message.is_some() {
       assertion_message
+    } else if is_assertion && self.eat(TokenKind::COMMA) {
+      // `#assert cond, "message";` — the comma form the betas after 0.2.009
+      // write (Focus).
+      Some(self.parse_expression()?)
     } else if is_assertion && self.at(TokenKind::STRING) {
       let token = self.bump();
       let text = match token.value {
@@ -4434,6 +4438,14 @@ mod tests {
     assert_eq!(
       printed("#assert(x > 0, \"nope\");"),
       "#assert x > 0 \"nope\";\n"
+    );
+    assert_eq!(
+      printed("#assert false, \"Unsupported OS\";"),
+      "#assert false \"Unsupported OS\";\n"
+    );
+    assert_eq!(
+      printed("#assert x > 0, MESSAGE;"),
+      "#assert x > 0, MESSAGE;\n"
     );
     assert!(
       printed("#if OS == .LINUX { x :: 1; } else { x :: 2; }").starts_with("#if OS == .LINUX {")

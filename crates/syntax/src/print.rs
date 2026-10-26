@@ -996,7 +996,14 @@ impl Printer<'_> {
     }
 
     if let Some(assertion_string) = run.assertion_string {
-      self.write(" ");
+      // A message that is not a string literal can only follow a comma.
+      match self.ast.data(assertion_string) {
+        NodeData::Literal(Literal {
+          value: LiteralValue::Text(_),
+          ..
+        }) => self.write(" "),
+        _ => self.write(", "),
+      }
       self.expression(assertion_string);
     }
   }
