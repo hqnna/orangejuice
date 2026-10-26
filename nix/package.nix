@@ -47,13 +47,15 @@ let
 
     nativeBuildInputs = [ pkgs.pkg-config ];
 
-    # What the tests of the `freetype`, `X11` and `GL` modules link against.
-    # There is no display in the build sandbox, so the parts that need one
-    # skip; what links and what the headers say is still checked.
+    # What the tests of the `freetype`, `X11`, `GL` and `Sound_Player`
+    # modules link against. There is no display in the build sandbox, so the
+    # parts that need one skip; what links and what the headers say is still
+    # checked, and sound goes to ALSA's null device.
     checkInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.freetype
       pkgs.libx11
       pkgs.libGL
+      pkgs.alsa-lib
     ];
 
     buildInputs = [
