@@ -6592,3 +6592,16 @@ fn a_run_that_adds_to_its_own_compilation_runs_once_per_round() {
   let rounds = std::fs::read_to_string(&log).expect("the #run wrote its log");
   assert_eq!(rounds.lines().count(), 2, "{rounds}");
 }
+
+#[test]
+fn math_negates_a_vector() {
+  // Math's own `make_look_at_matrix` writes `-viewpoint`, so without a unary
+  // `operator -` every program checked whole through the metaprogram failed
+  // on Math rather than on itself.
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Math\";\n\
+     main :: () { print(\"% % %\\n\", -Vector2.{1, 2}, -Vector3.{1, 2, 3}, -Vector4.{1, 2, 3, 4}); }\n",
+    "{-1, -2} {-1, -2, -3} {-1, -2, -3, -4}\n",
+  );
+}
