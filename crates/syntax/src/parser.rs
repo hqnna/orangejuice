@@ -625,6 +625,11 @@ impl Parser<'_> {
         for_flags |= ForFlags::POINTER;
       } else if self.eat(TokenKind::TIMESEQUALS) {
         want_pointer = Some(self.parse_unary()?);
+      } else if want_replacement.is_none() && self.at(TokenKind::COLON) {
+        // `for < :ITERATOR view` (the editor): the modifiers come in any order.
+        self.bump();
+        let token = self.expect(TokenKind::IDENT, "a for_expansion name")?;
+        want_replacement = Some(self.ident_node(&token));
       } else {
         break;
       }
@@ -2769,6 +2774,21 @@ impl Parser<'_> {
       let name = self.ident_node(&token);
       return self.parse_parameter_tail(start, name, flags);
     }
+    // A parameter may be called `context` (Focus's generated Wayland binding,
+    // after C's `context` argument). In the body the word still means the
+    // context.
+    if self.at(TokenKind::KEYWORD_CONTEXT) && self.kind_at(1) == TokenKind::COLON {
+      let token = self.bump();
+      let symbol = self.interner.intern(b"context");
+      let name = self.push(
+        token.span,
+        NodeData::Ident(Ident {
+          name: symbol,
+          flags: IdentFlags::empty(),
+        }),
+      );
+      return self.parse_parameter_tail(start, name, flags);
+    }
 
     let type_inst = self.parse_type()?;
     Some(self.make_declaration(start, None, Some(type_inst), None, flags))
@@ -3023,9 +3043,39 @@ impl Parser<'_> {
       self.bump();
       self.bump();
     }
+    let mut notes = self.parse_notes();
+    // `struct(T: Type) @note #type_info_none { … }` (the Jails parser's
+    // tests): the directives may come after notes as well as before them.
+    if !notes.is_empty() {
+      loop {
+        if self.at_directive(b"modify") {
+          self.bump();
+          self.bump();
+          let modify_start = self.span().start;
+          let block = self.parse_braced_block(BlockType::Imperative, BlockFlags::empty())?;
+          let modify = self.push(
+            self.span_from(modify_start),
+            NodeData::DirectiveModify { block },
+          );
+          modify_blocks.push(modify);
+        } else if self.eat_directive(b"type_info_none") {
+          structure.textual_flags |= StructFlags::TYPE_INFO_NONE;
+        } else if self.eat_directive(b"type_info_no_size_complaint") {
+          structure.textual_flags |= StructFlags::TYPE_INFO_NO_SIZE_COMPLAINT;
+        } else if self.eat_directive(b"type_info_procedures_are_void_pointers") {
+          structure.textual_flags |= StructFlags::TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS;
+        } else if self.eat_directive(b"no_padding") {
+          structure.textual_flags |= StructFlags::NO_PADDING;
+        } else if self.eat_directive(b"foreign") {
+          structure.textual_flags |= StructFlags::FOREIGN;
+        } else if self.at(TokenKind::NOTE) {
+          notes.extend(self.parse_notes());
+        } else {
+          break;
+        }
+      }
+    }
     structure.modify_directives = modify_blocks;
-
-    let notes = self.parse_notes();
     structure.notes = notes;
 
     // `union kind: Kind = .A { .A ,, a: s64; … }` declares a tagged union
@@ -3171,6 +3221,9 @@ impl Parser<'_> {
       marked_as_specified: false,
     };
 
+    // `enum_flags @my_note s32 #specified { … }` (the Jails parser's tests):
+    // notes may come before the type as well as after it.
+    let leading_notes = self.parse_notes();
     if !self.at(TokenKind::OPEN_BRACE) && !self.at(TokenKind::HASH) && !self.at(TokenKind::NOTE) {
       enumeration.internal_type_inst = Some(self.parse_type()?);
     }
@@ -3185,7 +3238,8 @@ impl Parser<'_> {
       }
     }
 
-    enumeration.notes = self.parse_notes();
+    enumeration.notes = leading_notes;
+    enumeration.notes.extend(self.parse_notes());
 
     if self.at(TokenKind::OPEN_BRACE) {
       enumeration.block = Some(self.parse_braced_block(BlockType::Constants, BlockFlags::empty())?);
@@ -4022,10 +4076,7 @@ impl Parser<'_> {
 
     let assertion_string = if assertion_message.is_some() {
       assertion_message
-    } else if is_assertion
-      && self.at(TokenKind::COMMA)
-      && self.kind_at(1) == TokenKind::STRING
-    {
+    } else if is_assertion && self.at(TokenKind::COMMA) && self.kind_at(1) == TokenKind::STRING {
       // `#assert cond, "message";` — the comma form the betas after 0.2.009
       // write (Focus). Only a string may follow: in
       // `#insert(remove = #assert(false), break = …)` the comma is the list's.
@@ -4209,6 +4260,31 @@ impl Parser<'_> {
       self.parse_braced_block(BlockType::Imperative, BlockFlags::empty())?
     } else if self.at(TokenKind::HASH) && !self.at_expression_directive() {
       self.parse_statement(BlockType::Imperative)?
+    } else if matches!(
+      self.kind(),
+      TokenKind::KEYWORD_USING
+        | TokenKind::KEYWORD_IF
+        | TokenKind::KEYWORD_RETURN
+        | TokenKind::KEYWORD_FOR
+        | TokenKind::KEYWORD_WHILE
+        | TokenKind::KEYWORD_DEFER
+        | TokenKind::KEYWORD_BREAK
+        | TokenKind::KEYWORD_CONTINUE
+        | TokenKind::KEYWORD_REMOVE
+        | TokenKind::KEYWORD_PUSH_CONTEXT
+        | TokenKind::KEYWORD_CASE
+    ) {
+      // `#code using self.state;`, `#code if x == { … }` and
+      // `#code return false, Any.{}` quote a statement (yield-jai, match-jai,
+      // jai-utils). One written inside a call keeps the `;` it ended with.
+      let statement = match self.at(TokenKind::KEYWORD_CASE) {
+        true => self.parse_case()?,
+        false => self.parse_statement(BlockType::Imperative)?,
+      };
+      if self.at(TokenKind::SEMICOLON) && self.kind_at(1) == TokenKind::CLOSE_PAREN {
+        self.bump();
+      }
+      statement
     } else {
       let statement_start = self.position;
       let expression = self.parse_expression()?;
@@ -4591,6 +4667,72 @@ mod tests {
   }
 
   #[test]
+  fn an_assignment_ends_where_its_value_does() {
+    let source = "f :: () {\n    s[0] = ifx 1 {\n        x;\n    }\n    g();\n}\n";
+    assert!(errors(source).is_empty(), "{:?}", errors(source));
+    assert_eq!(printed(source), source);
+    assert!(errors("f :: () { { c = #code case -1; } }").is_empty());
+    printed("f :: () { { c = #code case -1; } }");
+    assert!(errors("E :: enum_flags @note s32 #specified { A; }").is_empty());
+  }
+
+  #[test]
+  fn an_overlay_on_a_using_member_reads_back() {
+    printed("S :: struct { t: Type; #overlay(t) using info: *Type_Info; }");
+    assert!(
+      printed("S :: struct { t: Type; #overlay(t) using info: *Type_Info; }")
+        .contains("#overlay (t) using info: *Type_Info;")
+    );
+  }
+
+  #[test]
+  fn struct_notes_may_come_before_its_directives() {
+    let source = "A :: struct(T: Type) @note #type_info_none { a: int; } @after";
+    assert!(errors(source).is_empty(), "{:?}", errors(source));
+    assert_eq!(
+      tree(source).matches("statement[").count(),
+      2,
+      "{}",
+      tree(source)
+    );
+    printed(source);
+  }
+
+  #[test]
+  fn a_parameter_may_be_called_context() {
+    let source = "f :: (data: *void, context: *Thing) -> void #c_call {}";
+    assert!(errors(source).is_empty(), "{:?}", errors(source));
+    assert!(printed(source).contains("context: *Thing"));
+  }
+
+  #[test]
+  fn a_for_expansion_name_may_follow_the_other_modifiers() {
+    assert_eq!(
+      printed("f :: () { for < :ITERATOR view { } }"),
+      printed("f :: () { for :ITERATOR < view { } }")
+    );
+  }
+
+  #[test]
+  fn code_may_quote_a_statement_that_starts_with_a_keyword() {
+    for source in [
+      "f :: () { add(compiler_get_nodes(#code using self.arguments;)); }",
+      "f :: () { m(#code if fruit == { case .A; x(); }); }",
+      "f :: () { n := compiler_get_nodes(#code return false, Any.{}); }",
+    ] {
+      assert!(errors(source).is_empty(), "{source}: {:?}", errors(source));
+      printed(source);
+    }
+  }
+
+  #[test]
+  fn an_assignment_of_a_procedure_ends_at_its_body() {
+    let source = "f :: () {\n    p.release = (x: *void) {\n        free(x);\n    }\n    g();\n}\n";
+    assert!(errors(source).is_empty(), "{:?}", errors(source));
+    assert_eq!(printed(source), source);
+  }
+
+  #[test]
   fn an_assignment_of_a_here_string_ends_at_its_terminator() {
     let source = "f :: () {\n    code = #string END\nbody\nEND\n    g(code);\n}\n";
     assert!(errors(source).is_empty(), "{:?}", errors(source));
@@ -4606,10 +4748,15 @@ mod tests {
     // Anywhere an operand is expected, which is where a block cannot be.
     assert_eq!(
       printed("f :: () { p: V = { x, y }; p = {}; q := V.[{0, -1}, {1, 0}]; return { 1, 2 }; }"),
-      printed("f :: () { p: V = .{ x, y }; p = .{}; q := V.[.{0, -1}, .{1, 0}]; return .{ 1, 2 }; }")
+      printed(
+        "f :: () { p: V = .{ x, y }; p = .{}; q := V.[.{0, -1}, .{1, 0}]; return .{ 1, 2 }; }"
+      )
     );
     // Blocks stay blocks, and a switch is still one.
-    assert!(errors("f :: () { if x { y(); } while x { } for xs { } if x == { case 1; } { z(); } }").is_empty());
+    assert!(
+      errors("f :: () { if x { y(); } while x { } for xs { } if x == { case 1; } { z(); } }")
+        .is_empty()
+    );
   }
 
   #[test]

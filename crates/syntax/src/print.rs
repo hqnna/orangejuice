@@ -16,6 +16,7 @@ pub fn print_source(ast: &Ast, root: NodeId, interner: &Interner) -> String {
     interner,
     out: String::new(),
     depth: 0,
+    overlay_written: false,
   };
   printer.file(root);
   printer.out
@@ -26,6 +27,9 @@ struct Printer<'a> {
   interner: &'a Interner,
   out: String,
   depth: usize,
+  /// The `#overlay (m)` of the declaration being printed was already written
+  /// in front of its `using`.
+  overlay_written: bool,
 }
 
 /// How the statements of an unbraced block are written: as statements ending in
@@ -506,6 +510,16 @@ impl Printer<'_> {
       }
       NodeData::Using(using) => {
         let using = using.clone();
+        // `#overlay (m) using name: T;` is how the directive reads back: it
+        // goes in front of the `using`, not after it.
+        if let NodeData::Declaration(declaration) = self.ast.data(using.expression)
+          && let Some(member) = declaration.overlay
+        {
+          self.write("#overlay (");
+          self.expression(member);
+          self.write(") ");
+          self.overlay_written = true;
+        }
         match using.filter_type {
           FilterType::None => self.write("using"),
           FilterType::Only => self.write("using,only"),
@@ -522,6 +536,7 @@ impl Printer<'_> {
         }
         self.write(" ");
         self.expression(using.expression);
+        self.overlay_written = false;
       }
       NodeData::Placeholder => self.write("#placeholder"),
       NodeData::DirectiveInsert(insert) => {
@@ -1133,15 +1148,12 @@ impl Printer<'_> {
     if declaration.flags.contains(DeclarationFlags::NO_RESET) {
       self.write("#no_reset ");
     }
-    if let Some(member) = declaration.overlay {
+    if let Some(member) = declaration.overlay
+      && !std::mem::take(&mut self.overlay_written)
+    {
       self.write("#overlay (");
       self.expression(member);
       self.write(") ");
-    }
-    if let Some(alignment) = declaration.alignment_expression {
-      self.write("#align ");
-      self.expression(alignment);
-      self.write(" ");
     }
     if declaration
       .flags
@@ -1172,6 +1184,13 @@ impl Printer<'_> {
     }
 
     self.declaration_tail(&declaration, print_type, false);
+
+    // After the declaration rather than in front of it: a `#align` in front
+    // would read as the end of a statement before it that needs no `;`.
+    if let Some(alignment) = declaration.alignment_expression {
+      self.write(" #align ");
+      self.expression(alignment);
+    }
 
     if declaration
       .flags

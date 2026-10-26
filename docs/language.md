@@ -136,7 +136,7 @@ See sections 5.7 and 5.8.
 
 ### 2.7 Notes
 
-A *note* is `@` immediately followed by an identifier (`@PrintLike`, `@nodoc`, `@test`, `@---`) or by a string literal (`@"a string note with spaces"`). Notes may follow a declaration (after the closing `}` of a procedure or struct body, or after the `;` of a member or enum member) and attach to it. They are available to metaprograms (`Code_Declaration.notes`, `Code_Procedure_Header.notes`, `Code_Struct.notes`) and, for structs and struct members, at runtime through `Type_Info_Struct.notes` and `Type_Info_Struct_Member.notes`. Notes may also be placed directly on an enum declaration (`E :: enum_flags @Hi @There { ... }`). The `@---` member note marks a member that may be uninitialized (used by `print`).
+A *note* is `@` immediately followed by an identifier (`@PrintLike`, `@nodoc`, `@test`, `@---`) or by a string literal (`@"a string note with spaces"`). Notes may follow a declaration (after the closing `}` of a procedure or struct body, or after the `;` of a member or enum member) and attach to it. They are available to metaprograms (`Code_Declaration.notes`, `Code_Procedure_Header.notes`, `Code_Struct.notes`) and, for structs and struct members, at runtime through `Type_Info_Struct.notes` and `Type_Info_Struct_Member.notes`. Notes may also be placed directly on an enum declaration (`E :: enum_flags @Hi @There { ... }`), before its type as well as after (`enum_flags @my_note s32 #specified { … }`), and on a struct before its directives as well as after them (`struct(T: Type) @note #type_info_none { … }`). The `@---` member note marks a member that may be uninitialized (used by `print`).
 
 ### 2.8 Backtick
 
@@ -531,7 +531,7 @@ Rules:
 - Members declared `= ---` in the struct are left uninitialized only when not mentioned. Holes (padding) are zero-initialized.
 - A literal with no type designation (`.{...}`) gets its type from the Match against the expected type; it can also match a polymorphic variable in a header when `#modify` assigns the type (0.2.006). Struct literals for polymorphic structs without an argument list use the struct's default parameters.
 - `-Thing.{5}` negates the literal (operator overload).
-- In a call argument a bare `{ … }` is the same literal as `.{ … }` — `array_add(*stack, { start = s, count = n });`, which Focus writes against the betas after 0.2.009. An argument cannot be a block, so the brace is not ambiguous there; everywhere else a `{` still opens a block. Accepted by orangejuice from that usage, not measured.
+- Wherever an operand is expected a bare `{ … }` is the same literal as `.{ … }` — `array_add(*stack, { start = s, count = n });`, `p0: Vector2 = { x0, y0 };`, `V2.[{0, -1}, {1, 0}]`, `test = {};` — which Focus, the editor, Advent of Code and the Jails parser's tests write against the betas after 0.2.009. A block can only stand where a statement does, so the brace is not ambiguous there; a statement that starts with `{` is still a block, and `if x == {` is still a switch. Accepted by orangejuice from that usage, not measured.
 - Struct literals in global data have holes zeroed and pointers to other globals resolved. Several literals may be deduplicated by the compiler (not ones containing pointers, except compiler-generated `Source_Code_Location`s).
 - Exported as `Code_Literal { value_type = .STRUCT, struct_literal_info: { type_expression (null when undesignated), arguments } }`.
 - A struct literal can be `push_context`ed (`push_context .{allocator = temp} { }`) and used as a `using` source (`using Ice_Cream.{...};`).
@@ -699,7 +699,7 @@ Statements appear in imperative scopes. Each simple statement ends with `;`. Blo
 ### 6.1 Expression statements and assignment
 
 - `expr;` — a call, a macro invocation, or any expression (an expression with no effect, such as a bare identifier `result;`, is accepted by the reference compiler; orangejuice accepts it and may warn).
-- `lvalue = expr;` and the compound forms `+= -= *= /= %= &= |= ^= <<= >>= <<<= >>>= &&= ||=`. A compound assignment `a op= b` is rewritten as `a = a op b` with the lvalue evaluated once (also through `operator []=`). `&&=`/`||=` short-circuit. Assignment is a statement, not an expression (`a = b = c` is invalid, and so is one in parentheses: `(x *= 18);` is `Expected ')', but got '*='.`).
+- `lvalue = expr;` and the compound forms `+= -= *= /= %= &= |= ^= <<= >>= <<<= >>>= &&= ||=`. A compound assignment `a op= b` is rewritten as `a = a op b` with the lvalue evaluated once (also through `operator []=`). `&&=`/`||=` short-circuit. Assignment is a statement, not an expression (`a = b = c` is invalid, and so is one in parentheses: `(x *= 18);` is `Expected ')', but got '*='.`). An assignment ends where its value does, the way a declaration does: `p.release = (x: *void) { … }`, `s[0] = ifx 1 { … }` and `code = #string END … END` need no `;` after them (OhMyGUI, the editor, jai-utils and Focus write them so).
 - Lvalues: variables, dereferences (`p.*`, `<<p`, `(.*) p`), members, subscripts, `it` in `for *` loops (through the pointer), members of `using`ed values. Not lvalues: parameters of struct/array/string type (7.6), constants, members of constants, `it` in by-value loops, `.count`/`.data` of fixed arrays, results of calls, casts (`cast(*T) p .* = v` is written `(cast(*T) p).* = v;`).
 - Assigning to a constant member of a struct (`s.CONST = 1`) is an error; "invalid lvalue in assignment".
 
@@ -772,7 +772,7 @@ for * value, key: table { }        // for_expansion (Hash_Table): value then key
 for s { }                          // string: it is u8
 for << items { }                   // any expression whose type is iterable (here a dereferenced pointer to array)
 for x: expr stmt;                  // single-statement body
-for :name value, index: container { }   // named for_expansion
+for :name value, index: container { }   // named for_expansion (the modifiers may come in any order: `for < :ITERATOR view`)
 for `it, `it_index: a.data { }     // backticked names inside a for_expansion macro
 for *=cast(bool)(flags & .POINTER), <=cast(bool)(flags & .REVERSE) a.data { }  // modifiers with expressions, comma-separated
 ```
@@ -919,6 +919,7 @@ A procedure declaration is a constant declaration whose value is a procedure lit
 - A parameter is `name: Type`, `name: Type = default`, or `name := default` (type inferred from the default, fixed). Names may be omitted in procedure *types* (`(T) -> R`) and in `#foreign` declarations written as types (`(sigval_t) #c_call`).
 - Defaults: any expression; `context.x` is allowed; defaults are applied at the call site (one entry point), so they do not affect the procedure type. Non-default parameters may follow default ones (callers use names).
 - `using` on a parameter imports its members into the body (`using v: V`, `using renderer: *Renderer` — pointer parameters auto-deref; the struct's nested types and constants also become visible, so a nested `Model` shadows a global `Model` inside the body).
+- A parameter may be called `context` (Focus's generated Wayland binding names one after C's argument); in the body the word still means the context (10.1), so the parameter cannot be read by name. Accepted by orangejuice from that usage.
 - `#discard p` marks a parameter that may not be referenced in the body; arguments for it are typechecked but **not evaluated** (no code generated) — used by disabled `assert`.
 - `$T: Type` bakes a type; `$x: int` bakes a value (must be constant at the call); `$$x` optionally bakes (constant if the argument is; `#if is_constant(x)`); `x: $T` introduces a type variable (7.8).
 - `loc := #caller_location`, `$call := #caller_code` (macros), `code: Code` (implicit `#code` wrapping of arguments in macros).
@@ -1463,7 +1464,7 @@ See 4.7 and 5.14. The interpreter and the runtime share one view of global data 
 | Form | Meaning |
 |---|---|
 | `#code expr` | an unevaluated, **untypechecked** expression; identifiers are not resolved until inserted somewhere (so they may not exist at the `#code` site) |
-| `#code { stmts }` | a block of statements; `#code x = 3;` statement form without braces is allowed |
+| `#code { stmts }` | a block of statements; `#code x = 3;` statement form without braces is allowed, and so is one that starts with a keyword — `#code using self.state;`, `#code if x == { … }`, `#code return false, Any.{}`, `#code case -1;` (yield-jai, match-jai, jai-utils); inside a call such a statement keeps the `;` it ended with |
 | `#code,typed expr` | typecheck the expression in the current scope now; `.type` and `get_root_type` work |
 | `#code,null` | the null Code; tests false in `if`; `c.type` on it is an error; `#insert`ing it inserts nothing; a default `$code := #code,null` parameter |
 | `code_of(x)` | the definition Code of a declaration / the Code of an expression after constant substitution |

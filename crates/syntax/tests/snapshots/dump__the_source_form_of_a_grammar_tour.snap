@@ -22,7 +22,7 @@ Entity :: struct (T: Type, N: s64 = 3) #no_padding @Serialized {
     using #as position: Vector2;
     name := "unnamed";
     values: [N] T;
-    #align 4 handle: u32;
+    handle: u32 #align 4;
     union {
         i: s32;
         f: float;

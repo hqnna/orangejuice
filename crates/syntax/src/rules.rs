@@ -43,16 +43,13 @@ fn final_node(ast: &Ast, statement: NodeId) -> NodeId {
       (None, Some(type_inst)) => node = type_inst,
       (None, None) => return statement,
     },
-    // `code = #string END … END` ends at its terminator line the way a
-    // declaration of one does (Focus).
+    // An assignment ends where its value does, the way a declaration does:
+    // `code = #string END … END` at the terminator line, `p.release = (x:
+    // *void) { … }` and `s[0] = ifx 1 { … }` at the brace (Focus, OhMyGUI,
+    // the editor, jai-utils).
     NodeData::BinaryOperator {
       operator, right, ..
-    } if operator.is_assignment() => {
-      return match ast.data(*right) {
-        NodeData::Literal(literal) if literal.flags.contains(LiteralFlags::HERE_STRING) => *right,
-        _ => statement,
-      };
-    }
+    } if operator.is_assignment() => node = *right,
     NodeData::CompoundDeclaration(compound) => match ast.data(compound.declaration_properties) {
       NodeData::Declaration(declaration) => match declaration.expression {
         Some(expression) => node = expression,
