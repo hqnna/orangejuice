@@ -112,14 +112,28 @@ const TTWJ_GRAPHICAL_CHAPTERS: &[&str] = &["33", "51", "52"];
 /// a Windows path or a time is the author's machine on the day, not the
 /// program.
 fn annotations(source: &str) -> Vec<String> {
-  let mut expected = Vec::new();
+  annotation_groups(source).into_iter().flatten().collect()
+}
+
+/// The same, one list per top-level declaration. The book annotates a
+/// procedure where it is written, so what one declared above `main` prints is
+/// expected in the order of that procedure's own lines but wherever `main`
+/// calls it from.
+fn annotation_groups(source: &str) -> Vec<Vec<String>> {
+  let mut groups: Vec<Vec<String>> = vec![Vec::new()];
   let mut block_depth = 0usize;
+  let mut brace_depth = 0usize;
   for line in source.lines() {
     let depth_before = block_depth;
     block_depth = block_comment_depth_after(line, block_depth);
     if depth_before > 0 {
       continue;
     }
+    let code = code_of(line);
+    if brace_depth == 0 && !code.trim().is_empty() && groups.last().is_some_and(|group| !group.is_empty()) {
+      groups.push(Vec::new());
+    }
+    brace_depth = braces_after(code, brace_depth);
     let Some(at) = line.find("// =>") else {
       continue;
     };
@@ -136,9 +150,51 @@ fn annotations(source: &str) -> Vec<String> {
     if text.is_empty() || machine_dependent(after) {
       continue;
     }
-    expected.push(text);
+    if let Some(group) = groups.last_mut() {
+      group.push(text);
+    }
   }
-  expected
+  groups.retain(|group| !group.is_empty());
+  groups
+}
+
+/// A line without its `//` comment, with what its string literals say left
+/// out, so that the braces left are the program's.
+fn code_of(line: &str) -> String {
+  let mut code = String::new();
+  let mut in_string = false;
+  let mut escaped = false;
+  let mut previous = '\0';
+  for c in line.chars() {
+    if in_string {
+      match (escaped, c) {
+        (true, _) => escaped = false,
+        (false, '\\') => escaped = true,
+        (false, '"') => in_string = false,
+        _ => {}
+      }
+      continue;
+    }
+    if c == '/' && previous == '/' {
+      code.pop();
+      break;
+    }
+    if c == '"' {
+      in_string = true;
+    } else {
+      code.push(c);
+    }
+    previous = c;
+  }
+  code
+}
+
+fn braces_after(code: String, depth: usize) -> usize {
+  code.chars().fold(depth, |depth, c| match c {
+    '{' => depth + 1,
+    '}' => depth.saturating_sub(1),
+    _ => depth,
+  })
 }
 
 /// How deep in `/* */` comments the source is after `line`, given how deep it
@@ -224,6 +280,35 @@ fn matches_in_order(output: &str, expected: &[String]) -> Result<(), String> {
     match output[from..].find(wanted.as_str()) {
       Some(at) => from += at + wanted.len() - 1,
       None => return Err(line.clone()),
+    }
+  }
+  Ok(())
+}
+
+/// The same, letter for letter with the spaces left out: a `print` with no
+/// newline runs into whatever the next one prints, which the book annotates
+/// as two lines.
+fn matches_run_together(output: &str, expected: &[String]) -> Result<(), String> {
+  let squash = |text: &str| text.chars().filter(|c| *c != ' ').collect::<String>();
+  let output = squash(&normalize(output));
+  let mut from = 0;
+  for line in expected {
+    let wanted = squash(line);
+    match output[from..].find(wanted.as_str()) {
+      Some(at) => from += at + wanted.len(),
+      None => return Err(line.clone()),
+    }
+  }
+  Ok(())
+}
+
+/// Whether each declaration's annotations appear in the output in order, word
+/// for word where the output has the words apart and letter for letter where
+/// it ran them together.
+fn matches_groups(output: &str, groups: &[Vec<String>]) -> Result<(), String> {
+  for group in groups {
+    if let Err(missing) = matches_in_order(output, group) {
+      matches_run_together(output, group).map_err(|_| missing)?;
     }
   }
   Ok(())
@@ -374,7 +459,7 @@ fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
     return Verdict::Skipped("opens a window");
   }
   let source = std::fs::read_to_string(path).unwrap_or_default();
-  let expected = annotations(&source);
+  let expected = annotation_groups(&source);
   let output = scratch.join(relative.replace('/', "_"));
   let _ = std::fs::create_dir_all(&output);
   // The book compiles the chapters that import a module of its own with
@@ -395,7 +480,7 @@ fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
   let directory = path.parent().unwrap_or(root);
   match run_for(&executable, directory, Duration::from_secs(10)) {
     Err(reason) => Verdict::RunFailed(reason),
-    Ok((status, output)) => match matches_in_order(&format!("{compiled}\n{output}"), &expected) {
+    Ok((status, output)) => match matches_groups(&format!("{compiled}\n{output}"), &expected) {
       Ok(()) if status == 0 => Verdict::Pass,
       Ok(()) => Verdict::RunFailed(format!("exited {status}")),
       Err(missing) => Verdict::Mismatch(missing),
@@ -588,5 +673,25 @@ fn an_annotation_is_what_follows_the_arrow_on_a_live_line() {
   assert_eq!(
     matches_in_order("a is 50 second 41", &annotations(source)),
     Err(String::from("a is 5"))
+  );
+}
+
+#[test]
+fn a_procedure_above_main_is_expected_where_main_calls_it() {
+  let source = "helper :: () {\n\
+                  print(\"in helper {\\n\"); // => in helper\n\
+                }\n\
+                main :: () {\n\
+                  print(\"first\\n\"); // => first\n\
+                  helper();\n\
+                  print(\"%\", 42); // => 42\n\
+                  print(\"after\\n\"); // => after\n\
+                }\n";
+  let groups = annotation_groups(source);
+  assert_eq!(groups, [vec!["in helper"], vec!["first", "42", "after"]]);
+  assert_eq!(matches_groups("first\nin helper\n42after\n", &groups), Ok(()));
+  assert_eq!(
+    matches_groups("after\nin helper\nfirst 42\n", &groups),
+    Err(String::from("after"))
   );
 }
