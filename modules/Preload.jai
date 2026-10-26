@@ -406,3 +406,8 @@ compare_and_swap :: (pointer: *$T, old: T, new: T) -> (success: bool, old_value:
 // The Context is seeded by inserting this: `Context_Base` is Runtime_Support's,
 // so Preload names it without importing it (**L§10.3**).
 FIRST_ADD_CONTEXT :: #code #add_context #as using base: Context_Base;
+
+// 0.2.009 declares no `Context` (L§10.1), but The Way to Jai, written against
+// 0.2.024, declares `new_context: Context;` and pushes it. A best guess at a
+// later beta, to be checked once one can be measured.
+Context :: #Context;

@@ -776,6 +776,44 @@ append_format_float :: (builder: *String_Builder, given: Any, format: *FormatFlo
             decimal_round(*decimal, places);
         }
     }
+    // A number of more than eighteen digits before the point keeps eighteen
+    // significant ones and zeros after them: The Way to Jai's 5.2 (0.2.024)
+    // prints float32 `5.97219e24` as `5972189887017193070000000`. A best
+    // guess at the reference's printer — a 64-bit digit buffer would explain
+    // it — to be measured.
+    SIGNIFICANT :: 18;
+    if format.mode != .SCIENTIFIC {
+        integer := decimal.count - decimal.fraction;
+        lead := 0;
+        while lead < integer && decimal.digits[lead] == 0  lead += 1;
+        if integer - lead > SIGNIFICANT {
+            keep := lead + SIGNIFICANT;
+            round_up := decimal.digits[keep] >= 5;
+            for keep..decimal.count - 1  decimal.digits[it] = 0;
+            at := keep - 1;
+            while round_up && at >= lead {
+                if decimal.digits[at] < 9 {
+                    decimal.digits[at] += 1;
+                    round_up = false;
+                } else {
+                    decimal.digits[at] = 0;
+                    at -= 1;
+                }
+            }
+            // Every kept digit carried: 999… becomes 1000…, still eighteen
+            // significant digits once the trailing zero is dropped.
+            if round_up && lead > 0  decimal.digits[lead - 1] = 1;
+            if round_up && lead == 0 && decimal.count < decimal.digits.count {
+                at = decimal.count;
+                while at > 0 {
+                    decimal.digits[at] = decimal.digits[at - 1];
+                    at -= 1;
+                }
+                decimal.digits[0] = 1;
+                decimal.count += 1;
+            }
+        }
+    }
     decimal_round(*decimal, places);
     decimal_pad(*decimal, places);
 
@@ -819,8 +857,10 @@ append_padded :: (builder: *String_Builder, inner: *String_Builder, width: s64) 
 // the types it is built from rather than named after its kind, so what comes
 // out is text that could be written back into a program.
 append_type :: (builder: *String_Builder, info: *Type_Info) {
+    // A null `Type` is `(null)`, which is how The Way to Jai shows one in a
+    // struct (26.31) and in the context's `dynamic_entries` (25.1), on 0.2.024.
     if !info {
-        append(builder, "(null type)");
+        append(builder, "(null)");
         return;
     }
     if info.type == {
@@ -982,6 +1022,7 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
 
     // A tagged union shows its tag and the variant the tag selects (L§8.8).
     tagged := (info.textual_flags & .UNION_IS_TAGGED) != 0;
+
     active := ifx tagged then active_variant(data, info) else -1;
     skipped :: (index: s64) -> bool #expand {
         return tagged && index != 0 && index != active;
@@ -1025,7 +1066,16 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
             append(builder, member.name);
             append(builder, format.separator_between_name_and_value);
         }
-        append_value(builder, cast(*u8) data + member.offset_in_bytes, member.type, true);
+        // An anonymous untagged union has no name to say which of its
+        // overlapping members was written, so it shows as `(union)`: The Way
+        // to Jai's 26.31 (0.2.024) prints `{s64, (union)}` for a struct holding
+        // a `Type` and one. A best guess at the reference's printer, to be
+        // measured; a named union still shows its first member.
+        if !member.name && anonymous_union(member.type) {
+            append(builder, "(union)");
+        } else {
+            append_value(builder, cast(*u8) data + member.offset_in_bytes, member.type, true);
+        }
         if long  append(builder, format.long_form_separator_between_fields);
     }
 
@@ -1036,6 +1086,12 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
     }
     append(builder, format.end_string);
 }
+anonymous_union :: (type: *Type_Info) -> bool {
+    if !type || type.type != .STRUCT  return false;
+    info := cast(*Type_Info_Struct) type;
+    return (info.textual_flags & .UNION) != 0 && !(info.textual_flags & .UNION_IS_TAGGED);
+}
+
 // Which member of a tagged union its tag selects (L§8.8): the one bound to
 // the tag's value, or else — for an integer or enum tag — the variant whose
 // position the value is. -1 when it selects none.

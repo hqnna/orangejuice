@@ -7509,3 +7509,28 @@ fn a_modify_reached_while_the_context_is_laid_out_does_not_need_it() {
     "7 7\n",
   );
 }
+
+#[test]
+fn the_newer_betas_guesses_from_the_way_to_jai() {
+  // Best guesses at betas after 0.2.009, read off what The Way to Jai prints
+  // on 0.2.024 and recorded in L as provisional: `Context` names `#Context`
+  // (25.1, 29.3), a float with more than eighteen digits before the point
+  // keeps eighteen significant ones (5.2), a null `Type` is `(null)` and an
+  // anonymous union `(union)` (26.31).
+  assert_output(
+    "#import \"Basic\";\n\
+     U :: struct { tag: Type; union { a: int; b: float; }; }\n\
+     MASS :: 5.97219e24;\n\
+     main :: () {\n\
+       c: Context;\n\
+       c.allocator = context.allocator;\n\
+       push_context c { print(\"% \", type_of(c) == #Context); }\n\
+       u: U;\n\
+       print(\"% \", u);\n\
+       u.tag = int;\n\
+       print(\"% % %\\n\", u, MASS, 123456789.0);\n\
+     }\n",
+    "true {(null), (union)} {s64, (union)} 5972189887017193070000000 123456789\n",
+  );
+}
+
