@@ -413,6 +413,11 @@ impl Checker<'_> {
     let definition = self.types().struct_of(self.types().underlying(type_id))?;
     self.complete_struct(definition);
     let mut bytes = self.default_bytes(type_id)?;
+    // A default with no byte form — a procedure, a string, a call — is the
+    // back end's to fill in, which it does for a literal it walks.
+    if self.defaults_left_zeroed {
+      return None;
+    }
     let settable: Vec<(Symbol, TypeId, u64)> = self
       .types()
       .struct_info(definition)

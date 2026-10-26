@@ -367,6 +367,9 @@ pub struct Checker<'a> {
   /// caller reads afterwards is the expansion's local (**L§7.13**). Keyed by
   /// the instantiation the caller was read under too: two specializations of
   /// one polymorphic caller expand the macro twice, and each reads its own.
+  /// Whether the last [`Checker::default_bytes`] left a member zeroed because
+  /// its default has no byte form.
+  pub(crate) defaults_left_zeroed: bool,
   pub(crate) backticked_owner: HashMap<(DeclId, Option<InstanceId>), InstanceId>,
   pub(crate) runs: HashMap<(Option<InstanceId>, SourceId, NodeId), Expr>,
   /// What a `#run` behind a compound declaration produced, all of its values
@@ -521,6 +524,7 @@ impl<'a> Checker<'a> {
       depth: 0,
       too_deep: false,
       compile_time: None,
+      defaults_left_zeroed: false,
       backticked_owner: HashMap::default(),
       runs: HashMap::default(),
       run_tuples: HashMap::default(),

@@ -850,6 +850,7 @@ impl Checker<'_> {
   /// an allocation leaves its member zeroed, which is what the reference does
   /// for one it cannot put in the executable either.
   pub fn default_bytes(&mut self, type_id: TypeId) -> Option<Vec<u8>> {
+    self.defaults_left_zeroed = false;
     let layout = self.layout(type_id)?;
     let mut bytes = vec![0u8; layout.size as usize];
     self.write_defaults(type_id, 0, &mut bytes);
@@ -907,8 +908,9 @@ impl Checker<'_> {
             Some(scope) => self.scope_at(source, node, scope),
             None => continue,
           };
-          if let Some(constant) = self.expression(scope, source, node).constant {
-            self.write_constant(&constant, member_type, at, bytes);
+          match self.expression(scope, source, node).constant {
+            Some(constant) => self.write_constant(&constant, member_type, at, bytes),
+            None => self.defaults_left_zeroed = true,
           }
         }
         // A member with no default of its own may still be a struct whose
@@ -923,8 +925,9 @@ impl Checker<'_> {
       let Some(scope) = scope.map(|scope| self.scope_at(source, node, scope)) else {
         continue;
       };
-      if let Some(constant) = self.expression(scope, source, node).constant {
-        self.write_constant(&constant, member_type, at + offset as usize, bytes);
+      match self.expression(scope, source, node).constant {
+        Some(constant) => self.write_constant(&constant, member_type, at + offset as usize, bytes),
+        None => self.defaults_left_zeroed = true,
       }
     }
   }
@@ -965,7 +968,7 @@ impl Checker<'_> {
         _ => {}
       },
       Value::Bytes(source) if source.len() == size => slot.copy_from_slice(&source.data),
-      _ => {}
+      _ => self.defaults_left_zeroed = true,
     }
   }
 

@@ -7274,3 +7274,23 @@ fn each_specialization_reads_the_backticked_declaration_its_own_expansion_made()
     "3 2.5 4 1\n",
   );
 }
+
+#[test]
+fn a_struct_literal_fills_in_a_default_that_has_no_byte_form() {
+  // toml-jai's context member defaults to a procedure, and a call passes
+  // `,, toml = .{default_format_float = …}`: the members the literal leaves
+  // out are their defaults, not zeroes (**L§5.8**, **L§8.2**).
+  assert_output(
+    "#import \"Basic\";\n\
+     S :: struct { a := 5; f := g; b: int; s := \"str\"; }\n\
+     g :: () -> int { return 9; }\n\
+     #add_context s: S;\n\
+     main :: () {\n\
+       x := S.{b = 2};\n\
+       print(\"% % % %\\n\", x.a, x.f(), x.b, x.s);\n\
+       h :: () { print(\"% % %\\n\", context.s.f(), context.s.b, context.s.s); }\n\
+       h(,, s = .{b = 4});\n\
+     }\n",
+    "5 9 2 str\n9 4 str\n",
+  );
+}
