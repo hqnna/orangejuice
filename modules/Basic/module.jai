@@ -108,13 +108,13 @@ New :: ($T: Type, $initialized := true, allocator := context.allocator) -> *T {
 // asked for one: the extra bytes are taken here and the pointer bumped
 // forward, which every allocator can do. The second result is what was really
 // allocated, and what has to be freed when an alignment was asked for.
-NewArray :: (count: s64, $T: Type, $initialized := true, alignment: s32 = -1) -> (result: [] T, unaligned_base: *void) {
+NewArray :: (count: s64, $T: Type, $initialized := true, allocator := context.allocator, alignment: s32 = -1) -> (result: [] T, unaligned_base: *void) {
     if count <= 0  return .[], null;
 
     extra: s32 = 0;
     if alignment > 0  extra = alignment;
 
-    original_memory := alloc(size_of(T) * count + extra);
+    original_memory := alloc(size_of(T) * count + extra, allocator);
     if !original_memory  return .[], null;
 
     memory := original_memory;

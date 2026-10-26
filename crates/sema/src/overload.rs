@@ -72,6 +72,23 @@ pub(crate) struct Signature {
   pub instance: Option<InstanceId>,
 }
 
+/// Whether a call could reach a candidate at all, whatever its types turn
+/// out to be: every name it wrote is one of the candidate's parameters, and
+/// there are not more arguments than places to put them (**L§7.3**). A
+/// candidate that fails this is no reason to leave the call open.
+fn shape_fits(signature: &Signature, arguments: &[CallArgument]) -> bool {
+  let names_fit = arguments.iter().all(|argument| {
+    argument.name.is_none_or(|name| {
+      signature
+        .parameters
+        .iter()
+        .any(|parameter| parameter.name == Some(name))
+    })
+  });
+  let room = signature.parameters.len() - signature.hidden.len();
+  names_fit && (signature.vararg_slot.is_some() || arguments.len() <= room)
+}
+
 /// What a call site resolved to.
 pub(crate) enum Resolved {
   One(Signature),
@@ -116,7 +133,8 @@ impl Checker<'_> {
               return Resolved::Ambiguous;
             };
             any_signature = true;
-            any_unknown |= self.signature_mentions_unknown(&signature);
+            any_unknown |=
+              shape_fits(&signature, arguments) && self.signature_mentions_unknown(&signature);
             if let Some(scored_candidate) = self.score_candidate(signature, arguments) {
               scored.push(scored_candidate);
             }
@@ -125,7 +143,8 @@ impl Checker<'_> {
         }
       };
       any_signature = true;
-      any_unknown |= self.signature_mentions_unknown(&signature);
+      any_unknown |=
+        shape_fits(&signature, arguments) && self.signature_mentions_unknown(&signature);
       if let Some(scored_candidate) = self.score_candidate(signature, arguments) {
         scored.push(scored_candidate);
       }

@@ -664,7 +664,7 @@ impl Lowering<'_, '_> {
           indirect: true,
         })
       }
-      NodeData::If(payload) => self.ifx_value(scope, source, node, &payload, info),
+      NodeData::If(payload) => self.ifx_value(scope, source, node, &payload, info, want),
       // A block in expression position is worth its last statement, and takes
       // the type whatever asked for the block wanted (**L§5.13**). The
       // statements before it are the work that produced it, so they run.
@@ -2302,11 +2302,24 @@ impl Lowering<'_, '_> {
     node: NodeId,
     payload: &ast::IfNode,
     info: &Expr,
+    want: Option<TypeId>,
   ) -> Option<Val> {
     // Both branches may be literals, in which case the `ifx` settles on what
     // they default to (**L§5.10**); whatever asked for the value converts it
-    // afterwards.
-    let type_id = self.checker.hardened(info.type_id);
+    // afterwards. Two `.NAME`s have no default, so they take the enum that
+    // asked (**L§5.12**): `f(ifx c then .B else .A)`.
+    let type_id = match info.type_id == TypeId::UNTYPED_ENUM {
+      true => want
+        .filter(|want| {
+          self
+            .checker
+            .types()
+            .enum_of(self.checker.types().underlying(*want))
+            .is_some()
+        })
+        .unwrap_or(info.type_id),
+      false => self.checker.hardened(info.type_id),
+    };
     if self.checker.types().is_unknown(type_id) {
       self.unsupported(source, node, "this 'ifx'");
       return None;

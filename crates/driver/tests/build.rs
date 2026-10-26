@@ -6605,3 +6605,37 @@ fn math_negates_a_vector() {
     "{-1, -2} {-1, -2, -3} {-1, -2, -3, -4}\n",
   );
 }
+
+#[test]
+fn an_enum_ifx_and_a_name_a_polymorphic_call_does_not_have() {
+  // Two `.NAME`s in an `ifx` take the enum that asked for the value
+  // (**L§5.12**), which is how jai-simpler hands Simp a coordinate system;
+  // and `NewArray(n, T, allocator = a)` reaches Basic's `allocator`. A name
+  // a polymorphic candidate does not have is the call's error, not a
+  // declaration the back end cannot type.
+  assert_output(
+    "#import \"Basic\";\n\
+     E :: enum u8 { A; B; }\n\
+     f :: (x: int, e := E.A) { print(\"% %\\n\", x, e); }\n\
+     main :: () {\n\
+       c := true; f(1, ifx c then .B else .A);\n\
+       a := NewArray(3, int, allocator = temp);\n\
+       print(\"%\\n\", a.count);\n\
+     }\n",
+    "1 B\n3\n",
+  );
+  let Some(diagnostics) = diagnostics_of(
+    "f :: (count: int, $T: Type) -> [] T { r: [] T; return r; }\n\
+     main :: () { x := f(3, int, allocator = 5); }\n",
+  ) else {
+    return;
+  };
+  assert!(
+    diagnostics.contains("The arguments given to 'f' did not match any of its overloads."),
+    "{diagnostics}"
+  );
+  assert!(
+    !diagnostics.contains("could not generate code"),
+    "{diagnostics}"
+  );
+}
