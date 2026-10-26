@@ -83,6 +83,20 @@ const TTWJ_SKIPS: &[(&str, &str)] = &[
     "30/30.9_house_rules.jai",
     "its plugin reports the triple pointer in main5.jai on purpose",
   ),
+  (
+    "30/30.13_dynamic_libraries.jai",
+    "a build script: what it builds is dynlib.jai and main7.jai, not a program of its own",
+  ),
+  (
+    "30/30.14_build_inlining.jai",
+    "a build script that takes the program to build on its command line",
+  ),
+  (
+    "27/27.4_del_dirs.jai",
+    "takes the directories to delete on its command line",
+  ),
+  ("19/19.7_linux_input.jai", "reads standard input"),
+  ("20/20.1_crash.jai", "crashes on purpose"),
 ];
 
 /// Chapters whose programs open a window, which a sweep cannot look at.
@@ -278,6 +292,72 @@ fn build_with(path: &Path, output: &Path, import_dirs: &[PathBuf]) -> Result<Pat
     .ok_or_else(|| String::from("no executable came out"))
 }
 
+unsafe extern "C" {
+  fn dup(fd: i32) -> i32;
+  fn dup2(from: i32, to: i32) -> i32;
+  fn close(fd: i32) -> i32;
+}
+
+/// Runs `body` with standard output going to a file, and hands back what was
+/// written there along with its result. What a `#run` prints at compile time
+/// is written straight to file descriptor 1, so that is what is redirected.
+fn capturing_stdout<T>(body: impl FnOnce() -> T) -> (T, String) {
+  use std::io::{Seek, Write};
+  use std::os::fd::AsRawFd;
+  let Ok(mut file) = tempfile::tempfile() else {
+    return (body(), String::new());
+  };
+  let _ = std::io::stdout().flush();
+  // SAFETY: the sweep runs one program at a time, and file descriptor 1 is
+  // put back the way it was before anything else writes to it.
+  let saved = unsafe { dup(1) };
+  if saved < 0 || unsafe { dup2(file.as_raw_fd(), 1) } < 0 {
+    return (body(), String::new());
+  }
+  let result = body();
+  let _ = std::io::stdout().flush();
+  unsafe {
+    dup2(saved, 1);
+    close(saved);
+  }
+  let mut text = String::new();
+  let _ = file.rewind();
+  let _ = file.read_to_string(&mut text);
+  (result, text)
+}
+
+/// Builds a program that drives the compiler itself the way the book does,
+/// with `jai file.jai`: through `Default_Metaprogram`, so that the
+/// workspaces it creates are numbered from there (**C§2.1**).
+fn build_through_metaprogram(path: &Path, import_dirs: &[PathBuf]) -> Result<PathBuf, String> {
+  let Some(metaprogram) = oj_driver::default_metaprogram() else {
+    return Err(String::from("no Default_Metaprogram to build with"));
+  };
+  let mut options = oj_driver::BuildOptions::new();
+  options.import_dirs.extend(import_dirs.iter().cloned());
+  let named = path.display().to_string();
+  let report = oj_driver::run_through_metaprogram(
+    &metaprogram,
+    &[path.to_path_buf()],
+    &[named],
+    &options,
+    oj_driver::Stage::Executable,
+  );
+  if report.failed {
+    let text = report.diagnostics.join("");
+    let first = text
+      .lines()
+      .find(|line| line.contains("Error") || line.contains("error"))
+      .unwrap_or("it did not build")
+      .trim()
+      .to_string();
+    return Err(first);
+  }
+  report
+    .executable
+    .ok_or_else(|| String::from("no executable came out"))
+}
+
 fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
   let relative = path
     .strip_prefix(root.join("examples"))
@@ -298,15 +378,24 @@ fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
   let output = scratch.join(relative.replace('/', "_"));
   let _ = std::fs::create_dir_all(&output);
   // The book compiles the chapters that import a module of its own with
-  // `-import_dir my_modules` (§8.6).
-  let executable = match build_with(path, &output, &[root.join("my_modules")]) {
+  // `-import_dir my_modules` (§8.6). What a `#run` prints while it compiles
+  // is part of what the book shows, so it is read along with the program's
+  // own output; a program that creates workspaces of its own is compiled the
+  // way the book compiles it, through the metaprogram.
+  let import_dirs = [root.join("my_modules")];
+  let drives_the_compiler = source.contains("#import \"Compiler\"");
+  let (built, compiled) = capturing_stdout(|| match drives_the_compiler {
+    true => build_through_metaprogram(path, &import_dirs),
+    false => build_with(path, &output, &import_dirs),
+  });
+  let executable = match built {
     Ok(executable) => executable,
     Err(first) => return Verdict::BuildFailed(first),
   };
   let directory = path.parent().unwrap_or(root);
   match run_for(&executable, directory, Duration::from_secs(10)) {
     Err(reason) => Verdict::RunFailed(reason),
-    Ok((status, output)) => match matches_in_order(&output, &expected) {
+    Ok((status, output)) => match matches_in_order(&format!("{compiled}\n{output}"), &expected) {
       Ok(()) if status == 0 => Verdict::Pass,
       Ok(()) => Verdict::RunFailed(format!("exited {status}")),
       Err(missing) => Verdict::Mismatch(missing),
