@@ -6909,6 +6909,22 @@ fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
 }
 
 #[test]
+fn the_address_of_a_struct_literal_points_at_its_values() {
+  // `*Thing.{…}` is the address of a `Thing` (TTWJ 14.2), which is what
+  // `ifx thing then thing.name` reads (**L§5.8**).
+  assert_output(
+    "#import \"Basic\";\n\
+     Thing :: struct { name: string; value: int; }\n\
+     main :: () {\n\
+       thing := *Thing.{\"Liz\", 42};\n\
+       name := ifx thing then thing.name else \"nobody\";\n\
+       print(\"% % %\\n\", type_of(thing), name, thing.value);\n\
+     }\n",
+    "*Thing Liz 42\n",
+  );
+}
+
+#[test]
 fn a_poked_operator_reaches_the_module_it_was_poked_into() {
   // Focus writes `#poke_name Basic operator==;` so that a module's own
   // `a == b` finds the program's overload (**L§11.9**).

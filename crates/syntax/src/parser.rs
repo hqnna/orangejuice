@@ -1494,14 +1494,14 @@ impl Parser<'_> {
     Some(left)
   }
 
-  /// Moves a `*` written before a designated array or struct literal into the
+  /// Moves a `*` written before a designated array literal into the
   /// literal's type, so that `*u8.[a, b]` is a `[2] *u8` (**L§5.8**). Returns
-  /// the literal when it applies.
+  /// the literal when it applies. A pointer has no members for a struct
+  /// literal to fill, so `*Thing.{…}` stays the address of a `Thing`.
   fn point_literal_type_at(&mut self, operand: NodeId, start: u32) -> Option<NodeId> {
     let designation = match &self.ast.node(operand).data {
       NodeData::Literal(literal) => match &literal.value {
         LiteralValue::Array(array) => array.element_type,
-        LiteralValue::Struct(structure) => structure.type_expression,
         _ => None,
       },
       _ => None,
@@ -4382,6 +4382,14 @@ mod tests {
         .contains("#overlay (x) c: [2] f64 = ---;")
     );
     assert!(printed("S :: struct { #as using base: Base; }").contains("using #as base: Base;"));
+  }
+
+  #[test]
+  fn a_star_before_a_struct_literal_takes_its_address() {
+    let address = tree("x := *Thing.{1};");
+    assert!(address.contains("UNARY_OPERATOR"), "{address}");
+    assert!(!address.contains("pointer_to"), "{address}");
+    assert!(tree("x := *u8.[a];").contains("pointer_to"));
   }
 
   #[test]

@@ -543,6 +543,7 @@ int.[1, 3, 5]                    // typed; the literal's type is [3] int (fixed)
 string.["a", "b"]
 (*u8).[a.data, b.data]           // parenthesized type before .[
 *u8.[a.data, b.data]             // the same: a `*` before a literal's type designation belongs to the type, not to the literal
+*Thing.{"Liz", 42}               // but not before a struct literal's: a pointer has no members, so this is the address of a Thing (TTWJ 14.2)
 [2] int.[int.[1, 0], int.[0, 3]]  // so does an array type: a literal of two `[2] int`s, not a `[2]` of a literal
 (*Model).[*models[0], *models[1]]
 ([3] float).[.[0,0,0], .[1,1,1]] // nested
