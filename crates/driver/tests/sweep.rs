@@ -97,6 +97,173 @@ const TTWJ_SKIPS: &[(&str, &str)] = &[
   ),
   ("19/19.7_linux_input.jai", "reads standard input"),
   ("20/20.1_crash.jai", "crashes on purpose"),
+  (
+    "05/5.5_swapping.jai",
+    "calls swap(*a, *b), an older Basic's pointer form; Basic's swap takes values and returns them #must",
+  ),
+  (
+    "22/22.4_polyproc4.jai",
+    "calls swap(*a, *b), an older Basic's pointer form; Basic's swap takes values and returns them #must",
+  ),
+  (
+    "12/12.8_inner_module_test.jai",
+    "imports a TestInside module the book asks the reader to write",
+  ),
+  (
+    "15/15.8_for_reverse.jai",
+    "expects the pre-#v2 order of `for <`, and v2 is the default (docs/changes.md A2)",
+  ),
+  (
+    "19/19.5_cstrings.jai",
+    "prints and frees the pointer after its own loop has advanced it to the terminator",
+  ),
+  (
+    "22/22.1B_polyproc.jai",
+    "its annotations name s32 for an s8 argument and [] for a static array, contradicting each other",
+  ),
+];
+
+/// Annotations the book writes that are not what the program prints — prose,
+/// a typo against the program's own format string, a value of uninitialized
+/// or freed memory, or the author's machine — each with the reason. The rest
+/// of the program's annotations are still checked.
+const TTWJ_ERRATA: &[(&str, &str, &str)] = &[
+  (
+    "05/5.3_variable_declarations.jai",
+    "31525674139189348",
+    "a variable left uninitialized with ---",
+  ),
+  (
+    "06/6.1_bools.jai",
+    "changes true to false and vice-versa",
+    "prose",
+  ),
+  (
+    "06/6.2_assert.jai",
+    "With line 5 uncommented",
+    "prose about a commented-out line",
+  ),
+  (
+    "06/6.3_numbers.jai",
+    "d is 5068898",
+    "a variable left uninitialized with ---",
+  ),
+  ("09/9.1_types.jai", "4 bytes", "prose"),
+  ("09/9.1_types.jai", "s64 int is an alias for s64", "prose"),
+  ("13/13.1_unions.jai", "same as 6", "prose"),
+  (
+    "19/19.1_strings.jai",
+    "chg_str is Hello",
+    "a typo against the format string",
+  ),
+  (
+    "19/19.1_strings.jai",
+    "chg_str2 is Hello",
+    "a typo against the format string",
+  ),
+  (
+    "19/19.1_strings.jai",
+    "chg_str3 is Hello",
+    "a typo against the format string",
+  ),
+  (
+    "10/10.1_pointers.jai",
+    "3 prints out the value of a2 which is 3",
+    "prose",
+  ),
+  (
+    "10/10.4_dangling_pointers.jai",
+    "5",
+    "reads memory after freeing it",
+  ),
+  (
+    "12/12.13_anonymous_struct.jai",
+    "variable is u64",
+    "the name a beta printed for an anonymous struct type, which L does not specify",
+  ),
+  (
+    "13/13.1_unions.jai",
+    "3.0",
+    "the book's own recorded output says 3",
+  ),
+  (
+    "16/16.2_type_info_proc.jai",
+    "Type of infor is Type_Info_Struct",
+    "a typo against the format string",
+  ),
+  (
+    "18/18.2_static_arrays.jai",
+    "arr2 is Hello 42 1 2 3 zero-initialized Any",
+    "prose for how an empty Any prints",
+  ),
+  (
+    "18/18.3_dynamic_arrays.jai",
+    "arrdyn is 13 9",
+    "written before the pop above it removed 13",
+  ),
+  (
+    "18/18.3_dynamic_arrays.jai",
+    "another_array is 13 9",
+    "written before the pop above it removed 13",
+  ),
+  (
+    "18/18.3_dynamic_arrays.jai",
+    "another_array2 is 13 9",
+    "written before the pop above it removed 13",
+  ),
+  (
+    "18/18.8_array_view_misuse.jai",
+    "2487748255840 2487748277696 3 4 5 6 7 8 9 10",
+    "reads past a view on purpose",
+  ),
+  ("19/19.2_bytes.jai", "65 ASCII value of A", "prose"),
+  ("19/19.2_bytes.jai", "97 ASCII value of a", "prose"),
+  (
+    "23/23.6_interface.jai",
+    "x has a name Kurt Russell and is the color RED",
+    "a typo against the format string",
+  ),
+  ("26/26.10_soa.jai", "see in after program", "prose"),
+  (
+    "26/26.1_type_table.jai",
+    "The type table has 355 entries",
+    "the size of the reference's own type table",
+  ),
+  (
+    "27/27.2_working_with_csv.jai",
+    "see in after program",
+    "prose",
+  ),
+  (
+    "28/28.5_get_cpu_info_feature_flags.jai",
+    "cpu_info INTEL 3219913727 4294636431 0 739248128 289 0 10250153 0 3154117632 0 15",
+    "the author's CPU",
+  ),
+  (
+    "29/29.1_call_c_linux.jai",
+    "2446",
+    "clock() on the author's machine",
+  ),
+  (
+    "29/29.4_get_computer_name.jai",
+    "OS is Windows",
+    "the author's machine",
+  ),
+  (
+    "30/30.12_placeholder.jai",
+    "TRUTH is true is a constant true",
+    "a typo against the format string",
+  ),
+  (
+    "30/30.3_build.jai",
+    "The workspace is 3",
+    "a typo against the format string",
+  ),
+  (
+    "31/31.5_num_threads.jai",
+    "This machine reports 6 CPUs starting 5 threads",
+    "the author's machine",
+  ),
 ];
 
 /// Chapters whose programs open a window, which a sweep cannot look at.
@@ -123,6 +290,7 @@ fn annotation_groups(source: &str) -> Vec<Vec<String>> {
   let mut groups: Vec<Vec<String>> = vec![Vec::new()];
   let mut block_depth = 0usize;
   let mut brace_depth = 0usize;
+  let mut after_commented_out = false;
   for line in source.lines() {
     let depth_before = block_depth;
     block_depth = block_comment_depth_after(line, block_depth);
@@ -130,10 +298,22 @@ fn annotation_groups(source: &str) -> Vec<Vec<String>> {
       continue;
     }
     let code = code_of(line);
-    if brace_depth == 0 && !code.trim().is_empty() && groups.last().is_some_and(|group| !group.is_empty()) {
+    let standalone = line.trim_start().starts_with("// =>");
+    let starts_declaration = brace_depth == 0 && !code.trim().is_empty();
+    if (starts_declaration || (standalone && brace_depth == 0))
+      && groups.last().is_some_and(|group| !group.is_empty())
+    {
       groups.push(Vec::new());
     }
     brace_depth = braces_after(code, brace_depth);
+    // A line of its own under code the book commented out describes that
+    // code, not the program.
+    if standalone && after_commented_out {
+      continue;
+    }
+    if !standalone && !line.trim().is_empty() {
+      after_commented_out = line.trim_start().starts_with("//");
+    }
     let Some(at) = line.find("// =>") else {
       continue;
     };
@@ -443,6 +623,23 @@ fn build_through_metaprogram(path: &Path, import_dirs: &[PathBuf]) -> Result<Pat
     .ok_or_else(|| String::from("no executable came out"))
 }
 
+/// Runs `body` with `directory` as the working directory, the way `jai` is
+/// run from beside the program: a `#run` that reads `pixel.png` reads it from
+/// there.
+fn in_directory<T>(directory: &Path, body: impl FnOnce() -> T) -> T {
+  let saved = std::env::current_dir().ok();
+  let _ = std::env::set_current_dir(directory);
+  let result = body();
+  if let Some(saved) = saved {
+    let _ = std::env::set_current_dir(saved);
+  }
+  result
+}
+
+/// The working directory and file descriptor 1 are the process's, so the
+/// sweeps take turns rather than running side by side.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
   let relative = path
     .strip_prefix(root.join("examples"))
@@ -459,7 +656,14 @@ fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
     return Verdict::Skipped("opens a window");
   }
   let source = std::fs::read_to_string(path).unwrap_or_default();
-  let expected = annotation_groups(&source);
+  let mut expected = annotation_groups(&source);
+  for group in &mut expected {
+    group.retain(|text| {
+      !TTWJ_ERRATA
+        .iter()
+        .any(|(name, annotation, _)| *name == relative && annotation == text)
+    });
+  }
   let output = scratch.join(relative.replace('/', "_"));
   let _ = std::fs::create_dir_all(&output);
   // The book compiles the chapters that import a module of its own with
@@ -469,15 +673,17 @@ fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
   // way the book compiles it, through the metaprogram.
   let import_dirs = [root.join("my_modules")];
   let drives_the_compiler = source.contains("#import \"Compiler\"");
-  let (built, compiled) = capturing_stdout(|| match drives_the_compiler {
-    true => build_through_metaprogram(path, &import_dirs),
-    false => build_with(path, &output, &import_dirs),
+  let directory = path.parent().unwrap_or(root);
+  let (built, compiled) = in_directory(directory, || {
+    capturing_stdout(|| match drives_the_compiler {
+      true => build_through_metaprogram(path, &import_dirs),
+      false => build_with(path, &output, &import_dirs),
+    })
   });
   let executable = match built {
     Ok(executable) => executable,
     Err(first) => return Verdict::BuildFailed(first),
   };
-  let directory = path.parent().unwrap_or(root);
   match run_for(&executable, directory, Duration::from_secs(10)) {
     Err(reason) => Verdict::RunFailed(reason),
     Ok((status, output)) => match matches_groups(&format!("{compiled}\n{output}"), &expected) {
@@ -532,17 +738,20 @@ fn report(name: &str, verdicts: &[(PathBuf, Verdict)]) {
   println!("{name}: {pass} passed, {fail} failed, {skip} skipped");
 }
 
-fn checkout(variable: &str) -> Option<PathBuf> {
+fn checkout(variable: &str) -> Option<(PathBuf, std::sync::MutexGuard<'static, ()>)> {
   let directory = PathBuf::from(std::env::var_os(variable)?);
+  let turn = ONE_AT_A_TIME
+    .lock()
+    .unwrap_or_else(std::sync::PoisonError::into_inner);
   // SAFETY: cargo runs each integration test binary in its own process.
   unsafe { oj_testsupport::use_own_modules() };
-  Some(directory)
+  Some((directory, turn))
 }
 
 #[test]
 #[ignore = "needs a checkout of Ivo-Balbaert/The_Way_to_Jai in OJ_TTWJ_DIR"]
 fn the_way_to_jai() {
-  let Some(root) = checkout("OJ_TTWJ_DIR") else {
+  let Some((root, _turn)) = checkout("OJ_TTWJ_DIR") else {
     return;
   };
   let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -562,7 +771,7 @@ fn advent_of_code() {
   // Each year is one program, `YYYY/YYYY.jai`, which `#load`s the days it
   // finds and runs every one against `input/`. The answers are nowhere in the
   // repository, so a year passes when it builds and runs to the end.
-  let Some(root) = checkout("OJ_AOC_DIR") else {
+  let Some((root, _turn)) = checkout("OJ_AOC_DIR") else {
     return;
   };
   let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -613,7 +822,7 @@ fn advent_of_code() {
 fn toml_jai_tests() {
   // The suite checks itself: each example exits 0 when it passes and 2 when
   // it skipped itself, which is what its own `tests.jai` reads.
-  let Some(root) = checkout("OJ_TOML_JAI_DIR") else {
+  let Some((root, _turn)) = checkout("OJ_TOML_JAI_DIR") else {
     return;
   };
   let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -689,7 +898,20 @@ fn a_procedure_above_main_is_expected_where_main_calls_it() {
                 }\n";
   let groups = annotation_groups(source);
   assert_eq!(groups, [vec!["in helper"], vec!["first", "42", "after"]]);
-  assert_eq!(matches_groups("first\nin helper\n42after\n", &groups), Ok(()));
+  // One under a line the book commented out is about that line, and one
+  // outside every declaration is a group of its own.
+  let source = "main :: () {\n\
+                  // print(\"gone\");\n\
+                  // => gone\n\
+                  print(\"kept\");\n\
+                  // => kept\n\
+                }\n\
+                // => whole\n";
+  assert_eq!(annotation_groups(source), [vec!["kept"], vec!["whole"]]);
+  assert_eq!(
+    matches_groups("first\nin helper\n42after\n", &groups),
+    Ok(())
+  );
   assert_eq!(
     matches_groups("after\nin helper\nfirst 42\n", &groups),
     Err(String::from("after"))
