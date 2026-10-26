@@ -1082,7 +1082,9 @@ main :: () {
     args := get_command_line_arguments();
     if args.count > 2 && args[1] == "own" {
         print("set %\n", os_clipboard_set_text(args[2]));
-        sleep_milliseconds(4000);
+        // Long enough to outlast a reader started on a machine busy with the
+        // rest of the suite; the test kills it as soon as it has read.
+        sleep_milliseconds(60000);
         return;
     }
     if args.count > 1 && args[1] == "read" {
