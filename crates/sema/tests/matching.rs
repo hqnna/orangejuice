@@ -976,3 +976,20 @@ fn a_one_byte_string_literal_is_the_byte_where_an_integer_is_wanted() {
     ]
   );
 }
+
+#[test]
+fn a_backticked_return_leaves_out_the_values_the_caller_gave_defaults() {
+  // `` `return; `` from a macro returns from the procedure it expanded into,
+  // and fills what that procedure's own bare `return;` would (**L§7.2**).
+  accepts(
+    "bail :: () #expand { `return; }\n\
+     f :: (fail: bool) -> ok := false, n := 7 { if fail bail(); return true, 1; }\n",
+  );
+  assert_eq!(
+    errors(
+      "bail :: () #expand { `return; }\n\
+       f :: (fail: bool) -> ok: bool, n := 7 { if fail bail(); return true, 1; }\n"
+    ),
+    vec!["Not enough return values: Wanted 2, got 0.".to_string()]
+  );
+}

@@ -406,9 +406,9 @@ impl Checker<'_> {
           // (**L§7.13**); with no such procedure in sight there is nothing to
           // check it against.
           let arguments = arguments.clone();
-          if let Some(returns) = self.expansion_procedure_returns() {
+          if let Some((returns, return_defaults)) = self.expansion_procedure_returns() {
             let caller = Context {
-              return_defaults: vec![false; returns.len()],
+              return_defaults,
               returns,
               ..context.clone()
             };
@@ -722,17 +722,23 @@ impl Checker<'_> {
     self.report_mismatch(source, span, target.type_id, value.type_id);
   }
 
-  /// The return types of the procedure the innermost macro expanded into.
-  fn expansion_procedure_returns(&mut self) -> Option<Vec<TypeId>> {
+  /// The return types of the procedure the innermost macro expanded into,
+  /// and whether each was written with a default: a `` `return; `` from a
+  /// macro leaves those out the way a bare `return;` would (**L§7.2**).
+  fn expansion_procedure_returns(&mut self) -> Option<(Vec<TypeId>, Vec<bool>)> {
     let mut current = self.caller_scope();
     while let Some(id) = current {
       if let Some((owner, header)) = self.program().procedure_owner(id) {
         let outer = self.program().tree().parent(id).unwrap_or(id);
         let type_id = self.procedure_type(owner, header, outer);
-        return self
-          .types()
-          .procedure_of(type_id)
-          .map(|signature| signature.returns.clone());
+        let returns = self.types().procedure_of(type_id)?.returns.clone();
+        let written = match self.ast(owner).map(|ast| ast.data(header)) {
+          Some(NodeData::ProcedureHeader(payload)) => payload.returns.clone(),
+          _ => Vec::new(),
+        };
+        let mut defaults = self.return_defaults(owner, &written);
+        defaults.resize(returns.len(), false);
+        return Some((returns, defaults));
       }
       current = self.program().tree().parent(id);
     }

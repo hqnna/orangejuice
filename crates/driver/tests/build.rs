@@ -7183,3 +7183,19 @@ fn a_one_byte_string_literal_computes_as_its_byte() {
     "9 9 u8 true false\nz\n",
   );
 }
+
+#[test]
+fn a_backticked_return_returns_the_callers_defaults() {
+  // toml-jai's `return_with_error` (**L§7.2**).
+  assert_output(
+    "#import \"Basic\";\n\
+     bail :: () #expand { `return; }\n\
+     f :: (fail: bool) -> ok := false, n := 7 { if fail bail(); return true, 1; }\n\
+     main :: () {\n\
+       a, b := f(true);\n\
+       c, d := f(false);\n\
+       print(\"% % % %\\n\", a, b, c, d);\n\
+     }\n",
+    "false 7 true 1\n",
+  );
+}
