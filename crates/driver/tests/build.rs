@@ -6462,3 +6462,19 @@ fn the_compiler_module_declares_add_global_data_the_way_c_documents_it() {
     "5 hello\n",
   );
 }
+
+#[test]
+fn a_run_fills_a_placeholder_with_a_string_added_to_its_own_compilation() {
+  // `add_build_string(text, -1)` with no scope named joins the main program
+  // of the compilation that is running, which is replayed with it in place
+  // (`docs/spec.md` §6.5, The Way to Jai 30.12).
+  assert_output(
+    "#placeholder TRUTH;\n\
+     #run {\n\
+       #import \"Compiler\";\n\
+       add_build_string(\"TRUTH :: 42;\", -1);\n\
+     }\n\
+     main :: () { put_number(TRUTH); }\n",
+    "42\n",
+  );
+}

@@ -1325,10 +1325,11 @@ fn self_added_strings(
       continue;
     }
     for scoped in &workspace.scoped_strings {
-      let oj_meta::StringScope::File(path) = &scoped.target else {
-        continue;
+      let target = match &scoped.target {
+        oj_meta::StringScope::File(path) => oj_scope::StringTarget::File(path.clone()),
+        oj_meta::StringScope::MainProgram => oj_scope::StringTarget::MainProgram,
+        oj_meta::StringScope::Module(_) => continue,
       };
-      let target = oj_scope::StringTarget::File(path.clone());
       let seen = already
         .iter()
         .chain(added.iter())

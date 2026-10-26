@@ -782,7 +782,21 @@ impl Meta {
   /// on — in which case the compilation is run *again* with the string in
   /// place, since a `#run` of ours cannot stall (`docs/spec.md` §6.5).
   pub fn add_string_in_scope(&mut self, workspace: i64, path: PathBuf, text: String) {
-    let target = StringScope::File(path);
+    self.add_string_to(workspace, StringScope::File(path), text);
+  }
+
+  /// A string with no scope named, added to the compilation that is running
+  /// right now — `#run add_build_string("TRUTH :: true;", -1);` filling a
+  /// `#placeholder` — joins the main program on the replay the same way.
+  pub fn add_string_to_running(&mut self, workspace: i64, text: String) -> bool {
+    if !self.workspace(workspace).is_some_and(|w| w.implicit) {
+      return false;
+    }
+    self.add_string_to(workspace, StringScope::MainProgram, text);
+    true
+  }
+
+  fn add_string_to(&mut self, workspace: i64, target: StringScope, text: String) {
     let running = self.workspace(workspace).is_some_and(|w| w.implicit);
     // A string the driver already put in place is this run being the *replay*
     // of the one that asked for it, so nothing more has to happen for it.

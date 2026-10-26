@@ -768,6 +768,9 @@ unsafe extern "C" fn add_build_string(
     match scope {
       Some(path) => meta.add_string_in_scope(w, path, text),
       None => {
+        if meta.add_string_to_running(w, text.clone()) {
+          return;
+        }
         if let Some(workspace) = meta.workspace(w) {
           workspace.strings.push(text);
           workspace.started = true;
