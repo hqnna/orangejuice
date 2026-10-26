@@ -1166,6 +1166,21 @@ impl<'a> Checker<'a> {
         .is_program_scope()
   }
 
+  /// The alignment a variable's `#align N` asks for, which raises the one its
+  /// type has (**L§3.14**).
+  pub fn decl_alignment(&mut self, id: DeclId) -> Option<u64> {
+    let decl = self.program.tree().decl(id);
+    let (source, node, scope) = (decl.source?, decl.node?, decl.scope);
+    let expression = match self.ast(source)?.data(node) {
+      NodeData::Declaration(declaration) => declaration.alignment_expression?,
+      _ => return None,
+    };
+    self
+      .const_int(scope, source, expression)
+      .filter(|value| *value > 0)
+      .and_then(|value| u64::try_from(value).ok())
+  }
+
   pub fn decl_constant(&mut self, id: DeclId) -> Option<Const> {
     if let Some(value) = self.bound_constant(id) {
       return Some(value);

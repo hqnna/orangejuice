@@ -191,6 +191,13 @@ impl Checker<'_> {
     if underlying == self.types().underlying(context) {
       return true;
     }
+    if let oj_types::TypeKind::Array {
+      element,
+      kind: oj_types::ArrayKind::Fixed(count),
+    } = *self.types().kind(underlying)
+    {
+      return count > 0 && self.needs_initializer_at(element, depth + 1);
+    }
     let Some(definition) = self.types().struct_of(underlying) else {
       return false;
     };

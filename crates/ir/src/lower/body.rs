@@ -669,6 +669,10 @@ impl Lowering<'_, '_> {
       Some(existing) => existing,
       None => {
         let local = self.new_local(name, type_id);
+        if let Some(declared) = self.checker.decl_alignment(decl) {
+          let slot = &mut self.locals[local.0 as usize];
+          slot.alignment = slot.alignment.max(declared);
+        }
         self.local_of_decl.insert(key, local);
         local
       }
@@ -2267,6 +2271,81 @@ impl Lowering<'_, '_> {
     self.apply_member_defaults_at(address, type_id, 0);
   }
 
+  /// Every element of a fixed array takes its type's defaults, one loop over
+  /// the elements rather than a copy of the defaults per element (**L§4.6**).
+  fn apply_element_defaults(&mut self, base: ValueId, element: TypeId, count: u64, depth: u32) {
+    let index_local = self.new_local(String::from("element"), TypeId::S64);
+    let index_address = self.local_address(index_local);
+    let zero = self.value(TypeId::S64);
+    self.emit(Inst::Const {
+      dest: zero,
+      value: Constant::Int(0),
+    });
+    self.emit(Inst::Store {
+      address: index_address,
+      value: zero,
+    });
+    let header = self.new_block();
+    let body = self.new_block();
+    let exit = self.new_block();
+    self.terminate(Terminator::Jump(header));
+
+    self.current = header;
+    let index = self.value(TypeId::S64);
+    self.emit(Inst::Load {
+      dest: index,
+      address: index_address,
+    });
+    let limit = self.value(TypeId::S64);
+    self.emit(Inst::Const {
+      dest: limit,
+      value: Constant::Int(i128::from(count)),
+    });
+    let condition = self.value(TypeId::BOOL);
+    self.emit(Inst::Binary {
+      dest: condition,
+      operator: crate::ir::BinaryOp::Less,
+      left: index,
+      right: limit,
+    });
+    self.terminate(Terminator::Branch {
+      condition,
+      then_block: body,
+      else_block: exit,
+    });
+
+    self.current = body;
+    let (stride, _) = self.size_align(element);
+    let pointer = self.pointer_to(element);
+    let slot = self.value(pointer);
+    self.emit(Inst::Index {
+      dest: slot,
+      base,
+      index,
+      stride,
+    });
+    self.apply_member_defaults_at(slot, element, depth + 1);
+    let one = self.value(TypeId::S64);
+    self.emit(Inst::Const {
+      dest: one,
+      value: Constant::Int(1),
+    });
+    let next = self.value(TypeId::S64);
+    self.emit(Inst::Binary {
+      dest: next,
+      operator: crate::ir::BinaryOp::Add,
+      left: index,
+      right: one,
+    });
+    self.emit(Inst::Store {
+      address: index_address,
+      value: next,
+    });
+    self.terminate(Terminator::Jump(header));
+
+    self.current = exit;
+  }
+
   /// A member with no value of its own still gets one when its own type has
   /// defaults: `#Context` is a `using` of `Context_Base`, whose allocator and
   /// logger are what a program starts with (**L§4.6**, **L§8.4**).
@@ -2275,6 +2354,16 @@ impl Lowering<'_, '_> {
       return;
     }
     let underlying = self.checker.types().underlying(type_id);
+    if let TypeKind::Array {
+      element,
+      kind: oj_types::ArrayKind::Fixed(count),
+    } = *self.checker.types().kind(underlying)
+    {
+      if count > 0 && self.checker.needs_initializer(element) {
+        self.apply_element_defaults(address, element, count, depth);
+      }
+      return;
+    }
     let Some(definition) = self.checker.types().struct_of(underlying) else {
       return;
     };
@@ -2429,19 +2518,21 @@ impl Lowering<'_, '_> {
     else {
       return;
     };
-    let Some(expression) = declaration.expression else {
-      return;
-    };
+    let expression = declaration.expression;
     let type_id = self.globals[global.0 as usize].type_id;
     self.body_source = source;
     self.body_scope = info.scope;
-    let scope = self.checker.scope_for(source, expression, info.scope);
     let pointer = self.pointer_to(type_id);
     let address = self.value(pointer);
     self.emit(Inst::GlobalAddress {
       dest: address,
       global,
     });
+    let Some(expression) = expression else {
+      self.apply_member_defaults(address, type_id);
+      return;
+    };
+    let scope = self.checker.scope_for(source, expression, info.scope);
     if let Some(value) = self.expression(scope, source, expression, Some(type_id)) {
       self.store(address, value);
     }

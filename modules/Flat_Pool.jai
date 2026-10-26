@@ -46,7 +46,17 @@ init :: (pool: *Flat_Pool, allocator := context.allocator, alignment := 8) {
 
 // Keeps the blocks and starts filling them again, so a pool reset every frame
 // allocates from the operating system only while it is still growing.
-reset :: (pool: *Flat_Pool) {
+// `overwrite_memory` fills what was handed out with 0xCC first, so that a
+// pointer kept past the reset reads garbage rather than what it used to.
+reset :: (pool: *Flat_Pool, overwrite_memory := false) {
+    if overwrite_memory {
+        block := pool.first;
+        while block {
+            memset(block_data(block), 0xCC, block.size);
+            if block == pool.current  break;
+            block = block.next;
+        }
+    }
     pool.current = pool.first;
     pool.occupied = 0;
 }

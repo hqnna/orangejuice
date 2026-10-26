@@ -735,6 +735,12 @@ impl<'a> Program<'a> {
     self.uninstantiated_scopes.borrow_mut().insert(scope);
   }
 
+  /// Whether `#load` and `#import` were followed; a file resolved on its own
+  /// has names only its module would declare (**L§11.7**).
+  pub fn follows_imports(&self) -> bool {
+    self.options.follow_imports
+  }
+
   pub fn is_uninstantiated(&self, scope: ScopeId) -> bool {
     // Almost every program has no uninstantiated body at all, and this is
     // asked on the way to resolving a name, so the borrow and the walk are
@@ -3127,6 +3133,11 @@ impl Program<'_> {
         if let Some(argument) = *argument {
           self.walk(parsed, argument, scope, source);
         }
+        // Like `#this`, `#procedure_name()` asks about whatever contains it.
+        self
+          .directive_scopes
+          .borrow_mut()
+          .insert((source, node), scope);
       }
       NodeData::DirectiveModuleParameters(_) => {
         let mut target = DataTarget::nested(scope);

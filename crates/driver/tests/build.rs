@@ -6102,3 +6102,153 @@ fn a_print_of_plain_text_costs_what_write_string_does() {
     }
   }
 }
+
+#[test]
+fn procedure_name_names_the_procedure_it_was_written_in() {
+  // Inside a macro it names the procedure the expansion landed in, and given
+  // a procedure it names that one (**L§5.14**, **L§7.13**).
+  assert_output(
+    "foo :: () { put(#procedure_name()); put(\"\\n\"); }\n\
+     here :: () #expand { put(#procedure_name()); put(\"\\n\"); }\n\
+     bar :: () { here(); put(#procedure_name(foo)); put(\"\\n\"); }\n\
+     main :: () { foo(); bar(); }\n",
+    "foo\nbar\nfoo\n",
+  );
+}
+
+#[test]
+fn an_integer_literal_prefers_the_narrowest_integer_that_holds_it() {
+  // The Way to Jai 22.1 and 17.6: `convert(0)` is the `s32` overload rather
+  // than the `float` one, `12` the `u8` one and `256` the `u16` one (**L§7.5**).
+  assert_output(
+    "f :: (x: s32) { put(\"s32\\n\"); }\n\
+     f :: (x: float) { put(\"float\\n\"); }\n\
+     g :: (x: u8) { put(\"u8\\n\"); }\n\
+     g :: (x: u16) { put(\"u16\\n\"); }\n\
+     main :: () { f(0); f(1.5); g(12); g(256); }\n",
+    "s32\nfloat\nu8\nu16\n",
+  );
+}
+
+#[test]
+fn an_array_type_before_a_designated_literal_types_its_elements() {
+  assert_output(
+    "main :: () { a := [2] int.[int.[1, 0], int.[0, 3]]; put_number(a[1][1]); put_number(a.count); put_number(a[0].count); }\n",
+    "3\n2\n2\n",
+  );
+}
+
+#[test]
+fn comparing_an_enum_with_a_member_it_lacks_names_the_member() {
+  let Some(diagnostics) = diagnostics_of(
+    "E :: enum { A; B; }\n\
+     main :: () { e := E.A; if e == .C put(\"x\"); }\n",
+  ) else {
+    return;
+  };
+  assert!(
+    diagnostics.contains("'C' is not a member of 'E'."),
+    "{diagnostics}"
+  );
+  assert!(
+    !diagnostics.contains("could not generate code"),
+    "{diagnostics}"
+  );
+}
+
+#[test]
+fn a_static_if_in_a_body_reports_a_name_nothing_declares() {
+  let Some(diagnostics) = diagnostics_of("main :: () { #if NOPE { put(\"x\"); } }\n") else {
+    return;
+  };
+  assert_eq!(
+    diagnostics.matches("Undeclared identifier 'NOPE'.").count(),
+    1,
+    "{diagnostics}"
+  );
+}
+
+#[test]
+fn an_escaped_percent_prints_as_a_percent() {
+  // `\%` is byte 31 in the literal and `print` writes it as `%` (**L§2**),
+  // whether or not the format has arguments.
+  assert_output(
+    "Basic :: #import \"Basic\";\n\
+     main :: () {\n\
+       Basic.print(\"8 \\% 3 is %\\n\", 8 % 3);\n\
+       Basic.print(\"100\\%\\n\");\n\
+     }\n",
+    "8 % 3 is 2\n100%\n",
+  )
+}
+
+#[test]
+fn a_global_struct_takes_its_member_defaults() {
+  // A global with no value of its own starts as its type's defaults, not as
+  // zeroes, and so does every element of a fixed array of them (**L§4.6**).
+  assert_output(
+    "S :: struct { a: int = 5; b := 7; }\n\
+     T :: struct { s: [2] S; }\n\
+     g: S;\n\
+     many: [3] S;\n\
+     main :: () {\n\
+       local: [2] S; t: T;\n\
+       put_number(g.a); put_number(g.b); put_number(many[2].a);\n\
+       put_number(local[1].b); put_number(t.s[1].a);\n\
+     }\n",
+    "5\n7\n5\n7\n5\n",
+  );
+}
+
+#[test]
+fn each_run_assigns_the_globals_it_reaches() {
+  // Every run of a compilation shares one JIT dylib; the generated
+  // initializer of the first must not stand in for the second's, which
+  // assigns different globals (`docs/spec.md` §6.5).
+  assert_output(
+    "seed :: (n: int) -> int { return n; }\n\
+     first: int = seed(3);\n\
+     second: int = seed(4);\n\
+     S :: struct { a: int = 6; }\n\
+     third: S;\n\
+     A :: #run first;\n\
+     B :: #run second;\n\
+     C :: #run third.a;\n\
+     main :: () { put_number(A); put_number(B); put_number(C); }\n",
+    "3\n4\n6\n",
+  );
+}
+
+#[test]
+fn align_on_a_variable_aligns_its_storage() {
+  // `#align 64` on a global or a local raises the alignment its type has
+  // (**L§3.14**), which The Way to Jai 12.7 asserts on.
+  assert_output(
+    "global_var: [100] int #align 64;\n\
+     main :: () {\n\
+       small: u8;\n\
+       big: [16] u8 #align 64;\n\
+       put_number(cast(int) *global_var % 64);\n\
+       put_number(cast(int) *big % 64);\n\
+     }\n",
+    "0\n0\n",
+  );
+}
+
+#[test]
+fn new_takes_the_allocator_it_is_given_and_a_flat_pool_reset_can_stamp() {
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Flat_Pool\";\n\
+     pool: Flat_Pool;\n\
+     Thing :: struct { value: u32 = 42; }\n\
+     main :: () {\n\
+       a: Allocator; a.proc = flat_pool_allocator_proc; a.data = *pool;\n\
+       thing := New(Thing, allocator = a);\n\
+       print(\"% %\\n\", thing.value, pool.occupied > 0);\n\
+       reset(*pool, overwrite_memory = true);\n\
+       print(\"%\\n\", formatInt(thing.value, base = 16));\n\
+     }\n",
+    "42 true\ncccccccc\n",
+  );
+}

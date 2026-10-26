@@ -205,8 +205,13 @@ impl Checker<'_> {
     };
     match *self.types().kind(value.type_id) {
       TypeKind::UntypedInt => {
+        // An integer literal is nearer every integer type it fits than any
+        // float: `convert(0)` calls `convert(s32)` over `convert(float)`.
         if self.types().is_float(underlying) {
-          return Some(literal);
+          return Some(match literal {
+            LITERAL => literal + 4,
+            _ => literal,
+          });
         }
         if let Some(kind) = self.types().integer_kind(underlying) {
           // The literal has to fit exactly: `foo: s32 = 0x0001_0203_0405_0600;`
@@ -218,8 +223,14 @@ impl Checker<'_> {
           let Value::Int(number) = constant.value else {
             return Some(literal);
           };
+          // Of two integer types it fits, the narrower is the nearer: the
+          // literal 12 calls `proc1(u8)` over `proc1(u16)`, and 256, which
+          // only one of them holds, calls the other (The Way to Jai, 17.6).
           if kind.holds(number) {
-            return Some(literal);
+            return Some(match literal {
+              LITERAL => literal + kind.size().trailing_zeros(),
+              _ => literal,
+            });
           }
           let width = i128::from(u8::try_from(kind.size() * 8).unwrap_or(64));
           return (constant.bit_pattern && number >= 0 && number < (1i128 << width))

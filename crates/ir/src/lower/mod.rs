@@ -1092,6 +1092,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
     self.global_ids.insert(decl, id);
     let type_id = self.checker.decl_type(decl).value;
     let (size, alignment) = self.size_align(type_id);
+    let alignment = alignment.max(self.checker.decl_alignment(decl).unwrap_or(1));
     let imported = info.flags.contains(DeclarationFlags::ELSEWHERE);
     let external = imported || info.flags.contains(DeclarationFlags::PROGRAM_EXPORT);
     let symbol = if external {
@@ -1137,10 +1138,21 @@ impl<'c, 'p> Lowering<'c, 'p> {
     {
       return;
     }
+    let type_id = self.globals[id.0 as usize].type_id;
     let Some(expression) = declaration.expression else {
+      let context = self.checker.context_type();
+      let is_context =
+        self.checker.types().underlying(type_id) == self.checker.types().underlying(context);
+      if !is_context
+        && self.checker.needs_initializer(type_id)
+        && !self
+          .already_initialized
+          .contains(&self.globals[id.0 as usize].symbol)
+      {
+        self.deferred_initializers.push((id, decl));
+      }
       return;
     };
-    let type_id = self.globals[id.0 as usize].type_id;
     let scope = self.checker.scope_for(source, expression, info.scope);
     let value = self.checker.expression(scope, source, expression);
     if let Some(constant) = value

@@ -2,7 +2,7 @@
 // print and its formatting (**L§5.7**, **L§17**).
 //
 // A `%` in the format string takes the next argument; `%%` is a literal
-// percent. Every argument arrives as an `Any`, so what is printed is decided
+// percent, and so is the byte 31 a `\%` escape writes (**L§2**). Every argument arrives as an `Any`, so what is printed is decided
 // by walking the `Type_Info` the compiler put in the type table — which is why
 // a struct prints its member names without anyone writing that out.
 //
@@ -185,7 +185,7 @@ write_unformatted :: (format: string, to_standard_error: bool) -> s64 #no_contex
     at := 0;
     while at < format.count {
         start := at;
-        while at < format.count && format[at] != #char "%"  at += 1;
+        while at < format.count && format[at] != #char "%" && format[at] != 31  at += 1;
         if at > start {
             run: string;
             run.data = format.data + start;
@@ -194,6 +194,13 @@ write_unformatted :: (format: string, to_standard_error: bool) -> s64 #no_contex
             written += run.count;
         }
         if at == format.count  break;
+
+        if format[at] == 31 {
+            at += 1;
+            write_string("%", to_standard_error);
+            written += 1;
+            continue;
+        }
 
         at += 1;
         if at < format.count && format[at] == #char "%" {
@@ -321,9 +328,14 @@ format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) ->
     at := 0;
     while at < format.count {
         c := format[at];
+        if c == 31 {
+            append(builder, #char "%");
+            at += 1;
+            continue;
+        }
         if c != #char "%" {
             start := at;
-            while at < format.count && format[at] != #char "%"  at += 1;
+            while at < format.count && format[at] != #char "%" && format[at] != 31  at += 1;
             run: string;
             run.data = format.data + start;
             run.count = at - start;

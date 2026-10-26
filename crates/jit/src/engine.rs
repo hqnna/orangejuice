@@ -489,7 +489,13 @@ impl Engine {
     }
     let mut claimed = Vec::new();
     for (index, procedure) in program.procedures.iter_mut().enumerate() {
-      if !procedure.has_body() || program.entry == Some(oj_ir::ProcId(index as u32)) {
+      let id = Some(oj_ir::ProcId(index as u32));
+      if !procedure.has_body() || program.entry == id {
+        continue;
+      }
+      // Which globals a run's initializer assigns depends on what that run
+      // reached, so it is the run's own and never one an earlier run compiled.
+      if program.global_init == id {
         continue;
       }
       // A run's type table is an image of its own, built out of everything the

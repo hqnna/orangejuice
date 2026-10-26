@@ -90,8 +90,8 @@ free :: (memory: *void, allocator := context.allocator) {
 
 // One `T`, zeroed unless the type has member defaults, in which case the
 // initializer the compiler wrote fills them in (**L§17**).
-New :: ($T: Type, $initialized := true) -> *T {
-    memory := alloc(size_of(T));
+New :: ($T: Type, $initialized := true, allocator := context.allocator) -> *T {
+    memory := alloc(size_of(T), allocator);
     #if initialized {
         // Rolled in here rather than deferred to `Initialize`, since `New` is
         // called often enough that the extra polymorph would show.

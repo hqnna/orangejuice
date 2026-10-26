@@ -145,7 +145,14 @@ impl Checker<'_> {
           .unwrap_or(scope);
         self.this_value(scope)
       }
-      NodeData::DirectiveProcedureName { .. } => Expr::value(TypeId::STRING),
+      NodeData::DirectiveProcedureName { argument } => {
+        let argument = *argument;
+        let scope = self
+          .program()
+          .directive_scope(source, node)
+          .unwrap_or(scope);
+        self.procedure_name(scope, source, argument)
+      }
       NodeData::DirectiveExists(_) => Expr::constant(Const::bool(false)),
       // `#compile_time` is a `bool` but not a constant one (**L§5.14**).
       NodeData::DirectiveCompileTime => Expr::value(TypeId::BOOL),
@@ -547,6 +554,50 @@ impl Checker<'_> {
       }
     }
     caller.unwrap_or(Expr::UNKNOWN)
+  }
+
+  /// `#procedure_name()`: the name of the procedure it was written in — or,
+  /// inside a macro, the one the expansion landed in — and `#procedure_name(p)`
+  /// the name `p` was declared with, as a constant string (**L§5.14**). A
+  /// procedure with no name of its own has the empty one.
+  fn procedure_name(&mut self, scope: ScopeId, source: SourceId, argument: Option<NodeId>) -> Expr {
+    let name = match argument {
+      Some(argument) => {
+        let value = self.expression_type(scope, source, argument);
+        match value.overloads.first().copied() {
+          Some(decl) => Some(self.program().tree().decl(decl).name),
+          None => self.name_at(source, argument),
+        }
+      }
+      None => {
+        let start = match self.program().is_in_macro(scope) {
+          true => self.caller_scope().unwrap_or(scope),
+          false => scope,
+        };
+        let mut found = None;
+        let mut current = Some(start);
+        while let Some(id) = current {
+          if let Some((owner, header)) = self.program().procedure_owner(id) {
+            found = match self.procedure_declared_at(owner, header, id) {
+              Some(decl) => Some(self.program().tree().decl(decl).name),
+              None => self.ast(owner).and_then(|ast| match ast.data(header) {
+                NodeData::ProcedureHeader(header) => header.name,
+                _ => None,
+              }),
+            };
+            if found.is_some() {
+              break;
+            }
+          }
+          current = self.program().tree().parent(id);
+        }
+        found
+      }
+    };
+    let text: Box<[u8]> = name
+      .map(|name| Box::from(self.interner().resolve(name)))
+      .unwrap_or_default();
+    Expr::constant(Const::string(text))
   }
 
   /// What `#this` names: the procedure, struct or enum whose body it was
@@ -1276,6 +1327,29 @@ impl Checker<'_> {
       &[left_type.clone(), right_type.clone()],
     ) {
       return result;
+    }
+    // `e == .C` where `e`'s enum has no `C` is the member mistake it looks
+    // like, said where the `.C` is (**L§5.12**), rather than an operand of a
+    // type nothing can compare.
+    for (dotted, other, at) in [
+      (&right_type, &left_type, right),
+      (&left_type, &right_type, left),
+    ] {
+      if let Some(Value::EnumName(name)) = dotted.constant.as_ref().map(|constant| &constant.value)
+        && let Some(definition) = self.types().enum_of(self.types().underlying(other.type_id))
+        && self.types().enum_info(definition).complete
+        && self.types().enum_info(definition).value_of(*name).is_none()
+        && let Some(span) = self.span_of(source, at)
+      {
+        let written = String::from_utf8_lossy(self.interner().resolve(*name)).into_owned();
+        let printed = self.type_name(other.type_id);
+        self.report_once(
+          source,
+          span,
+          format!("'{written}' is not a member of '{printed}'."),
+        );
+        return Expr::UNKNOWN;
+      }
     }
     // A string is a count and a pointer, so ordering one against another is
     // not a comparison the language defines — and it is a common enough thing

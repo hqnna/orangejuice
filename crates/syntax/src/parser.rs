@@ -1522,6 +1522,70 @@ impl Parser<'_> {
     Some(operand)
   }
 
+  /// The array-type counterpart of [`Parser::point_literal_type_at`]: in
+  /// `[2] int.[int.[1, 0], int.[0, 3]]` the `[2]` belongs to the literal's
+  /// element type, so what is built is a literal of `[2] int`s rather than a
+  /// type whose element is a literal (**L§5.8**).
+  fn array_literal_type_at(&mut self, array_type: NodeId, start: u32) -> Option<NodeId> {
+    let NodeData::TypeInstantiation(outer) = &self.ast.node(array_type).data else {
+      return None;
+    };
+    outer.array_element_type?;
+    let mut innermost = array_type;
+    loop {
+      let NodeData::TypeInstantiation(inst) = &self.ast.node(innermost).data else {
+        return None;
+      };
+      match inst.array_element_type {
+        Some(element) => innermost = element,
+        None => break,
+      }
+    }
+    let NodeData::TypeInstantiation(inst) = &self.ast.node(innermost).data else {
+      return None;
+    };
+    let literal = inst.type_valued_expression?;
+    let designation = match &self.ast.node(literal).data {
+      NodeData::Literal(found)
+        if !self
+          .ast
+          .flags(literal)
+          .contains(NodeFlags::IS_PARENTHESIZED) =>
+      {
+        match &found.value {
+          LiteralValue::Array(array) => array.element_type,
+          LiteralValue::Struct(structure) => structure.type_expression,
+          _ => None,
+        }
+      }
+      _ => None,
+    }?;
+    let replacement = self.type_of_designation(designation);
+    if let NodeData::TypeInstantiation(inst) = &mut self.ast.node_mut(innermost).data {
+      *inst = replacement;
+    }
+    if let NodeData::Literal(found) = &mut self.ast.node_mut(literal).data {
+      match &mut found.value {
+        LiteralValue::Array(array) => array.element_type = Some(array_type),
+        LiteralValue::Struct(structure) => structure.type_expression = Some(array_type),
+        _ => {}
+      }
+    }
+    self.ast.node_mut(literal).span = self.span_from(start);
+    Some(literal)
+  }
+
+  fn type_of_designation(&self, designation: NodeId) -> Box<TypeInstantiation> {
+    match &self.ast.node(designation).data {
+      NodeData::TypeInstantiation(inst) => inst.clone(),
+      _ => {
+        let mut inst = TypeInstantiation::empty();
+        inst.type_valued_expression = Some(designation);
+        Box::new(inst)
+      }
+    }
+  }
+
   fn parse_unary(&mut self) -> Option<NodeId> {
     let start = self.span().start;
 
@@ -2084,7 +2148,16 @@ impl Parser<'_> {
         self.ast.add_flags(inner, NodeFlags::IS_PARENTHESIZED);
         Some(inner)
       }
-      TokenKind::OPEN_BRACKET | TokenKind::ASTERISK => self.parse_type(),
+      TokenKind::OPEN_BRACKET => {
+        let start = self.span().start;
+        let array_type = self.parse_type()?;
+        Some(
+          self
+            .array_literal_type_at(array_type, start)
+            .unwrap_or(array_type),
+        )
+      }
+      TokenKind::ASTERISK => self.parse_type(),
       TokenKind::KEYWORD_STRUCT | TokenKind::KEYWORD_UNION => self.parse_struct(),
       TokenKind::KEYWORD_ENUM | TokenKind::KEYWORD_ENUM_FLAGS => self.parse_enum(),
       TokenKind::KEYWORD_SIZE_OF => self.parse_type_query(TypeQueryKind::SizeOf),
@@ -4419,6 +4492,20 @@ mod tests {
     assert!(printed.contains("mov t, [b + i*4 + 10];"));
     assert!(printed.contains("mov t, [*p + 8];"));
     assert!(printed.contains("mov t, [b + (SIZE + 1)];"));
+  }
+
+  #[test]
+  fn an_array_type_before_a_designated_literal_belongs_to_its_elements() {
+    let tree = tree("x := [2] int.[int.[1, 0], int.[0, 3]];");
+    assert!(
+      tree.contains(
+        "expression: LITERAL array LiteralFlags(0x0)\n      element_type: TYPE_INSTANTIATION"
+      ),
+      "{tree}"
+    );
+    assert!(tree.contains("array_dimension: LITERAL int 2"), "{tree}");
+    let printed = printed("x := [2] int.[int.[1, 0], int.[0, 3]];");
+    assert_eq!(printed, "x := [2] int.[int.[1, 0], int.[0, 3]];\n");
   }
 
   #[test]

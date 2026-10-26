@@ -60,6 +60,67 @@ impl Checker<'_> {
     self.stallable_runs = false;
   }
 
+  /// A `#if` in a body whose condition names something nothing declares can
+  /// never be decided, and the scope pass treated the miss as a wait for the
+  /// `#if` itself. The checker is what can tell it is not one: the body is
+  /// live, and nothing will ever declare the name (**L§6.10**).
+  fn report_undeclared_in_condition(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    condition: NodeId,
+  ) {
+    if self.undecided_static_ifs > 0
+      || !self.program().follows_imports()
+      || self.program().is_uninstantiated(scope)
+    {
+      return;
+    }
+    let Some(ast) = self.ast(source) else {
+      return;
+    };
+    let mut pending = vec![condition];
+    let mut names = Vec::new();
+    while let Some(node) = pending.pop() {
+      match ast.data(node) {
+        NodeData::Ident(ident) => names.push((node, ident.name)),
+        NodeData::UnaryOperator { operator, operand } => {
+          if operator.0 != i32::from(b'.') {
+            pending.push(*operand);
+          }
+        }
+        NodeData::BinaryOperator {
+          operator,
+          left,
+          right,
+          ..
+        } => {
+          pending.push(*left);
+          if operator.0 != i32::from(b'.') {
+            pending.push(*right);
+          }
+        }
+        _ => {}
+      }
+    }
+    for (node, name) in names {
+      if self.program().is_macro_injected(name) || self.program().is_in_macro(scope) {
+        continue;
+      }
+      let at = self.scope_for(source, node, scope);
+      if matches!(
+        self.program().tree().lookup(at, name),
+        oj_scope::Resolution::Found(_)
+      ) {
+        continue;
+      }
+      if let Some(span) = self.span_of(source, node) {
+        let text = String::from_utf8_lossy(self.interner().resolve(name)).into_owned();
+        self.error(source, span, format!("Undeclared identifier '{text}'."));
+      }
+    }
+  }
+
   fn check_runs_in(&mut self, source: SourceId, scope: ScopeId, node: NodeId) {
     if !self.enter() {
       self.too_deep(Some((source, node)));
@@ -362,6 +423,9 @@ impl Checker<'_> {
           && payload
             .if_flags
             .contains(oj_syntax::ast::IfFlags::IS_STATIC);
+        if undecided {
+          self.report_undeclared_in_condition(scope, source, payload.condition);
+        }
         let branches = decided.unwrap_or_else(|| {
           [payload.then_block, payload.else_block]
             .into_iter()
