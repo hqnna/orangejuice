@@ -6655,3 +6655,15 @@ fn a_call_that_returns_nothing_initializes_a_void_local() {
     "f\ndone\n",
   );
 }
+
+#[test]
+fn a_dereferenced_void_pointer_prints_as_void() {
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       ptr: *void;\n\
+       print(\"% %\\n\", << ptr, type_of(<< ptr));\n\
+     }\n",
+    "void void\n",
+  );
+}

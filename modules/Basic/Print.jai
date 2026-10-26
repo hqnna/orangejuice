@@ -387,7 +387,13 @@ format_to_builder :: (builder: *String_Builder, format: string, args: [] Any) ->
 append_any :: (builder: *String_Builder, value: Any, nested := false) {
     // An `Any` missing either half is the empty one — there is nothing to read
     // and nothing to read it as — and it is written as the literal it would
-    // be, measured against the reference.
+    // be, measured against the reference. A `void` has nothing to point at
+    // anyway, and is written as `void` with or without a pointer (The Way to
+    // Jai 10.1 dereferences a null `*void`).
+    if value.type && value.type.type == .VOID {
+        append(builder, "void");
+        return;
+    }
     if !value.type || !value.value_pointer {
         append(builder, "Any.{}");
         return;
