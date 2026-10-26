@@ -494,6 +494,23 @@ stops at semantics of the betas after 0.2.009 — a one-character string
 literal where a `u8` is wanted, `>=` between a byte and one — which
 `TODO.md` lists.
 
+Taking those from how the corpus writes them (**L§2.6**) and fixing what
+toml-jai's examples ran into behind them — a `` `return; `` that leaves out
+the caller's defaults, a macro's backticked declaration read by the second
+specialization of its caller, a `Table` in the context, struct literals over
+defaults with no byte form, `Any.{…}`, `memcmp`'s sign, `*it` in an array
+loop, a member note after an inline type, `is_alnum`, `alloc(0)`, the slot
+`array_add` returns, `FormatFloat`'s `SCIENTIFIC` — toml-jai is 5 / 1 / 1.
+The one left, `custom_handlers`, bakes `Table(K, u8, k => k.id, …)`: a quick
+lambda as a polymorphic struct's argument, which orangejuice cannot make a
+constant of yet. The Way to Jai and Advent of Code are unchanged.
+
+| Sweep | Passed | Failed | Skipped |
+|---|---|---|---|
+| The Way to Jai | 226 | 6 | 49 |
+| Advent of Code | 10 | 0 | 1 |
+| toml-jai | 5 | 1 | 1 |
+
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
 book program that prints a workspace number expects to be driven by
