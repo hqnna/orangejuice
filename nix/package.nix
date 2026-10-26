@@ -10,7 +10,8 @@ let
   # tests; LICENSE and README.md, which the portable tarball carries; and
   # `modules/` and `docs/examples/` — the distribution `oj` ships
   # and the acceptance suite that compiles against it, without which nothing
-  # can be built at all.
+  # can be built at all; and the C a crate's build script compiles, such as
+  # `oj-jit`'s fault guard.
   src = pkgs.lib.cleanSourceWith {
     src = ../.;
     name = "orangejuice-source";
@@ -19,6 +20,7 @@ let
       || builtins.match ".*/(rustfmt|clippy)\\.toml$" path != null
       || builtins.match ".*/tests/.*\\.(jai|snap)$" path != null
       || builtins.match ".*/modules(/.*)?$" path != null
+      || builtins.match ".*/crates/[^/]+/csrc(/.*)?$" path != null
       || builtins.match ".*/(LICENSE|README\\.md)$" path != null
       || builtins.match ".*/docs$" path != null
       || builtins.match ".*/docs/examples(/.*)?$" path != null;
