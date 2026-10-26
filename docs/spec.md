@@ -390,14 +390,15 @@ needs one nor passes vacuously without one:
 
 ```console
 $ OJ_TTWJ_DIR=…/The_Way_to_Jai OJ_AOC_DIR=…/AdventOfCode OJ_TOML_JAI_DIR=…/toml-jai \
-    cargo test -p oj-driver --test sweep -- --ignored --nocapture --test-threads 1
+    cargo test --release -p oj-driver --test sweep -- --ignored --nocapture
 ```
 
 What a program must print comes from the project, never from orangejuice:
 The Way to Jai's `// =>` annotations, compared word for word and in order
-(punctuation is not compared, since the annotations are written by hand; one
-on a commented-out line, inside a `/* */`, starting `Error` or `Warning`, or
-naming an address, a Windows path or a time is not output and is left out);
+(punctuation and case are not compared, since the annotations are written by
+hand; one on a commented-out line, inside a `/* */`, starting `Error` or
+`Warning`, or naming an address, a Windows path or a time is not output and
+is left out);
 Advent of Code's years running to the end on the inputs the repository
 carries; toml-jai's examples exiting 0, which is what its own `tests.jai`
 checks. Programs that cannot be judged here — interactive, Windows-only,
@@ -449,6 +450,37 @@ an uninitialized or freed variable, a machine's CPU count or CPU vendor, a
 Windows path, a random number from the reference's generator, output from
 a book revision older than the code (`swap`, `remove`). Those with a cause
 on this side are in `TODO.md`.
+
+The sweep then learned to read the book better, and the book's errata were
+written down rather than counted as failures. Annotations are grouped by the
+top-level declaration they were written in, and each group is matched in
+order on its own, so what a procedure above `main` prints is expected where
+`main` calls it; a group whose output ran together because a `print` had no
+newline is matched letter for letter; words are compared without regard to
+case; an annotation on a line of its own under a commented-out line is about
+that line, and one outside every declaration is a group of its own. Each
+build runs with the program's directory as the working directory, so a
+`#run` that reads `pixel.png` finds it. `TTWJ_ERRATA` lists the annotations
+that are prose, a typo against the program's own format string, a value of
+uninitialized or freed memory, or the author's machine — each with the
+reason, and the rest of that program's annotations still checked — and the
+skip list gained the programs written against an older `Basic`'s pointer
+`swap` (rejected now, since `#must` is checked) or the pre-`#v2` reverse
+range. Fixing what was left on this side — `*Thing.{…}` as an address, one
+`Code` inserted into several scopes, a `#run`'s body checked as a body,
+`#poke_name` of an operator, `array_view`'s default count:
+
+| Sweep | Passed | Failed | Skipped |
+|---|---|---|---|
+| The Way to Jai | 225 | 7 | 49 |
+| Advent of Code | 10 | 0 | 1 |
+| toml-jai | 0 | 6 | 1 |
+
+All seven are open questions in `TODO.md` that need a measurement rather than
+a guess: float formatting (5.2), `Random`'s generator (6.6), `Context` as a
+type name (25.1, 29.3), how a tagged union prints (26.31), `#ifx … then a;
+else b;` (26.5) and `Pool`'s bookkeeping (34.4). toml-jai's six are its
+tagged unions.
 
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
