@@ -637,7 +637,9 @@ impl Checker<'_> {
         checker.declarations_type(&[declared])
       });
       if !found.is_unknown() {
-        self.backticked_owner.insert(declared, instance);
+        self
+          .backticked_owner
+          .insert((declared, self.current_instance), instance);
         return found;
       }
     }

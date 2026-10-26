@@ -364,8 +364,10 @@ pub struct Checker<'a> {
   /// is why the instance is part of the key (**L§12.1**).
   /// Which instantiation a backticked declaration's storage belongs to. A
   /// macro declares `` `x `` into the block it was expanded into, so what the
-  /// caller reads afterwards is the expansion's local (**L§7.13**).
-  pub(crate) backticked_owner: HashMap<DeclId, InstanceId>,
+  /// caller reads afterwards is the expansion's local (**L§7.13**). Keyed by
+  /// the instantiation the caller was read under too: two specializations of
+  /// one polymorphic caller expand the macro twice, and each reads its own.
+  pub(crate) backticked_owner: HashMap<(DeclId, Option<InstanceId>), InstanceId>,
   pub(crate) runs: HashMap<(Option<InstanceId>, SourceId, NodeId), Expr>,
   /// What a `#run` behind a compound declaration produced, all of its values
   /// at once: the run executes once however many names take from it
@@ -958,10 +960,29 @@ impl<'a> Checker<'a> {
   /// inside the instantiation being checked has one per specialization
   /// (**L§7.8**).
   pub(crate) fn decl_key(&self, id: DeclId) -> (Option<InstanceId>, DeclId) {
-    (
-      self.instance_of_scope(self.program.tree().decl(id).scope),
-      id,
-    )
+    let scope = self.program.tree().decl(id).scope;
+    // A `` `x `` a macro declared is read from the block it was expanded
+    // into, where the macro's own instantiation is not active; it still
+    // belongs to that expansion (**L§7.13**).
+    let instance = self
+      .instance_of_scope(scope)
+      .or_else(|| self.backticked_owner_here(id));
+    (instance, id)
+  }
+
+  /// The expansion that declared a backticked declaration, as the active
+  /// instantiation reads it.
+  pub(crate) fn backticked_owner_here(&self, id: DeclId) -> Option<InstanceId> {
+    if self.backticked_owner.is_empty() {
+      return None;
+    }
+    let mut current = self.current_instance;
+    loop {
+      if let Some(owner) = self.backticked_owner.get(&(id, current)) {
+        return Some(*owner);
+      }
+      current = self.instances[current?.0 as usize].parent;
+    }
   }
 
   /// The innermost active instantiation that encloses a scope, or `None` when

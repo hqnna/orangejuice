@@ -429,7 +429,6 @@ impl Checker<'_> {
     self
       .decl_key(decl)
       .0
-      .or_else(|| self.backticked_owner.get(&decl).copied())
       .or_else(|| self.struct_instance_enclosing(self.program().tree().decl(decl).scope))
   }
 

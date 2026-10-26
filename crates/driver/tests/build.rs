@@ -7252,3 +7252,25 @@ fn two_specializations_of_a_struct_procedure_are_two_compile_time_symbols() {
     "30\n",
   );
 }
+
+#[test]
+fn each_specialization_reads_the_backticked_declaration_its_own_expansion_made() {
+  // Two specializations of one polymorphic procedure expand a macro into the
+  // same written block, and each reads back the `` `h `` its own expansion
+  // declared (**L§7.13**). The second used to read the first's, untyped —
+  // which is every program that `table_add`s to two kinds of `Table`.
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     walk :: () #expand { `h := `key; }\n\
+     add :: (key: $K) -> K { walk(); return h; }\n\
+     main :: () {\n\
+       m: Table(string, s64);\n\
+       table_add(*m, \"k\", 4);\n\
+       t: Table(int, int);\n\
+       table_add(*t, 3, 1);\n\
+       print(\"% % % %\\n\", add(3), add(2.5), table_find_pointer(*m, \"k\").*, table_find_pointer(*t, 3).*);\n\
+     }\n",
+    "3 2.5 4 1\n",
+  );
+}
