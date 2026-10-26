@@ -7349,3 +7349,15 @@ fn a_zero_sized_allocation_has_an_address() {
     "true true\n",
   );
 }
+
+#[test]
+fn the_slot_array_add_hands_back_starts_with_the_defaults() {
+  // toml-jai adds a `Value` with `array_add(*values)` and reads back the
+  // `kind := .TABLE` its declaration starts with.
+  assert_output(
+    "#import \"Basic\";\n\
+     S :: struct { a := 7; b: int; }\n\
+     main :: () { xs: [..] S; p := array_add(*xs); print(\"% %\\n\", p.a, p.b); }\n",
+    "7 0\n",
+  );
+}

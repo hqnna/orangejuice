@@ -14,13 +14,15 @@ array_add :: (array: *[..] $T, value: T) {
 }
 
 // The new slot's address, so the caller can fill it in place rather than
-// building a `T` and copying it.
+// building a `T` and copying it. The slot starts as a `T` declared without a
+// value does, defaults and all: toml-jai adds a table this way and reads
+// its `kind := .TABLE` back.
 array_add :: (array: *[..] $T) -> *T {
     array_ensure_room(array, 1);
     if array.count >= array.allocated  return null;
     result := *array.data[array.count];
     array.count += 1;
-    memset(result, 0, size_of(T));
+    Initialize(result);
     return result;
 }
 
