@@ -6943,3 +6943,26 @@ fn a_range_loop_never_overflows_its_iterator() {
     "256\n4\n3\n",
   );
 }
+
+#[test]
+fn a_code_value_in_a_variable_reaches_a_macro_as_what_it_holds() {
+  // `code1 := #code …; macro(code1)` hands the macro what `code1` holds, not
+  // the name `code1` (The Way to Jai 26.27).
+  assert_output(
+    "#import \"Basic\";\n\
+     code_to_string :: (code: Code) -> string #expand {\n\
+       PP :: #import \"Program_Print\";\n\
+       Compiler :: #import \"Compiler\";\n\
+       node := Compiler.compiler_get_nodes(code);\n\
+       builder: String_Builder;\n\
+       PP.print_expression(*builder, node);\n\
+       return builder_to_string(*builder);\n\
+     }\n\
+     TEXT :: #run -> string {\n\
+       code1 := #code a_constant :: 10;\n\
+       return code_to_string(code1);\n\
+     };\n\
+     main :: () { print(\"%\\n\", TEXT); }\n",
+    "a_constant :: 10\n",
+  );
+}

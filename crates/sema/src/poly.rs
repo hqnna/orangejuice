@@ -1202,7 +1202,13 @@ impl Checker<'_> {
         && vararg_slot != Some(index)
         && let Some(decl) = self.header_parameter_decl(source, signature, index)
       {
+        // A `Code` the caller holds in a variable is a value like any other:
+        // the macro gets what the variable holds when it runs, not the
+        // variable's name (The Way to Jai 26.27).
+        let runtime_code =
+          argument.value.type_id == TypeId::CODE && argument.value.constant.is_none();
         if parameter.type_id == TypeId::CODE
+          && !runtime_code
           && let Some(bound) = self.code_argument(&argument.value, argument.written)
         {
           solution.bindings.push((decl, bound));
