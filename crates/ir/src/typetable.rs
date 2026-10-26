@@ -259,6 +259,11 @@ impl TypeTable {
     // here; the rest belong to a metaprogram's view of the program.
     let status = u32::from(!info.complete);
     self.write_field_u32(checker, record, at, "status_flags", status);
+    let notes = checker.struct_notes(definition);
+    if !notes.is_empty() {
+      let notes = self.string_array(&notes);
+      self.write_field_view(checker, record, at, "notes", notes);
+    }
 
     // What a `compiler_set_type_info_flags` asked for joins what the struct
     // was declared with; nothing ever clears either (**C§3.3**).
@@ -281,7 +286,7 @@ impl TypeTable {
       .textual_flags
       .contains(oj_types::StructTextualFlags::TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS)
       || set & TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS != 0;
-    let members = self.member_array(checker, &info.members, erase);
+    let members = self.member_array(checker, definition, &info.members, erase);
     self.write_field_view(checker, record, at, "members", members);
 
     // A struct that starts as anything other than all zeroes describes that
@@ -305,6 +310,7 @@ impl TypeTable {
   fn member_array(
     &mut self,
     checker: &mut Checker,
+    definition: StructId,
     members: &[oj_types::StructMember],
     erase: bool,
   ) -> (u64, u64) {
@@ -327,7 +333,7 @@ impl TypeTable {
       .collect();
     // A member's type has to be laid out before the array is placed, or the
     // recursion would move the cursor out from under it.
-    let entries: Vec<(String, u64, u64, u32)> = declared
+    let entries: Vec<MemberEntry> = declared
       .iter()
       .map(|member| {
         let name = checker.interner().resolve_lossy(member.name).into_owned();
@@ -336,14 +342,22 @@ impl TypeTable {
           false => member.type_id,
         };
         let type_offset = self.offset_of(checker, described);
-        (name, type_offset, member.offset, member.flags.bits())
+        let notes = checker.member_notes(definition, member.name);
+        let notes = match notes.is_empty() {
+          true => (0, 0),
+          false => self.string_array(&notes),
+        };
+        (name, type_offset, member.offset, member.flags.bits(), notes)
       })
       .collect();
 
     let count = entries.len();
     let base = self.place(size * count as u64, alignment);
-    for (index, (name, type_offset, offset, flags)) in entries.into_iter().enumerate() {
+    for (index, (name, type_offset, offset, flags, notes)) in entries.into_iter().enumerate() {
       let at = base + size * index as u64;
+      if notes.1 > 0 {
+        self.write_field_view(checker, record, at, "notes", notes);
+      }
       self.write_field_string(checker, record, at, "name", name.as_bytes());
       self.write_field_pointer(checker, record, at, "type", type_offset);
       self.write_field_i64(checker, record, at, "offset_in_bytes", offset as i64);
@@ -670,6 +684,9 @@ impl Records {
 }
 
 /// The `Type_Info_Tag` member a type carries (**L§17**).
+/// A member's name, `Type_Info` offset, byte offset, flags and notes view.
+type MemberEntry = (String, u64, u64, u32, (u64, u64));
+
 fn tag_name(kind: &TypeKind) -> &'static str {
   match kind {
     TypeKind::Integer(_) | TypeKind::UntypedInt => "INTEGER",

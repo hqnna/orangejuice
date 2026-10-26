@@ -6303,3 +6303,19 @@ fn a_literal_of_a_string_or_a_view_fills_its_count_and_data() {
     "hel\nel\n2\n3\n",
   );
 }
+
+#[test]
+fn a_struct_and_its_members_carry_their_notes_into_the_type_table() {
+  // `@notes` on a struct and on its members are what `Type_Info_Struct.notes`
+  // and `Type_Info_Struct_Member.notes` hold (**L§8.7**); a serializer reads
+  // its `@JsonName(x)` from there.
+  assert_output(
+    "#import \"Basic\";\n\
+     P :: struct @Version9 { a: int @JsonName(alpha); b: int; @Skip\n c: int; }\n\
+     main :: () {\n\
+       t := type_info(P);\n\
+       print(\"% % % %\\n\", t.notes, t.members[0].notes, t.members[1].notes, t.members[2].notes.count);\n\
+     }\n",
+    "[\"Version9\"] [\"JsonName(alpha)\"] [\"Skip\"] 0\n",
+  );
+}

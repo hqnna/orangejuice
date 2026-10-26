@@ -1016,6 +1016,58 @@ impl Checker<'_> {
     ))
   }
 
+  /// The `@notes` written on a struct, as the text after the `@`
+  /// (`Type_Info_Struct.notes`, **L§8.7**).
+  pub fn struct_notes(&mut self, definition: oj_types::StructId) -> Vec<String> {
+    let Some(scope) = self.struct_scope(definition) else {
+      return Vec::new();
+    };
+    let Some((source, node)) = self.aggregate_owner(scope) else {
+      return Vec::new();
+    };
+    let notes = match self.ast(source).map(|ast| ast.data(node)) {
+      Some(NodeData::Struct(payload)) => payload.notes.clone(),
+      _ => return Vec::new(),
+    };
+    self.note_texts(source, &notes)
+  }
+
+  /// The `@notes` written on one member of a struct — after its `;` or
+  /// before it — which is what `Type_Info_Struct_Member.notes` holds and
+  /// what a serializer reads its `@JsonName(x)` out of (**L§8.7**).
+  pub fn member_notes(&mut self, definition: oj_types::StructId, name: Symbol) -> Vec<String> {
+    let Some(scope) = self.struct_scope(definition) else {
+      return Vec::new();
+    };
+    let Some(declared) = self.program().tree().names_in(scope, name) else {
+      return Vec::new();
+    };
+    for decl in declared {
+      let info = self.program().tree().decl(decl);
+      let (Some(source), Some(node)) = (info.source, info.node) else {
+        continue;
+      };
+      if let Some(NodeData::Declaration(declaration)) = self.ast(source).map(|ast| ast.data(node)) {
+        let notes = declaration.notes.clone();
+        return self.note_texts(source, &notes);
+      }
+    }
+    Vec::new()
+  }
+
+  fn note_texts(&self, source: SourceId, notes: &[NodeId]) -> Vec<String> {
+    let Some(ast) = self.ast(source) else {
+      return Vec::new();
+    };
+    notes
+      .iter()
+      .filter_map(|note| match ast.data(*note) {
+        NodeData::Note { text } => Some(self.interner().resolve_lossy(*text).into_owned()),
+        _ => None,
+      })
+      .collect()
+  }
+
   /// The type a name denotes anywhere in the program. A metaprogram's own
   /// structs — `Build_Options`, `Message` — belong to the distribution rather
   /// than to the compiler, so this is how the compiler finds one without
