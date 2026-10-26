@@ -548,12 +548,12 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   fn constant_data(&mut self, value: &Constant, type_id: TypeId) -> Option<BasicValueEnum<'ctx>> {
     match value {
       Constant::String(text) => {
-        let data = self.string_bytes(text);
+        let data = self.string_data(text);
         let count = self.context.i64_type().const_int(text.len() as u64, false);
         Some(
           self
             .context
-            .const_struct(&[count.into(), data.as_pointer_value().into()], false)
+            .const_struct(&[count.into(), data.into()], false)
             .into(),
         )
       }
@@ -1301,12 +1301,21 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
     }
   }
 
+  /// Where a literal's characters are: nowhere at all for `""`, whose `data`
+  /// is null (**L§2.6**).
+  fn string_data(&mut self, text: &[u8]) -> PointerValue<'ctx> {
+    if text.is_empty() {
+      return self.context.ptr_type(AddressSpace::default()).const_null();
+    }
+    self.string_bytes(text).as_pointer_value()
+  }
+
   fn string_view(&mut self, text: &[u8]) -> GlobalValue<'ctx> {
-    let data = self.string_bytes(text);
+    let data = self.string_data(text);
     let count = self.context.i64_type().const_int(text.len() as u64, false);
     let view = self
       .context
-      .const_struct(&[count.into(), data.as_pointer_value().into()], false);
+      .const_struct(&[count.into(), data.into()], false);
     let global = self.module.add_global(
       view.get_type(),
       Some(AddressSpace::default()),

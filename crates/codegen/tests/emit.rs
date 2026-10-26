@@ -97,6 +97,18 @@ fn a_string_literal_is_read_only_data_and_the_two_words_of_a_view() {
 }
 
 #[test]
+fn the_empty_string_literal_points_nowhere() {
+  // `""` has `data == null` (**L§2.6**), which is what lets a program hand a
+  // string it may have set to `""` straight to `free`.
+  let module = llvm_ir("main :: () { nothing := \"\"; }\n");
+  assert!(
+    module.contains("private constant { i64, ptr } zeroinitializer"),
+    "{module}"
+  );
+  assert!(!module.contains("c\"\\00\""), "{module}");
+}
+
+#[test]
 fn a_comparison_produces_a_bit_and_stores_a_byte() {
   // A comparison of two literals folds, so the operands have to be storage.
   let module = llvm_ir("main :: () { a := 1; b := 2; flag := a < b; }\n");
