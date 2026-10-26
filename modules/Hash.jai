@@ -67,30 +67,20 @@ knuth_hash :: inline (x: u64) -> u64 {
 
 // ------------------------------------------------------------ the general ---
 
-// Anything that is a number, a bool, an enum or a pointer. A float goes
-// through sdbm because Knuth's multiply would map its exponent bits badly;
-// everything else is Knuth, which is both better and faster for the small
-// integers a table's keys usually are.
-get_hash :: (x: $T, h := HASH_INIT) -> u32
-#modify {
-    info := cast(*Type_Info) T;
-    // A distinct type over one of these hashes like the type it is.
-    while info.type == .VARIANT {
-        info = (cast(*Type_Info_Variant) info).variant_of;
-    }
-    if info.type == .INTEGER  return true;
-    if info.type == .BOOL     return true;
-    if info.type == .ENUM     return true;
-    if info.type == .POINTER  return true;
-    if info.type == .FLOAT    return true;
-    return false;
-}
-{
-    #if T == float32 || T == float64 {
+// Anything else: a number, a bool, an enum or a pointer goes through Knuth,
+// which is both better and faster for the small integers a table's keys
+// usually are; a float through sdbm, because Knuth's multiply would map its
+// exponent bits badly; and a struct, a fixed array or a distinct type over
+// any of these through sdbm over its bytes (hitboxer hashes a
+// `Source_Code_Location`). The choice is made with `type_info(T)`, which
+// folds, rather than with a `#modify`: the JIT has to build a whole
+// `#Context` to run one, and a table in that context hashes with this.
+get_hash :: (x: $T, h := HASH_INIT) -> u32 {
+    #if type_info(T).type == .INTEGER || type_info(T).type == .BOOL || type_info(T).type == .ENUM || type_info(T).type == .POINTER {
+        return cast,trunc(u32) (knuth_hash(cast,no_check(u64) x ^ h) >> 32);
+    } else {
         value := x;
         return inline sdbm_hash(*value, size_of(T), h);
-    } else {
-        return cast,trunc(u32) (knuth_hash(cast,no_check(u64) x ^ h) >> 32);
     }
 }
 

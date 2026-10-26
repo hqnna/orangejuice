@@ -7201,6 +7201,38 @@ fn a_backticked_return_returns_the_callers_defaults() {
 }
 
 #[test]
+fn a_context_may_hold_a_table() {
+  // toml-jai adds `Table`s to the context. Laying the context out lays the
+  // table out, and the table's `hash_function` is a quick lambda over
+  // `get_hash`; deciding that once needed a `#modify` run, and running one
+  // needs the very `#Context` being laid out (**L§10.2**).
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     #add_context names: Table(string, s64);\n\
+     main :: () {\n\
+       table_add(*context.names, \"a\", 3);\n\
+       print(\"% %\\n\", context.names.count, table_find_pointer(*context.names, \"a\").*);\n\
+     }\n",
+    "1 3\n",
+  );
+}
+
+#[test]
+fn get_hash_takes_a_struct_by_its_bytes() {
+  // hitboxer hashes a `Source_Code_Location`; Advent of Code a vector.
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Hash\";\n\
+     V :: struct { a, b: int; }\n\
+     main :: () {\n\
+       print(\"% %\\n\", get_hash(V.{1, 2}) == get_hash(V.{1, 2}), get_hash(V.{1, 2}) == get_hash(V.{2, 1}));\n\
+     }\n",
+    "true false\n",
+  );
+}
+
+#[test]
 fn two_specializations_of_a_struct_procedure_are_two_compile_time_symbols() {
   // Every `#run` of a compilation shares one JIT dylib, so `Table(int, int)`'s
   // `compare_function` and `Table(string, int)`'s need names of their own
