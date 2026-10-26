@@ -149,16 +149,21 @@ Type_Info_Struct :: struct {
         INCOMPLETE :: 0x1;
     }
 
+    // The bits **L§8.7** gives, which are the ones the type table is
+    // written with.
     Struct_Nontextual_Flags :: enum_flags u32 {
-        POLYMORPHIC :: 0x1;
+        NOT_INSTANTIABLE          :: 0x4;
+        ALL_MEMBERS_UNINITIALIZED :: 0x40;
+        POLYMORPHIC               :: 0x100;
     }
 
     Struct_Textual_Flags :: enum_flags u32 {
-        UNION      :: 0x1;
-        NO_PADDING :: 0x2;
-        FOREIGN    :: 0x4;
+        FOREIGN    :: 0x1;
+        UNION      :: 0x2;
+        NO_PADDING :: 0x4;
         TYPE_INFO_NONE :: 0x8;
         TYPE_INFO_NO_SIZE_COMPLAINT :: 0x10;
+        TYPE_INFO_PROCEDURES_ARE_VOID_POINTERS :: 0x20;
     }
 }
 

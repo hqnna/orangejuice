@@ -6808,3 +6808,19 @@ fn new_of_an_over_aligned_struct_is_aligned() {
     "0\n",
   );
 }
+
+#[test]
+fn a_union_says_so_in_its_type_info() {
+  // `Type_Info_Struct.textual_flags` carries **L§8.7**'s bits.
+  assert_output(
+    "#import \"Basic\";\n\
+     U :: union { a: int; b: float; }\n\
+     S :: struct { a: int; } #no_padding\n\
+     main :: () {\n\
+       u := cast(*Type_Info_Struct) type_info(U);\n\
+       s := cast(*Type_Info_Struct) type_info(S);\n\
+       print(\"% %\\n\", (u.textual_flags & .UNION) != 0, (s.textual_flags & .NO_PADDING) != 0);\n\
+     }\n",
+    "true true\n",
+  );
+}
