@@ -238,7 +238,28 @@ fn library_file(library: &Library) -> Option<String> {
 /// reads `TARGET` out of the environment and prints cargo directives — so the
 /// tool is asked directly instead. A name it does not know, and a machine
 /// without `pkg-config` on it, both fall back to a plain `-l`.
+///
+/// A package is not always named the way the library is — `libX11` is
+/// `x11`, `libGL` is `gl`, `libfreetype` is `freetype2` — so the spellings of
+/// [`package_candidates`] are asked in turn.
 fn pkg_config_flags(name: &str) -> Option<Vec<String>> {
+  package_candidates(name)
+    .into_iter()
+    .find_map(|package| pkg_config_package_flags(&package))
+}
+
+fn package_candidates(name: &str) -> Vec<String> {
+  let lower = name.to_ascii_lowercase();
+  let mut candidates = vec![name.to_string()];
+  for candidate in [lower.clone(), format!("{lower}2")] {
+    if !candidates.contains(&candidate) {
+      candidates.push(candidate);
+    }
+  }
+  candidates
+}
+
+fn pkg_config_package_flags(name: &str) -> Option<Vec<String>> {
   let known = Command::new("pkg-config")
     .arg("--exists")
     .arg(name)
@@ -433,6 +454,12 @@ mod tests {
       Some(flags) => assert!(flags.iter().all(|flag| line.arguments.contains(flag))),
       None => assert!(line.arguments.contains(&String::from("-lz"))),
     }
+  }
+
+  #[test]
+  fn a_library_is_looked_for_under_the_names_its_package_goes_by() {
+    assert_eq!(package_candidates("X11"), ["X11", "x11", "x112"]);
+    assert_eq!(package_candidates("freetype"), ["freetype", "freetype2"]);
   }
 
   #[test]

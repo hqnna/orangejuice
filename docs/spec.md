@@ -6,7 +6,7 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 
 ## 1. Goals
 
-1. **A distribution of its own.** orangejuice ships `modules/`: a clean-room standard library written from **L** and **C** rather than derived from anyone else's source — `Preload`, `Runtime_Support`, `Default_Allocator`, `Basic`, `String`, `Math`, `Hash_Table`, `Compiler`, `Default_Metaprogram`, `Metaprogram_Plugins`, `Check`, `Program_Print`, `Code_Visit`, `File`, `File_Utilities`, `Process`, `System`, `Thread`, `Atomics`, `Bit_Operations`, `Hash`, `Random`, `Sort`, `Command_Line`, `Text_File_Handler`, `Pool`, `Flat_Pool`, `Bucket_Array`, `Bit_Array`, `Reflection`, `Machine_X64`, `POSIX`, `Linux`, `Darwin`, `Socket` and the rest. `Linux` and `Darwin` are each what only that system has, so a module named for a system exists only where a program could use it. Each one is API-compatible with the module of that name in beta 0.2.009: a program written against the reference's `Basic` compiles against ours, with the same declarations at the same layouts. Nothing in the repository depends on a reference distribution being installed, and none is (§10.1).
+1. **A distribution of its own.** orangejuice ships `modules/`: a clean-room standard library written from **L** and **C** rather than derived from anyone else's source — `Preload`, `Runtime_Support`, `Default_Allocator`, `Basic`, `String`, `Math`, `Hash_Table`, `Compiler`, `Default_Metaprogram`, `Metaprogram_Plugins`, `Check`, `Program_Print`, `Code_Visit`, `File`, `File_Utilities`, `Process`, `System`, `Thread`, `Atomics`, `Bit_Operations`, `Hash`, `Random`, `Sort`, `Command_Line`, `Text_File_Handler`, `Pool`, `Flat_Pool`, `Bucket_Array`, `Bit_Array`, `Reflection`, `Machine_X64`, `POSIX`, `Linux`, `Darwin`, `Socket`, the graphical stack's bindings — `GL`, `X11`, `Clipboard`, `freetype`, `stb_image`, `stb_image_write`, `stb_image_resize` — `Unmapping_Allocator` and the rest. `Linux` and `Darwin` are each what only that system has, so a module named for a system exists only where a program could use it. Each one is API-compatible with the module of that name in beta 0.2.009: a program written against the reference's `Basic` compiles against ours, with the same declarations at the same layouts. Nothing in the repository depends on a reference distribution being installed, and none is (§10.1).
 2. **Compatibility with metaprograms.** Programs drive the build the same way as with jai: the default metaprogram (`Default_Metaprogram.jai`) runs first, plugins work (`-plug Check`, `Program_Print`, `Iprof`...), `#import "Compiler"` exposes the same `Build_Options`, messages and `Code_*` structures with identical layouts, and `#run`/`#insert`/`add_build_string`/`compiler_get_nodes` behave as specified.
 3. **Full language.** Everything in **L**, including polymorphism, macros, `#modify`, `#insert`, `#asm` (x86-64), operator overloading, `#c_call`/`#foreign`/`#library` FFI, context arguments, type variants, `#no_reset`, global data injection, and the three cast syntaxes.
 4. **Correct runtime semantics** on Linux x86_64: System V ABI, the fixed Preload/Runtime_Support layouts, checks and panic messages, stack traces, entry point sequence, linking against system and user libraries.
@@ -264,7 +264,7 @@ The program is split across several LLVM modules built in parallel, one thread a
 
 ### 6.7 Linking (`oj-link`)
 
-Builds the link line of **C§11** using the `cc` crate to locate the driver (`cc`/`clang`): objects + Runtime_Support/Default_Allocator objects (compiled from `modules/` like any other code) + user libraries (`#library` → path search for `lib<name>.so`/`.a` relative to the declaring file; flags `,no_dll`/`,no_static_library`/`,link_always`) + system libraries (`#system_library`/`#library,system` → `pkg-config --libs <name>` when available, with an `-rpath` for each `-L` directory it names so that the program finds the library at run time where no loader searches (a nix store path), else `-l<name>`; culled when unreferenced) + `additional_linker_arguments` + `append_linker_arguments` + `-rpath '$ORIGIN' -export-dynamic`; output types EXECUTABLE (`-o name`, no extension), DYNAMIC_LIBRARY (`-shared -o lib<name>.so`), STATIC_LIBRARY (`ar rcs`), OBJECT_FILE, NO_OUTPUT; `use_custom_link_command` → `READY_FOR_CUSTOM_LINK_COMMAND` + `compiler_custom_link_command_is_complete`. `OUTPUT_LINK_LINE` echoes the command; the linker exit code is reported in `Message_Phase`.
+Builds the link line of **C§11** using the `cc` crate to locate the driver (`cc`/`clang`): objects + Runtime_Support/Default_Allocator objects (compiled from `modules/` like any other code) + user libraries (`#library` → path search for `lib<name>.so`/`.a` relative to the declaring file; flags `,no_dll`/`,no_static_library`/`,link_always`) + system libraries (`#system_library`/`#library,system` → `pkg-config --libs <name>` when available — asked as written, lowercased, and lowercased with a `2`, since `libX11` is the package `x11` and `libfreetype` is `freetype2` — with an `-rpath` for each `-L` directory it names so that the program finds the library at run time where no loader searches (a nix store path), else `-l<name>`; culled when unreferenced) + `additional_linker_arguments` + `append_linker_arguments` + `-rpath '$ORIGIN' -export-dynamic`; output types EXECUTABLE (`-o name`, no extension), DYNAMIC_LIBRARY (`-shared -o lib<name>.so`), STATIC_LIBRARY (`ar rcs`), OBJECT_FILE, NO_OUTPUT; `use_custom_link_command` → `READY_FOR_CUSTOM_LINK_COMMAND` + `compiler_custom_link_command_is_complete`. `OUTPUT_LINK_LINE` echoes the command; the linker exit code is reported in `Message_Phase`.
 
 ### 6.8 The `Compiler` module surface (`oj-meta`)
 
@@ -519,6 +519,46 @@ The reference distribution is gone now, and with it the ability to re-measure.
 Anything that needs a comparison from here on needs one installed again, and
 the honest way to record a fact learned that way is to write it into **L** or
 **C** with a test beside it — which is what those documents are for.
+
+#### The bindings over C libraries
+
+The modules a graphical program leans on are bindings, and each is a
+projection of the C library's own headers by `tools/cbind` (its README is the
+recipe) rather than something typed out: `generated.jai` beside a
+hand-written `module.jai` that says what the module is.
+
+| Module | Over | Linked as |
+|---|---|---|
+| `X11` | Xlib, Xutil, Xresource, XKBlib, cursorfont, keysyms | `#library,system "libX11"` |
+| `GL` | `gl.h` + `glext.h` (1.0–4.6 and the registered extensions), `glx.h` | `GL_Procedures`, filled in at run time by `gl_load`; GLX through `#library,system "libGL"` |
+| `freetype` | `freetype.h` and its public siblings | `#library,system "libfreetype"` |
+| `stb_image`, `stb_image_write`, `stb_image_resize` | the vendored public-domain stb headers (`stb_image_resize` is the 0.97 interface) | a static archive built from the vendored C |
+| `Clipboard` | the ICCCM's CLIPBOARD selection, over `X11` | — |
+| `Unmapping_Allocator` | `mmap`/`mprotect`/`munmap` | — |
+
+**The stb libraries are shipped as source.** The reference ships a prebuilt
+`stb_image.a` per platform; orangejuice ships no binaries, so each stb module
+holds the header as Sean Barrett published it and a two-line `<name>.c` that
+compiles its implementation. A top-level `#run` in the module
+(`modules/stb_image/c_library.jai`, which the other two `#load`) compiles it
+with `$CC` (else `cc`) and archives it with `$AR` (else `ar`) into
+`.build/<cpu>-<os>/<name>.a` beside the source — gitignored, one directory per
+target so that the container shells of §7.2 do not trample each other — the
+first time a program imports the module, and does nothing once the archive is
+newer than its source. A C compiler is already a requirement, since the link
+goes through one (**C§11**). The archive is built under a unique name and
+renamed into place, so compilations that race to build it are safe. An
+installed distribution is read-only, so `nix/package.nix` builds the same
+archives into it at install time, with the same flags; finding the archive
+missing and the directory unwritable is a compile error that says so. Being
+static, the archives are linked into the executable and are not loadable by
+the JIT: a `#run` cannot call into stb.
+
+`crates/driver/tests/modules.rs` holds one test per module. What a header
+fixes — sizes, offsets, constants — is measured against a C program built from
+the same headers, the way §7's POSIX check is; what needs a display runs on an
+`Xvfb` of its own (the dev shell provides one), and `Clipboard` runs *only*
+there, since owning the desktop's CLIPBOARD would overwrite its user's.
 
 ### 10.2 Gaps found while writing our own modules
 
