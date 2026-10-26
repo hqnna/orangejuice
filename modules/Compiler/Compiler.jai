@@ -1382,8 +1382,8 @@ developer_debug :: (x: *void) #compiler;
 compiler_add_library_search_directory :: (path: string) #compiler;
 compiler_custom_link_command_is_complete :: (w: Workspace, success: bool) #compiler;
 
-add_global_data  :: (data: [] u8, alignment: u32 = 8) -> [] u8 #compiler;
-add_data_segment :: (w: Workspace, name: string, characteristics: u32, alignment: u32) -> *void #compiler;
+add_global_data  :: (data: [] u8, segment: Data_Segment_Index, user_segment: *Data_Segment = null, w: Workspace = -1) -> [] u8 #compiler;
+add_data_segment :: (section_name: string, characteristics := Data_Segment_Characteristics.READ | .WRITE, alignment: s32 = 16, w: Workspace = -1) -> (segment: *Data_Segment, actual_segment_will_be_created: bool) #compiler;
 
 get_type      :: (info: *Type_Info) -> Type #compiler;
 get_root_type :: (info: *Type_Info) -> *Type_Info #compiler;

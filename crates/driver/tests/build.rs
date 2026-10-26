@@ -6446,3 +6446,19 @@ fn a_modify_may_be_a_macro_whose_backticked_return_answers_for_it() {
     "{diagnostics}"
   );
 }
+
+#[test]
+fn the_compiler_module_declares_add_global_data_the_way_c_documents_it() {
+  // `Compiler.jai` used to declare `(data, alignment: u32 = 8)`, so
+  // `add_global_data(bytes, .READ_ONLY)` matched nothing (**C§3.3**, The Way
+  // to Jai 30.15).
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     main :: () {\n\
+       data :: #run add_global_data(xx \"hello\", .READ_ONLY);\n\
+       print(\"% %\\n\", data.count, cast(string) data);\n\
+     }\n",
+    "5 hello\n",
+  );
+}
