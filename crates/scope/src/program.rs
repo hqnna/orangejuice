@@ -3688,13 +3688,16 @@ impl Program<'_> {
         overloadable: false,
       });
     }
-    // The body is that same scope: `it` is not in a scope outside the body.
+    // The body is a block of its own inside that scope, so a local of the
+    // body may shadow the iterators the way a nested block shadows any outer
+    // local: `for * buffer: buffers { buffer := … }` (Focus, **L§4.3**).
+    let body = self.tree.push_scope(ScopeKind::Imperative, Some(scope));
     let statements = match parsed.ast.data(payload.block) {
       NodeData::Block(block) => block.statements.clone(),
       _ => vec![payload.block],
     };
     for statement in statements {
-      self.imperative_statement(parsed, statement, scope, source);
+      self.imperative_statement(parsed, statement, body, source);
     }
   }
 }

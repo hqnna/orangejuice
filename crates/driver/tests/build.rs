@@ -6933,6 +6933,23 @@ fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
 }
 
 #[test]
+fn a_loop_body_may_shadow_its_own_iterator() {
+  // The body is a block inside the loop's scope, so its locals shadow the
+  // iterators the way a nested block shadows any outer local (**L§4.3**):
+  // Focus writes `for * buffer, id: open_buffers { buffer := … }`.
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       xs := int.[1, 2, 3];\n\
+       for x, i: xs { x := x * 10; print(\"% \", x + i); }\n\
+       for xs { it := it + 1; print(\"% \", it); }\n\
+       print(\"\\n\");\n\
+     }\n",
+    "10 21 32 2 3 4 \n",
+  );
+}
+
+#[test]
 fn the_discard_identifier_receives_and_drops_a_value() {
   // `_` may stand in declarations and in assignments (**L§4.6**): two
   // declarations of it are not an overload set, and assigning to it drops

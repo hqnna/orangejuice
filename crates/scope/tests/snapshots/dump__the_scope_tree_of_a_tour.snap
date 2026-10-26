@@ -80,17 +80,18 @@ preload [0]
               iterator it
               iterator it_index
               block [29]
-      procedure constants [30]
-        procedure arguments [31]
-          procedure returns [32]
-          block [33]
+                block [30]
+      procedure constants [31]
+        procedure arguments [32]
+          procedure returns [33]
+          block [34]
             variable p
             variable shade
-      procedure constants [34]
-        procedure arguments [35]
+      procedure constants [35]
+        procedure arguments [36]
           parameter s
-          procedure returns [36]
-          block [37]
+          procedure returns [37]
+          block [38]
   module [3]
     procedure widget
     procedure internal #scope_module
