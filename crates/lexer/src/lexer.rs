@@ -932,8 +932,16 @@ impl Lexer<'_> {
     self.skip_whitespace();
 
     let mut want_cr = false;
-    if self.eat(b',') {
+    while self.eat(b',') {
       self.skip_whitespace();
+      // `#string,\%` (newer betas): the body is as verbatim as any other
+      // here-string's, which already leaves `\%` for `print` to read as a
+      // literal `%` (**L§2.6**).
+      if self.input[self.cursor..].starts_with(b"\\%") {
+        self.cursor += 2;
+        self.skip_whitespace();
+        continue;
+      }
       if !self.peek().is_some_and(starts_identifier) {
         self.error(self.span_from(start), "Expected an identifier after ','");
         return self.token(TokenKind::ERROR, start);
@@ -1788,6 +1796,18 @@ mod tests {
       first("#string,cr D\r\na\r\nD").text(),
       Some(b"a\r\n".as_slice()),
       "`,cr` does not double an existing carriage return"
+    );
+  }
+
+  #[test]
+  fn a_percent_modifier_leaves_a_here_string_verbatim() {
+    assert_eq!(
+      first("#string,\\% D\nsaw '\\%' and %1\nD").text(),
+      Some(b"saw '\\%' and %1\n".as_slice())
+    );
+    assert_eq!(
+      first("#string,cr,\\% D\na\nD").text(),
+      Some(b"a\r\n".as_slice())
     );
   }
 

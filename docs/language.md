@@ -124,7 +124,7 @@ An unknown escape produces a warning and yields the character itself. String lit
 IDENT
 ```
 
-`#string` (optionally `#string,cr`) followed by an identifier and a newline begins a here-string. The text runs verbatim (no escape processing at all, including `\%`) until a line that, after optional leading whitespace, consists of the terminator identifier followed by a non-identifier character. The trailing newline before the terminator line is included. Line endings are normalized to `\n`; with `,cr` they are normalized to `\r\n`. The here-string is an expression usable anywhere a string literal is (as a call argument spanning lines, as a constant, inside a `#run`...). Its `Code_Literal` carries the `HERE_STRING` flag.
+`#string` (optionally `#string,cr`, `#string,\%` or both) followed by an identifier and a newline begins a here-string. The text runs verbatim (no escape processing at all, including `\%`) until a line that, after optional leading whitespace, consists of the terminator identifier followed by a non-identifier character. The trailing newline before the terminator line is included. Line endings are normalized to `\n`; with `,cr` they are normalized to `\r\n`. `,\%` is a modifier of the betas after 0.2.009 (Focus, hitboxer, stubborn and jai-format write it on a here-string they hand to `print` as a format): orangejuice accepts it and leaves the text as verbatim as without it, since a here-string already keeps `\%`, which `print` reads as a literal `%`. What the reference does beyond that is not measured. The here-string is an expression usable anywhere a string literal is (as a call argument spanning lines, as a constant, inside a `#run`...). Its `Code_Literal` carries the `HERE_STRING` flag.
 
 #### Character literals
 
