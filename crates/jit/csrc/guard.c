@@ -56,3 +56,20 @@ int oj_guarded_call(void (*entry)(void *), void *argument, int *exit_status, voi
   if (caught != 0 && caught != OJ_GUARD_EXITED) *fault_address = oj_guard_fault_address;
   return caught;
 }
+struct oj_copy_request {
+  void *destination;
+  const void *source;
+  size_t size;
+};
+
+static void oj_copy_entry(void *argument) {
+  struct oj_copy_request *request = argument;
+  memcpy(request->destination, request->source, request->size);
+}
+
+int oj_guarded_copy(void *destination, const void *source, size_t size) {
+  struct oj_copy_request request = {destination, source, size};
+  int status = 0;
+  void *address = 0;
+  return oj_guarded_call(oj_copy_entry, &request, &status, &address);
+}

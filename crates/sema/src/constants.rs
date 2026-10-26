@@ -130,6 +130,9 @@ pub struct RunLink {
 pub enum RunTarget {
   Data(Box<[u8]>),
   Procedure(oj_scope::DeclId),
+  /// A place further on in the same bytes, `offset` from their start: what
+  /// a view in a run's result points at once it is copied in after them.
+  Within,
 }
 
 impl Value {

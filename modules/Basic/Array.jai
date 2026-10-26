@@ -225,9 +225,14 @@ array_grow :: (array: *[..] $T, wanted: s64) {
     old_bytes := array.allocated * size_of(T);
     new_bytes := allocated * size_of(T);
 
+    // Data with no allocator behind it is nobody's to reallocate — what a
+    // `#run` handed back lives in the executable — so it is copied instead.
     memory: *void;
-    if array.data  memory = realloc(array.data, new_bytes, old_bytes, allocator);
-    else           memory = alloc(new_bytes, allocator);
+    if array.data && array.allocator.proc  memory = realloc(array.data, new_bytes, old_bytes, allocator);
+    else {
+        memory = alloc(new_bytes, allocator);
+        if memory && array.data  memcpy(memory, array.data, array.count * size_of(T));
+    }
     if !memory  return;
 
     array.data = cast(*T) memory;
@@ -292,8 +297,11 @@ array_reserve :: inline (array: *Resizable_Array, desired_items: s64, element_si
     new_bytes := desired_items * element_size;
 
     memory: *void;
-    if array.data  memory = realloc(array.data, new_bytes, old_bytes, allocator);
-    else           memory = alloc(new_bytes, allocator);
+    if array.data && array.allocator.proc  memory = realloc(array.data, new_bytes, old_bytes, allocator);
+    else {
+        memory = alloc(new_bytes, allocator);
+        if memory && array.data  memcpy(memory, array.data, array.count * element_size);
+    }
     if !memory  return;
 
     array.data = memory;

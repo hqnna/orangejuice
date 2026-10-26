@@ -582,6 +582,179 @@ unsafe extern "C" {
     fault_address: *mut *mut std::ffi::c_void,
   ) -> i32;
   fn oj_guard_exit(status: i32);
+  fn oj_guarded_copy(destination: *mut u8, source: *const u8, size: usize) -> i32;
+}
+
+/// The bytes at a compile-time address, or `None` when they cannot be read: a
+/// run may hand back a view of storage that is already gone, and finding that
+/// out must not take the compiler down.
+fn read_memory(address: u64, size: usize) -> Option<Vec<u8>> {
+  let mut buffer = vec![0u8; size];
+  // SAFETY: the copy is made under the same guard a run is, so an address
+  // that is not mapped comes back as a failure rather than a fault.
+  let caught = unsafe { oj_guarded_copy(buffer.as_mut_ptr(), address as *const u8, size) };
+  (caught == 0).then_some(buffer)
+}
+
+/// How far a run's result is followed through the views inside it, which is
+/// what stops a cycle of views pointing at one another.
+const FLATTEN_DEPTH: usize = 16;
+
+/// The storage a run's result names through its strings and array views,
+/// copied out of compile-time memory and laid down after the result's own
+/// bytes, with every such pointer linked to its copy (**L§12.1**). A
+/// `[..]` comes out owning nothing: its allocator is cleared and its
+/// capacity is its count, since the allocation it had is the compiler's.
+struct Flattener<'t> {
+  types: &'t Types,
+  blob: Vec<u8>,
+  links: Vec<oj_sema::RunLink>,
+}
+
+impl Flattener<'_> {
+  fn walk(&mut self, type_id: TypeId, at: usize, depth: usize) {
+    if depth > FLATTEN_DEPTH {
+      return;
+    }
+    let underlying = self.types.underlying(type_id);
+    match self.types.kind(underlying).clone() {
+      TypeKind::String => {
+        self.pointee(at, TypeId::U8, depth);
+      }
+      TypeKind::Array { element, kind } => match kind {
+        oj_types::ArrayKind::View => {
+          self.pointee(at, element, depth);
+        }
+        oj_types::ArrayKind::Resizable => {
+          if self.pointee(at, element, depth) {
+            let count = self.word(at);
+            self.set_word(at + 16, count);
+            for offset in (24..40).step_by(8) {
+              self.set_word(at + offset, 0);
+            }
+          }
+        }
+        oj_types::ArrayKind::Fixed(count) => {
+          let Some(stride) = self.types.size_of(element) else {
+            return;
+          };
+          if stride == 0 || !self.holds_views(element, depth) {
+            return;
+          }
+          for index in 0..count {
+            self.walk(element, at + (index * stride) as usize, depth + 1);
+          }
+        }
+      },
+      TypeKind::Struct(definition) => {
+        let members: Vec<(TypeId, u64)> = self
+          .types
+          .struct_info(definition)
+          .members
+          .iter()
+          .filter(|member| !member.is_constant() && member.imported_through.is_none())
+          .map(|member| (member.type_id, member.offset))
+          .collect();
+        for (member, offset) in members {
+          self.walk(member, at + offset as usize, depth + 1);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /// Whether anything inside a type is a string or a view to follow.
+  fn holds_views(&self, type_id: TypeId, depth: usize) -> bool {
+    if depth > FLATTEN_DEPTH {
+      return false;
+    }
+    let underlying = self.types.underlying(type_id);
+    match self.types.kind(underlying) {
+      TypeKind::String => true,
+      TypeKind::Array { element, kind } => match kind {
+        oj_types::ArrayKind::Fixed(_) => self.holds_views(*element, depth + 1),
+        _ => true,
+      },
+      TypeKind::Struct(definition) => self
+        .types
+        .struct_info(*definition)
+        .members
+        .iter()
+        .filter(|member| !member.is_constant())
+        .any(|member| self.holds_views(member.type_id, depth + 1)),
+      _ => false,
+    }
+  }
+
+  fn word(&self, at: usize) -> u64 {
+    self
+      .blob
+      .get(at..at + 8)
+      .and_then(|bytes| bytes.try_into().ok())
+      .map_or(0, u64::from_le_bytes)
+  }
+
+  fn set_word(&mut self, at: usize, value: u64) {
+    if let Some(slot) = self.blob.get_mut(at..at + 8) {
+      slot.copy_from_slice(&value.to_le_bytes());
+    }
+  }
+
+  /// Copies what the `{count, data}` pair at `at` points at, and says whether
+  /// it did.
+  fn pointee(&mut self, at: usize, element: TypeId, depth: usize) -> bool {
+    let count = self.word(at) as i64;
+    let data = self.word(at + 8);
+    if count <= 0 || data == 0 {
+      return false;
+    }
+    // Storage `add_global_data` made travels by its own route.
+    if oj_meta::with(|meta| meta.global_data_at(data as usize).is_some()).unwrap_or(false) {
+      return false;
+    }
+    let Some(stride) = self.types.size_of(element) else {
+      return false;
+    };
+    let alignment = self.types.align_of(element).unwrap_or(8).max(8) as usize;
+    let Some(size) = (count as u64).checked_mul(stride) else {
+      return false;
+    };
+    let Some(bytes) = read_memory(data, size as usize) else {
+      return false;
+    };
+    let padding = self.blob.len().next_multiple_of(alignment) - self.blob.len();
+    self.blob.extend(std::iter::repeat_n(0u8, padding));
+    let start = self.blob.len();
+    self.blob.extend_from_slice(&bytes);
+    self.links.push(oj_sema::RunLink {
+      at: (at + 8) as u64,
+      target: oj_sema::RunTarget::Within,
+      offset: start as u64,
+    });
+    if stride > 0 && self.holds_views(element, depth) {
+      for index in 0..count as u64 {
+        self.walk(element, start + (index * stride) as usize, depth + 1);
+      }
+    }
+    true
+  }
+}
+
+/// A run's aggregate result with what its views name brought along.
+fn flatten(types: &Types, type_id: TypeId, bytes: &[u8]) -> RunBytes {
+  let mut flattener = Flattener {
+    types,
+    blob: bytes.to_vec(),
+    links: Vec::new(),
+  };
+  flattener.walk(type_id, 0, 0);
+  let mut links = compile_time_links(bytes).into_vec();
+  links.retain(|link| flattener.links.iter().all(|own| own.at != link.at));
+  links.extend(flattener.links);
+  RunBytes {
+    data: flattener.blob.into_boxed_slice(),
+    links: links.into_boxed_slice(),
+  }
 }
 
 /// How a compile-time call ended.
@@ -880,12 +1053,11 @@ fn read_value(types: &Types, type_id: TypeId, bytes: &[u8]) -> Option<oj_sema::C
     // those bytes are the constant (**L§12.1**). A pointer among them that
     // names storage `add_global_data` created is carried along with what it
     // names, so that the executable gets both (**C§3.3**).
+    // A string or an array view among them names storage the run made,
+    // which is copied out and travels with them too (**L§12.1**).
     TypeKind::Struct(_) | TypeKind::Array { .. } => Some(Const::new(
       type_id,
-      Value::Bytes(RunBytes {
-        data: bytes.into(),
-        links: compile_time_links(bytes),
-      }),
+      Value::Bytes(flatten(types, type_id, bytes)),
     )),
     _ => None,
   }

@@ -6667,3 +6667,32 @@ fn a_dereferenced_void_pointer_prints_as_void() {
     "void void\n",
   );
 }
+
+#[test]
+fn a_run_hands_back_views_with_what_they_name() {
+  // A `[]`, a `[..]` and a `string` a `#run` produced point at compile-time
+  // storage, which travels into the executable with them — through views
+  // inside views too (**L§12.1**).
+  assert_output(
+    "#import \"Basic\";\n\
+     P :: struct { name: string; tags: [] string; n: int; }\n\
+     squares :: () -> [..] int { a: [..] int; for 1..5 array_add(*a, it*it); return a; }\n\
+     copied :: () -> [] u8 { b: [4] u8 = .[1, 2, 3, 4]; return array_copy(b); }\n\
+     people :: () -> [] P {\n\
+       r: [..] P;\n\
+       for 1..2 { t: [..] string; for 1..it array_add(*t, sprint(\"t%\", it)); array_add(*r, .{sprint(\"p%\", it), t, it}); }\n\
+       return r;\n\
+     }\n\
+     SQ :: #run squares();\n\
+     V :: #run copied();\n\
+     PS :: #run people();\n\
+     main :: () {\n\
+       print(\"% % %\\n\", SQ, V, PS);\n\
+       grown := SQ;\n\
+       array_add(*grown, 36);\n\
+       print(\"%\\n\", grown);\n\
+     }\n",
+    "[1, 4, 9, 16, 25] [1, 2, 3, 4] [{\"p1\", [\"t1\"], 1}, {\"p2\", [\"t1\", \"t2\"], 2}]\n\
+     [1, 4, 9, 16, 25, 36]\n",
+  );
+}

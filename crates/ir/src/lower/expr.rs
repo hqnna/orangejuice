@@ -576,6 +576,9 @@ impl Lowering<'_, '_> {
           let id = self.procedure_id(*decl);
           links.push((link.at, crate::ir::ConstLink::Procedure(id)));
         }
+        oj_sema::RunTarget::Within => {
+          links.push((link.at, crate::ir::ConstLink::Offset(link.offset)));
+        }
         oj_sema::RunTarget::Data(data) => {
           // Every pointee starts on a pointer boundary, so that anything with
           // an alignment of its own still lands somewhere it can be read.
