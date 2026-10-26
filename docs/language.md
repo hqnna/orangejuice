@@ -694,7 +694,7 @@ Statements appear in imperative scopes. Each simple statement ends with `;`. Blo
 ### 6.1 Expression statements and assignment
 
 - `expr;` — a call, a macro invocation, or any expression (an expression with no effect, such as a bare identifier `result;`, is accepted by the reference compiler; orangejuice accepts it and may warn).
-- `lvalue = expr;` and the compound forms `+= -= *= /= %= &= |= ^= <<= >>= <<<= >>>= &&= ||=`. A compound assignment `a op= b` is rewritten as `a = a op b` with the lvalue evaluated once (also through `operator []=`). `&&=`/`||=` short-circuit. Assignment is a statement, not an expression (`a = b = c` is invalid).
+- `lvalue = expr;` and the compound forms `+= -= *= /= %= &= |= ^= <<= >>= <<<= >>>= &&= ||=`. A compound assignment `a op= b` is rewritten as `a = a op b` with the lvalue evaluated once (also through `operator []=`). `&&=`/`||=` short-circuit. Assignment is a statement, not an expression (`a = b = c` is invalid, and so is one in parentheses: `(x *= 18);` is `Expected ')', but got '*='.`).
 - Lvalues: variables, dereferences (`p.*`, `<<p`, `(.*) p`), members, subscripts, `it` in `for *` loops (through the pointer), members of `using`ed values. Not lvalues: parameters of struct/array/string type (7.6), constants, members of constants, `it` in by-value loops, `.count`/`.data` of fixed arrays, results of calls, casts (`cast(*T) p .* = v` is written `(cast(*T) p).* = v;`).
 - Assigning to a constant member of a struct (`s.CONST = 1`) is an error; "invalid lvalue in assignment".
 

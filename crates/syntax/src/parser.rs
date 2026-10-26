@@ -4385,6 +4385,20 @@ mod tests {
   }
 
   #[test]
+  fn an_assignment_in_parentheses_is_not_an_expression() {
+    // An assignment is a statement (**L§6.1**): `(x *= 18);` used to be
+    // accepted and do nothing.
+    assert_eq!(
+      errors("f :: () { x := 2; (x *= 18); }"),
+      ["Expected ')', but got '*='."]
+    );
+    assert_eq!(
+      errors("f :: () { x := 2; y := (x = 5); }"),
+      ["Expected ')', but got '='."]
+    );
+  }
+
+  #[test]
   fn a_star_before_a_struct_literal_takes_its_address() {
     let address = tree("x := *Thing.{1};");
     assert!(address.contains("UNARY_OPERATOR"), "{address}");
