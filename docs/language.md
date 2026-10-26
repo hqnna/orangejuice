@@ -1378,7 +1378,7 @@ Data-scope declarations are resolved by a scheduler: each declaration waits for 
 
 ### 11.10 Program parameters of interest
 
-Basic: `MEMORY_DEBUGGER`, `ENABLE_ASSERT`, `REPLACEMENT_INTERFACE`, `VISUALIZE_MEMORY_DEBUGGER`, `TEMP_ALLOCATOR_POISON_FREED_MEMORY`. Runtime_Support: `DEFINE_SYSTEM_ENTRY_POINT`, `DEFINE_INITIALIZATION`, `ENABLE_BACKTRACE_ON_CRASH` (module parameters). Android: `DEFINE_ANDROID_MAIN_AND_CALL_THIS`. Thread: `DEBUG`, `CACHE_LINE_SIZE`.
+Basic: `MEMORY_DEBUGGER`, `ENABLE_ASSERT`, `REPLACEMENT_INTERFACE`, `VISUALIZE_MEMORY_DEBUGGER`, `TEMP_ALLOCATOR_POISON_FREED_MEMORY` (renamed `TEMP_ALLOCATOR_OVERWRITE_MEMORY` in 0.2.028). orangejuice's Basic declares all but `REPLACEMENT_INTERFACE`; only the first two do anything. Runtime_Support: `DEFINE_SYSTEM_ENTRY_POINT`, `DEFINE_INITIALIZATION`, `ENABLE_BACKTRACE_ON_CRASH` (module parameters). Android: `DEFINE_ANDROID_MAIN_AND_CALL_THIS`. Thread: `DEBUG`, `CACHE_LINE_SIZE`.
 
 ---
 
@@ -1640,4 +1640,5 @@ args            := [ arg { ',' arg } [','] ]      arg := [ident '='] ['..'] expr
 8. `#cpp_method`/`#cpp_return_type_is_non_pod` are accepted and follow the Itanium C++ ABI on Linux.
 9. `_` shadowing, `?` operator, `.?` operator: `_` always exists; `?` and `.?` are errors.
 10. A compound assignment through `operator []=`: the reference at 0.2.009 passes the right-hand side alone, so `w[0] += 10` on a `10` leaves a `10` and `w[2] /= 2` leaves a `2` — measured, and at odds with both this section 6.7 and `how_to/094`'s own prose. orangejuice does what they say and assigns `w[0] = w[0] + 10`.
-11. The exact text the reference prints when no candidate matches is not recorded here, only its shape (7.5: "did not match any", printing the argument types). orangejuice writes `The arguments given to 'name' did not match any of its overloads. The arguments were: (T, U).` and reports it at the call site; a measurement against an installed reference would replace it.
+11. The call-site auto-dereference of 3.2 (`f(p)` with `p: *S` and a parameter `s: S`) was removed from the reference in beta 0.2.019. orangejuice keeps doing it: accepting it rejects no program written for either beta, and the wording the newer reference rejects it with is not recorded here. A program meant to build with both should dereference explicitly.
+12. The exact text the reference prints when no candidate matches is not recorded here, only its shape (7.5: "did not match any", printing the argument types). orangejuice writes `The arguments given to 'name' did not match any of its overloads. The arguments were: (T, U).` and reports it at the call site; a measurement against an installed reference would replace it.

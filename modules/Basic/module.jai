@@ -17,7 +17,16 @@
 #load "Apollo_Time.jai";
 #load "Memory_Debugger.jai";
 
-#module_parameters () (ENABLE_ASSERT := true, MEMORY_DEBUGGER := false);
+#module_parameters () (
+    ENABLE_ASSERT := true,
+    MEMORY_DEBUGGER := false,
+    // Accepted for the programs that set them; the memory visualizer and the
+    // temporary allocator's overwriting of what it hands back are not
+    // implemented. The second is the betas' later name for the third.
+    VISUALIZE_MEMORY_DEBUGGER := false,
+    TEMP_ALLOCATOR_OVERWRITE_MEMORY := false,
+    TEMP_ALLOCATOR_POISON_FREED_MEMORY := false
+);
 
 #scope_module
 
