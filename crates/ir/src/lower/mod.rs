@@ -1336,10 +1336,14 @@ impl<'c, 'p> Lowering<'c, 'p> {
     }
     let local = self.new_local(String::from("temp"), value.type_id);
     let address = self.local_address(local);
-    self.emit(Inst::Store {
-      address,
-      value: value.id,
-    });
+    // A `void` has no bits, so what a call returning nothing produced is
+    // never defined and there is nothing to write (**L§3.1**).
+    if value.type_id != TypeId::VOID {
+      self.emit(Inst::Store {
+        address,
+        value: value.id,
+      });
+    }
     address
   }
 

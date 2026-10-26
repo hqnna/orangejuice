@@ -6639,3 +6639,19 @@ fn an_enum_ifx_and_a_name_a_polymorphic_call_does_not_have() {
     "{diagnostics}"
   );
 }
+
+#[test]
+fn a_call_that_returns_nothing_initializes_a_void_local() {
+  // `r := random_seed(…)` is a `void` the program never reads; nothing has to
+  // be written for it (The Way to Jai 6.6).
+  assert_output(
+    "f :: () { put(\"f\\n\"); }\n\
+     main :: () {\n\
+       r := f();\n\
+       v: void;\n\
+       w := v;\n\
+       put(\"done\\n\");\n\
+     }\n",
+    "f\ndone\n",
+  );
+}
