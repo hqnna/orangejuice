@@ -1106,7 +1106,7 @@ for_expansion :: (table: *Table, body: Code, flags: For_Flags) #expand {
 }
 ```
 
-- The compiler looks up `for_expansion` in the scope of the container's *type* (the type's declaring scope), taking a pointer to the container automatically (the parameter may be `*T` or `T`; a `for` over a pointer to the struct also works). `for :name container` selects the macro named `name` instead (for native arrays too). `For_Flags` (Preload: `POINTER 1`, `REVERSE 2`, `TEMPORARY_V2 4`) tells the macro which modifiers the user wrote; unsupported ones should `#assert`. The reverse flag is passed even if the macro ignores it.
+- The compiler looks up `for_expansion` in the scope of the container's *type* (the type's declaring scope) and, when that has none, from where the loop is written — a `for_expansion` declared inside the procedure that loops works (The Way to Jai 26.8) — taking a pointer to the container automatically (the parameter may be `*T` or `T`; a `for` over a pointer to the struct also works). `for :name container` selects the macro named `name` instead (for native arrays too). `For_Flags` (Preload: `POINTER 1`, `REVERSE 2`, `TEMPORARY_V2 4`) tells the macro which modifiers the user wrote; unsupported ones should `#assert`. The reverse flag is passed even if the macro ignores it.
 - The macro must export both `` `it `` and `` `it_index `` (error otherwise; export dummies). User-written names (`for v, n: holder`) are remapped onto the exported names; `for value, key: table` yields (value, key) in that order for Hash_Table.
 - `Build_Options.debug_for_expansions` (default false) controls whether the debugger steps into expansion macros. The general iteration expression may be any expression (0.1.016).
 

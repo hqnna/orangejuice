@@ -6382,3 +6382,38 @@ fn a_backticked_return_is_checked_against_the_procedure_the_macro_landed_in() {
     "{diagnostics}"
   );
 }
+
+#[test]
+fn a_macro_inserts_a_string_that_inserts_its_code_parameter() {
+  // The text an `#insert -> string` in a macro makes is spliced where the
+  // macro's parameters are in sight, so an `#insert body;` in it finds the
+  // Code it was handed (The Way to Jai 26.14).
+  assert_output(
+    "unroll :: (count: int, body: Code) #expand {\n\
+       #insert -> string {\n\
+         return \"{ `it: int; it = 0; #insert body; it = 1; #insert body; it = 2; #insert body; }\";\n\
+       }\n\
+     }\n\
+     main :: () { unroll(3, #code put_number(it * 10)); }\n",
+    "0\n10\n20\n",
+  );
+}
+
+#[test]
+fn a_for_expansion_declared_where_the_loop_is_written_is_found() {
+  // Neither the container's type nor its file declares a `for_expansion`;
+  // the procedure that loops does (**L§7.14**, The Way to Jai 26.8).
+  assert_output(
+    "Node :: struct { value: int; next: *Node; }\n\
+     main :: () {\n\
+       for_expansion :: (list: *Node, body: Code, flags: For_Flags) #expand {\n\
+         `it := list;\n\
+         `it_index := 0;\n\
+         while it { #insert body; it = it.next; it_index += 1; }\n\
+       }\n\
+       c := Node.{3, null}; b := Node.{2, *c}; a := Node.{1, *b};\n\
+       for *a put_number(it.value * 10 + it_index);\n\
+     }\n",
+    "10\n21\n32\n",
+  );
+}

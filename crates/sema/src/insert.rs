@@ -42,6 +42,17 @@ impl Checker<'_> {
 
   /// The program `node` — an `#insert` — stands for, expanding it if that has
   /// not happened yet.
+  fn scope_within(&self, scope: ScopeId, ancestor: ScopeId) -> bool {
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      if id == ancestor {
+        return true;
+      }
+      current = self.program().tree().parent(id);
+    }
+    false
+  }
+
   pub(crate) fn expand_insert(
     &mut self,
     scope: ScopeId,
@@ -88,11 +99,19 @@ impl Checker<'_> {
     // work out that an `#insert` in a procedure body belongs to that block. A
     // macro is the exception: its body is spliced into whoever expanded it, so
     // an `#insert` inside one belongs to the scope that expansion is going to.
-    let written = self
-      .program()
-      .insert_scope(source, node)
-      .filter(|scope| !self.program().is_in_macro(*scope));
-    let target = written.unwrap_or_else(|| self.scope_at(source, node, scope));
+    let recorded = self.program().insert_scope(source, node);
+    let written = recorded.filter(|scope| !self.program().is_in_macro(*scope));
+    // Inside a macro the scope the question came with is used when it is
+    // somewhere under the `#insert` — the block an expansion is going to — and
+    // the macro's own block otherwise: a body check that only knows the file
+    // it is in would put the inserted text where the macro's parameters are
+    // not in sight, and an `#insert body;` in it would find nothing to insert
+    // (The Way to Jai 26.14).
+    let target = match (written, recorded) {
+      (Some(written), _) => written,
+      (None, Some(in_macro)) if !self.scope_within(scope, in_macro) => in_macro,
+      _ => self.scope_at(source, node, scope),
+    };
     let operand_scope = self.scope_at(source, expression, target);
     // One written in a polymorphic body expands once per instantiation: the
     // text is whatever the constants make it (**L§13.2**).

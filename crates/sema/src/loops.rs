@@ -96,9 +96,15 @@ impl Checker<'_> {
         let definition = self.types().struct_of(self.types().underlying(container))?;
         let members = self.struct_scope(definition)?;
         let name = self.interned().intern(b"for_expansion");
+        // One declared where the loop is written — inside the procedure that
+        // loops, say — is found from there when the type's own scope has
+        // none (**L§7.14**, The Way to Jai 26.8).
         match self.program().tree().lookup(members, name) {
           oj_scope::Resolution::Found(candidates) => candidates,
-          _ => return None,
+          _ => match self.program().tree().lookup(scope, name) {
+            oj_scope::Resolution::Found(candidates) => candidates,
+            _ => return None,
+          },
         }
       }
     };
