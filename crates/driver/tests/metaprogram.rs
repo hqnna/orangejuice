@@ -81,7 +81,7 @@ impl Fixture {
 /// Builds `main.jai`, with the `Compiler` declarations in front of `body`.
 fn build(fixture: &Fixture, body: &str) -> Option<oj_driver::Report> {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return None;
   }
   // A body that imports the real module must not also get the headers, or the
@@ -676,7 +676,7 @@ fn the_options_of_the_programs_own_workspace_are_the_defaults() {
 #[test]
 fn the_compile_time_command_line_reaches_a_metaprogram() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let fixture = Fixture::new();
@@ -857,7 +857,7 @@ fn a_watching_metaprogram_is_sent_the_declarations_that_typechecked() {
 #[test]
 fn the_distributions_default_metaprogram_drives_the_build() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   // SAFETY: cargo runs each integration test binary in its own process, and
@@ -895,7 +895,7 @@ fn the_distributions_default_metaprogram_drives_the_build() {
 #[test]
 fn a_program_the_default_metaprogram_cannot_compile_fails_the_build() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   // SAFETY: as above.
@@ -1479,7 +1479,7 @@ fn the_check_plugin_reports_a_format_string_that_does_not_match_its_arguments() 
   // is what turns a call's `Code_*` tree into this diagnostic. The wording is
   // the reference compiler's, measured by running the same program through it.
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   // SAFETY: as the test above.
@@ -1528,7 +1528,7 @@ fn a_plus_plugin_is_loaded_and_handed_the_arguments_after_it() {
   // handed to the plugin's `init` (**C§3.4**). The plugin here records what it
   // was given in the program it adds source to, and the program prints it.
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   // SAFETY: as the test above.
@@ -1998,7 +1998,7 @@ fn error_continuable_lets_the_next_report_through() {
 #[test]
 fn the_metaprogram_answers_help_with_no_file_to_compile() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   // SAFETY: cargo runs each integration test binary in its own process, and

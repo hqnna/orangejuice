@@ -57,6 +57,30 @@ pub unsafe fn use_own_modules() {
   unsafe { std::env::set_var(MODULES_ENV, modules()) };
 }
 
+/// Set to `1` to make a test that cannot link — no C driver, no `ar`, a test
+/// library the driver could not build — fail instead of skipping. The nix
+/// package sets it, so `nix flake check` cannot pass by running nothing.
+pub const REQUIRE_LINKER_ENV: &str = "OJ_REQUIRE_LINKER";
+
+/// Whether a missing linker is a failure rather than a skip.
+pub fn linker_required() -> bool {
+  std::env::var_os(REQUIRE_LINKER_ENV).is_some_and(|value| value == "1")
+}
+
+/// What a test that needs the linker does when there is none: says so and
+/// returns, or — under `OJ_REQUIRE_LINKER=1` — fails.
+///
+/// # Panics
+///
+/// When `OJ_REQUIRE_LINKER=1`, always.
+pub fn skip_without_linker(reason: &str) {
+  assert!(
+    !linker_required(),
+    "{REQUIRE_LINKER_ENV}=1, but this test would have been skipped: {reason}"
+  );
+  eprintln!("skipping: {reason}");
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -66,5 +90,15 @@ mod tests {
     assert!(modules().join("Preload.jai").is_file());
     assert!(modules().join("Basic").join("module.jai").is_file());
     assert!(examples().is_dir());
+  }
+
+  #[test]
+  fn a_skip_is_only_a_skip_when_the_linker_is_not_required() {
+    if linker_required() {
+      let failed = std::panic::catch_unwind(|| skip_without_linker("nothing to link with"));
+      assert!(failed.is_err());
+    } else {
+      skip_without_linker("nothing to link with");
+    }
   }
 }

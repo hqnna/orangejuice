@@ -75,7 +75,7 @@ fn run(program: &Path, output: &Path) -> Result<String, String> {
 #[test]
 fn every_example_prints_what_its_golden_says() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let bless = std::env::var_os("OJ_BLESS_EXAMPLES").is_some_and(|value| !value.is_empty());

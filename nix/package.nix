@@ -54,6 +54,9 @@ let
     ];
 
     LLVM_SYS_191_PREFIX = "${llvm.llvm.dev}";
+    # A test that cannot link fails here rather than skipping, so a check
+    # suite that compiled nothing cannot pass (`docs/spec.md` §7).
+    OJ_REQUIRE_LINKER = "1";
     RUSTFLAGS = "-C link-arg=-Wl,-rpath,${pkgs.lib.makeLibraryPath runtimeLibraries}";
   };
 

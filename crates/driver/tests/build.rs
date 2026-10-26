@@ -60,7 +60,7 @@ fn build_and_run(body: &str) -> Option<Built> {
 /// executable's bytes too.
 fn build_and_run_with(body: &str, options: oj_driver::BuildOptions) -> Option<(Built, Vec<u8>)> {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return None;
   }
 
@@ -427,7 +427,7 @@ fn the_object_lands_in_a_build_directory_beside_the_output() {
 #[test]
 fn an_output_name_and_path_are_honoured() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let directory = tempfile::tempdir().expect("a temporary directory");
@@ -1799,7 +1799,7 @@ fn a_compound_declaration_spreads_its_values_across_its_names() {
 /// expects rather than against itself (**L§7.11**).
 fn with_c_library(source: &str, body: &str) -> Option<Built> {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return None;
   }
   let directory = tempfile::tempdir().expect("a temporary directory");
@@ -1816,7 +1816,7 @@ fn with_c_library(source: &str, body: &str) -> Option<Built> {
   match compiled {
     Ok(status) if status.success() => {}
     _ => {
-      eprintln!("skipping: the C driver could not build the test library");
+      oj_testsupport::skip_without_linker("the C driver could not build the test library");
       return None;
     }
   }
@@ -1871,7 +1871,7 @@ fn a_run_calls_into_a_library_whose_file_the_compiler_named() {
   // `<name>.so`, which is not the `lib<name>.so` a loader would guess — so a
   // `#run` calling into one used to link and then fail to resolve.
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let directory = tempfile::tempdir().expect("a temporary directory");
@@ -1887,7 +1887,7 @@ fn a_run_calls_into_a_library_whose_file_the_compiler_named() {
     .arg(&c_path)
     .status();
   if !built.is_ok_and(|status| status.success()) {
-    eprintln!("skipping: the C driver could not build the test library");
+    oj_testsupport::skip_without_linker("the C driver could not build the test library");
     return;
   }
 
@@ -2229,7 +2229,7 @@ fn add_data_segment_reports_that_no_segment_of_its_own_is_made() {
 /// The same, with one more file beside the program for it to `#load`.
 fn assert_output_with_file(name: &str, contents: &str, body: &str, expected: &str) {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let directory = tempfile::tempdir().expect("a temporary directory");
@@ -4182,7 +4182,7 @@ fn a_program_parameter_is_what_the_main_program_set_it_to() {
 /// `#module_parameters` test needs: the arguments live at the `#import`.
 fn assert_output_with_module(module: &str, body: &str, expected: &str) {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let directory = tempfile::tempdir().expect("a temporary directory");
@@ -5129,7 +5129,7 @@ fn a_library_is_found_from_the_file_the_foreign_header_was_written_in() {
   // program. Resolving it against the program instead would climb out of the
   // temporary directory entirely.
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let directory = tempfile::tempdir().expect("a temporary directory");
@@ -5149,7 +5149,7 @@ fn a_library_is_found_from_the_file_the_foreign_header_was_written_in() {
     .arg(&c_path)
     .status();
   if !compiled.is_ok_and(|status| status.success()) {
-    eprintln!("skipping: the C driver could not build the test library");
+    oj_testsupport::skip_without_linker("the C driver could not build the test library");
     return;
   }
   let archived = Command::new("ar")
@@ -5158,7 +5158,7 @@ fn a_library_is_found_from_the_file_the_foreign_header_was_written_in() {
     .arg(&object)
     .status();
   if !archived.is_ok_and(|status| status.success()) {
-    eprintln!("skipping: no 'ar' to build the test library with");
+    oj_testsupport::skip_without_linker("no 'ar' to build the test library with");
     return;
   }
 

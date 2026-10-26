@@ -28,7 +28,7 @@ fn linker_is_available() -> bool {
 /// Builds `body` against orangejuice's own modules and runs it.
 fn build_and_run(body: &str) -> Option<String> {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return None;
   }
 
@@ -317,7 +317,7 @@ fn a_crash_names_itself_and_walks_the_stack() {
   // `Runtime_Support_Crash_Handler` unless `-no_backtrace_on_crash` asks it
   // not to, and the wording is the reference's.
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
 
@@ -399,7 +399,7 @@ fn a_crash_names_itself_and_walks_the_stack() {
 #[test]
 fn a_module_reached_two_ways_is_one_module() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to link with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
     return;
   }
   let directory = tempfile::tempdir().expect("a temporary directory");
@@ -465,7 +465,7 @@ fn a_module_reached_two_ways_is_one_module() {
 #[test]
 fn the_posix_declarations_match_the_system_headers() {
   if !linker_is_available() {
-    eprintln!("skipping: no C driver on PATH to measure with");
+    oj_testsupport::skip_without_linker("no C driver on PATH to measure with");
     return;
   }
 
