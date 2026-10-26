@@ -6909,6 +6909,19 @@ fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
 }
 
 #[test]
+fn an_array_view_with_no_count_runs_to_the_end() {
+  // toml-jai writes `array_view(args, 2)` for everything from the third on.
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       a := int.[1, 2, 3, 4];\n\
+       print(\"% % %\\n\", array_view(a, 1), array_view(a, 1, 2), array_view(a, 9));\n\
+     }\n",
+    "[2, 3, 4] [2, 3] []\n",
+  );
+}
+
+#[test]
 fn the_address_of_a_struct_literal_points_at_its_values() {
   // `*Thing.{…}` is the address of a `Thing` (TTWJ 14.2), which is what
   // `ifx thing then thing.name` reads (**L§5.8**).

@@ -136,14 +136,15 @@ array_copy :: (array: [] $T, allocator := context.allocator) -> [] T {
     return result;
 }
 
-// A view over the same elements; nothing is copied.
-array_view :: (array: [] $T, index: s64, count: s64) -> [] T {
+// A view over the same elements; nothing is copied. A negative count is
+// everything from index on.
+array_view :: (array: [] $T, index: s64, count: s64 = -1) -> [] T {
     result: [] T;
     start := index;
     if start < 0            start = 0;
     if start > array.count  start = array.count;
     take := count;
-    if take < 0                   take = 0;
+    if take < 0                   take = array.count - start;
     if start + take > array.count take = array.count - start;
     result.data = array.data + start;
     result.count = take;
