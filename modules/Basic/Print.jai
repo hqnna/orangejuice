@@ -675,9 +675,15 @@ append_float :: (builder: *String_Builder, data: *void, info: *Type_Info) {
 // decimal form always terminates; `Decimal` below gets there by doubling or
 // halving a digit array, which is what lets `1e300` print all three hundred of
 // its digits rather than an approximation of them.
-append_format_float :: (builder: *String_Builder, value: Any, format: *FormatFloat) {
+append_format_float :: (builder: *String_Builder, given: Any, format: *FormatFloat) {
+    // A variant of a float formats as the float it is (toml-jai formats an
+    // `isa` of a `distinct float64`).
+    value := given;
+    while value.type && value.type.type == .VARIANT {
+        value.type = (cast(*Type_Info_Variant) value.type).variant_of;
+    }
     if !value.type || value.type.type != .FLOAT {
-        append_any(builder, value);
+        append_any(builder, given);
         return;
     }
 

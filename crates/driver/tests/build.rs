@@ -7401,3 +7401,15 @@ fn a_scientific_float_is_one_digit_a_fraction_and_a_signed_exponent() {
     "1e-03 9.98e-04 1.234567e+05 1e+01\n[5.000000e+00] [    5e-01]\n",
   );
 }
+
+#[test]
+fn a_variant_of_a_float_formats_as_the_float() {
+  // toml-jai formats an `isa` of a `distinct float64` with a `FormatFloat`.
+  assert_output(
+    "#import \"Basic\";\n\
+     FV :: #type,distinct float64;\n\
+     F2 :: #type,isa FV;\n\
+     main :: () { x := (430467.21).(F2); print(\"%\\n\", formatFloat(x, mode=.SCIENTIFIC)); }\n",
+    "4.304672e+05\n",
+  );
+}
