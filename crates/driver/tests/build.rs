@@ -7294,3 +7294,18 @@ fn a_struct_literal_fills_in_a_default_that_has_no_byte_form() {
     "5 9 2 str\n9 4 str\n",
   );
 }
+
+#[test]
+fn an_any_literal_fills_the_pair_an_any_is() {
+  // toml-jai rebuilds an `Any` as `Any.{info, slot}` (**L§3.8**).
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       x := 5;\n\
+       a := Any.{type_info(int), *x};\n\
+       b := Any.{value_pointer = *x, type = type_info(int)};\n\
+       print(\"% % %\\n\", a.value_pointer == *x, a, b);\n\
+     }\n",
+    "true 5 5\n",
+  );
+}

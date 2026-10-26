@@ -1401,7 +1401,12 @@ impl Lowering<'_, '_> {
     type_id: TypeId,
     arguments: &[ast::Argument],
   ) {
-    let underlying = self.checker.types().underlying(type_id);
+    let mut underlying = self.checker.types().underlying(type_id);
+    // `Any.{info, slot}` fills the pair Preload's `Any_Struct` says an `Any`
+    // is (**L§3.8**).
+    if matches!(self.checker.types().kind(underlying), TypeKind::Any) {
+      underlying = self.checker.any_struct_type();
+    }
     let Some(definition) = self.checker.types().struct_of(underlying) else {
       if let Some(fields) = self.builtin_fields(underlying) {
         self.fill_builtin_literal(scope, source, address, &fields, arguments);
