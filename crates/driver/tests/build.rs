@@ -6824,3 +6824,18 @@ fn a_union_says_so_in_its_type_info() {
     "true true\n",
   );
 }
+
+#[test]
+fn debug_breakpoints_stop_only_under_a_debugger() {
+  assert_output(
+    "#import \"Basic\";\n\
+     Debug :: #import \"Debug\";\n\
+     main :: () {\n\
+       Debug.init();\n\
+       attached := Debug.attach_to_debugger();\n\
+       Debug.breakpoint();\n\
+       print(\"% ran on\\n\", attached);\n\
+     }\n",
+    "false ran on\n",
+  );
+}
