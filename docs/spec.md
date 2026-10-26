@@ -556,3 +556,30 @@ Two things that looked like gaps and are not, both measured against the
 reference: `1e6` is not a float literal (a mantissa needs its decimal point),
 and there are no octal literals — the reference writes `0x1B4` with `// 0o664`
 beside it.
+
+### 10.3 Following the betas after 0.2.009
+
+The 2026-10 review swept two dozen projects written for betas up to 0.2.029
+(`docs/changes.md` lists them) and found that what they need of a compiler is
+almost all in 0.2.009; what changed is mostly the distribution. Where code
+written since then disagrees with 0.2.009, orangejuice follows the code —
+there is no newer reference to measure against, so each rule below is read
+off the programs that depend on it and written into **L** or **C** with a test
+beside it.
+
+- **`Hash_Table.table_find` returns the success first**: `found, value :=
+  table_find(*t, key)`. 0.2.009 had them the other way round; of the 101 call
+  sites in the sweep, 97 destructure the newer order. `table_resize(table,
+  slots)` grows (or initializes) a table keeping what is in it, and
+  `table_reset_keeping_memory` is `table_reset` under the name that says what
+  it keeps. `resize` stays, since `expand` and `init` are written in it.
+- **Basic's program parameters** (`MEMORY_DEBUGGER`, `ENABLE_ASSERT`), the
+  memory debugger behind the first, `string_to_float64_new` and
+  `get_stack_trace_strings` (**L§10.4**, **L§11.3**).
+- **Reverse ranges without `#v2`** (**L§6.6**) and **`#overlay`** (**L§8.6**).
+- **The plugin protocol**: `init`, `+Name` on the command line,
+  `parse_plugin_arguments`, `Plugin_To_Create` (**C§3.4**).
+- **`Build_Options` declares every member C§4 lists**, flat, so a build
+  script setting `use_natvis_compatible_types` or `minimum_os_version`
+  compiles; the ones the driver does not act on are accepted and ignored.
+

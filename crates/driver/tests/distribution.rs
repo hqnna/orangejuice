@@ -142,6 +142,32 @@ fn the_newer_basic_parsers_take_what_current_code_passes_them() {
 }
 
 #[test]
+fn a_hash_table_resizes_and_resets_the_newer_way() {
+  // `table_find` returns the success first, the way current code destructures
+  // it; `table_resize` keeps what is in the table and `table_reset_keeping_memory`
+  // keeps the storage.
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     main :: () {\n  \
+       t: Table(int, int);\n  \
+       table_resize(*t, 8);\n  \
+       for 1..20  table_add(*t, it, it * it);\n  \
+       table_resize(*t, 256);\n  \
+       found, value := table_find(*t, 12);\n  \
+       print(\"% % % %\\n\", found, value, t.count, t.allocated);\n  \
+       allocated := t.allocated;\n  \
+       table_reset_keeping_memory(*t);\n  \
+       missing, _ := table_find(*t, 12);\n  \
+       print(\"% % %\\n\", missing, t.count, t.allocated == allocated);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(output, "true 144 20 256\nfalse 0 true\n");
+}
+
+#[test]
 fn print_formats_what_the_type_table_describes() {
   // `print` decides what to write by walking the `Type_Info` the compiler put
   // in the table, so this is as much a test of the table as of the module.

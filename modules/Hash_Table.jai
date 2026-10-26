@@ -113,6 +113,31 @@ table_reset :: (using table: *Table) {
     slots_filled = 0;
 }
 
+// The same as `table_reset`, under the name that says what it keeps: the
+// entries go, the storage stays for whatever is added next.
+table_reset_keeping_memory :: (table: *Table) {
+    table_reset(table);
+}
+
+// Storage for at least `slots_to_allocate` slots — a power of two, and never
+// fewer than the table already holds items for — with every item moved into
+// it. A table that was never initialized is initialized to that size, which
+// is the usual reason to call this before the first `table_add`.
+table_resize :: (table: *Table, slots_to_allocate: s64) {
+    wanted := next_power_of_two(ifx slots_to_allocate > table.SIZE_MIN then slots_to_allocate else table.SIZE_MIN);
+    while (table.count + 1) * 100 >= wanted * table.LOAD_FACTOR_PERCENT  wanted *= 2;
+    if wanted == table.allocated && table.slots_filled == table.count  return;
+
+    old_entries := table.entries;
+    resize(table, wanted);
+    table.count = 0;
+    table.slots_filled = 0;
+    for * entry: old_entries {
+        if entry.hash >= FIRST_VALID_HASH  table_add(table, entry.key, entry.value);
+    }
+    if old_entries.data  free(old_entries.data,, allocator = table_allocator(table));
+}
+
 // Fresh storage of exactly `slots_to_allocate` slots. The caller is
 // responsible for moving anything that was in the old storage.
 resize :: (using table: *Table, slots_to_allocate: s64 = 0) {
@@ -214,13 +239,15 @@ table_find_pointer :: (table: *Table, key: table.Key_Type) -> *table.Value_Type 
     return null;
 }
 
-// `success` must be read: the value is uninitialised when it is false.
-table_find :: (table: *Table, key: table.Key_Type) -> (table.Value_Type, success: bool #must) {
+// `success` comes first and must be read: the value is zeroes when it is
+// false. This is the order the reference has returned them in since the
+// 0.2.0xx betas, and what code written for them destructures.
+table_find :: (table: *Table, key: table.Key_Type) -> (success: bool #must, value: table.Value_Type) {
     pointer := inline table_find_pointer(table, key);
-    if pointer  return pointer.*, true;
+    if pointer  return true, pointer.*;
 
     dummy: table.Value_Type;
-    return dummy, false;
+    return false, dummy;
 }
 
 table_contains :: (table: *Table, key: table.Key_Type) -> bool {

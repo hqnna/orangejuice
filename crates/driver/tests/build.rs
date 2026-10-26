@@ -4448,9 +4448,9 @@ fn a_hash_table_finds_what_was_added_to_it() {
        init(*t, 16);\n  \
        table_add(*t, \"abc\", 7);\n  \
        table_add(*t, \"def\", 9);\n  \
-       a, found_a := table_find(*t, \"abc\");\n  \
-       b, found_b := table_find(*t, \"def\");\n  \
-       _, missing := table_find(*t, \"ghi\");\n  \
+       found_a, a := table_find(*t, \"abc\");\n  \
+       found_b, b := table_find(*t, \"def\");\n  \
+       missing, _ := table_find(*t, \"ghi\");\n  \
        print(\"% % % % %\\n\", a, found_a, b, found_b, missing);\n\
      }\n",
   ) else {
@@ -4702,7 +4702,7 @@ fn a_hash_table_with_its_own_hash_function_uses_it() {
        print(\"%\\n\", t.hash_function(3));\n  \
        init(*t, 8);\n  \
        table_add(*t, 3, 30);\n  \
-       v, ok := table_find(*t, 3);\n  \
+       ok, v := table_find(*t, 3);\n  \
        print(\"% %\\n\", v, ok);\n\
      }\n",
   ) else {
@@ -4726,8 +4726,8 @@ fn two_tables_of_different_keys_do_not_share_one_compare_function() {
        b: Table(float, int);\n  \
        init(*b);\n  \
        table_add(*b, 1.0, 3);\n  \
-       v1, ok1 := table_find(*a, 1);\n  \
-       v2, ok2 := table_find(*b, 1.0);\n  \
+       ok1, v1 := table_find(*a, 1);\n  \
+       ok2, v2 := table_find(*b, 1.0);\n  \
        print(\"% % % %\\n\", v1, ok1, v2, ok2);\n\
      }\n",
   ) else {
