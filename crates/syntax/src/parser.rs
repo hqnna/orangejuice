@@ -3110,8 +3110,13 @@ impl Parser<'_> {
         self.bump();
         let module_token = self.expect(TokenKind::IDENT, "a module name")?;
         let module = self.ident_node(&module_token);
-        let name_token = self.expect(TokenKind::IDENT, "a name to poke")?;
-        let name = self.ident_node(&name_token);
+        let name = match self.at(TokenKind::KEYWORD_OPERATOR) {
+          true => self.parse_operator_name()?,
+          false => {
+            let name_token = self.expect(TokenKind::IDENT, "a name to poke")?;
+            self.ident_node(&name_token)
+          }
+        };
         Some(self.push(
           self.span_from(start),
           NodeData::DirectivePokeName { module, name },
@@ -4390,6 +4395,10 @@ mod tests {
     assert_eq!(printed("#scope_file"), "#scope_file\n");
     assert_eq!(printed("#placeholder NAME;"), "#placeholder NAME;\n");
     assert_eq!(printed("#poke_name Mod name;"), "#poke_name Mod name;\n");
+    assert_eq!(
+      printed("#poke_name Basic operator==;"),
+      "#poke_name Basic operator ==;\n"
+    );
     assert_eq!(printed("#add_context x: int;"), "#add_context x: int;\n");
     assert_eq!(
       printed("libc :: #system_library \"libc\";"),

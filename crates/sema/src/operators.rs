@@ -85,6 +85,22 @@ impl Checker<'_> {
     let Resolution::Found(candidates) = self.program().tree().lookup(scope, name) else {
       return None;
     };
+    // A `#poke_name M operator==;` leaves a placeholder of the name in `M`
+    // beside the edge to the real overloads (**L§11.9**), and it is no
+    // candidate.
+    let mut candidates: Vec<oj_scope::DeclId> = self
+      .live_candidates(&candidates)
+      .into_iter()
+      .filter(|id| self.program().tree().decl(*id).kind != oj_scope::DeclKind::Placeholder)
+      .collect();
+    let mut seen = Vec::with_capacity(candidates.len());
+    candidates.retain(|id| match seen.contains(id) {
+      true => false,
+      false => {
+        seen.push(*id);
+        true
+      }
+    });
 
     let arguments: Vec<crate::overload::CallArgument> = operands
       .iter()

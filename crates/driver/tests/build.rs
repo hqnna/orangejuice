@@ -6880,6 +6880,21 @@ fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
 }
 
 #[test]
+fn a_poked_operator_reaches_the_module_it_was_poked_into() {
+  // Focus writes `#poke_name Basic operator==;` so that a module's own
+  // `a == b` finds the program's overload (**L§11.9**).
+  assert_output(
+    "#import \"Basic\";\n\
+     M :: #import,string \"same :: (a: $T, b: T) -> bool { return a == b; }\\n\";\n\
+     V :: struct { x: int; }\n\
+     operator == :: (a: V, b: V) -> bool { return a.x == b.x; }\n\
+     #poke_name M operator==;\n\
+     main :: () { print(\"% %\\n\", M.same(V.{1}, V.{1}), M.same(V.{1}, V.{2})); }\n",
+    "true false\n",
+  );
+}
+
+#[test]
 fn the_compiler_module_names_completion_the_way_c_does() {
   // `Message_Complete.error_code` is NONE / COMPILATION_FAILED /
   // COMPILER_SHUTDOWN and `compiler_custom_link_command_is_complete` takes the
