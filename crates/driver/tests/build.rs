@@ -7616,3 +7616,21 @@ fn a_struct_argument_is_the_callers_own_storage() {
     "[1, 2] [3] abc\n",
   );
 }
+
+#[test]
+fn split_allocates_from_the_context_allocator() {
+  // Jails frees what `split` hands back with `array_free`, which only works
+  // if it came from the heap rather than temporary storage.
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"String\";\n\
+     main :: () {\n\
+       lines := split(\"a\\nb\\nc\", \"\\n\");\n\
+       print(\"% %\\n\", lines.count, lines);\n\
+       array_free(lines);\n\
+       on_temp := split(\"x y\", \" \",, allocator = temp);\n\
+       print(\"%\\n\", on_temp);\n\
+     }\n",
+    "3 [\"a\", \"b\", \"c\"]\n[\"x\", \"y\"]\n",
+  );
+}

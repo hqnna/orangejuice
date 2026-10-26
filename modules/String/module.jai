@@ -298,10 +298,11 @@ replace_chars :: (s: string, chars: string, replacement: u8) {
 
 // Splits `s` at every occurrence of `separator`, keeping empty pieces, so that
 // `split("a,,b", ",")` is three of them. The pieces are views into `s`; the
-// array holding them comes from temporary storage.
+// array holding them comes from `context.allocator`, which is why the
+// acceptance suite's programs pass `,, allocator = temp` and Jails frees what
+// it got back.
 split :: (s: string, separator: $T) -> (result: [] string) {
     pieces: [..] string;
-    pieces.allocator = temp;
 
     #if T == string {
         width := separator.count;
