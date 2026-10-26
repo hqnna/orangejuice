@@ -168,6 +168,67 @@ fn a_hash_table_resizes_and_resets_the_newer_way() {
 }
 
 #[test]
+fn program_print_writes_a_tree_back_out_as_source() {
+  // `print_expression` is what a metaprogram shows the code it was handed
+  // with (**C§5.3**): what it writes parses back to the same tree.
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     #import \"Program_Print\";\n\
+     show :: (code: Code) -> string {\n  \
+       builder: String_Builder;\n  \
+       print_expression(*builder, compiler_get_nodes(code));\n  \
+       return builder_to_string(*builder);\n\
+     }\n\
+     TEXT :: #run show(#code x := cast(u8) (a + b.c[2] * f(y, \"hi\\n\")));\n\
+     LOOP :: #run show(#code { for < i: 0..9 { if i == 2 continue; total += i; } });\n\
+     main :: () { print(\"%\\n%\\n\", TEXT, LOOP); }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(
+    output,
+    "x := cast(u8) (a + b.c[2] * f(y, \"hi\\n\"))\n{\n    for < i: 0..9 {\n        if i == 2 {\n            continue;\n        }\n        total += i;\n    }\n}\n"
+  );
+}
+
+#[test]
+fn code_visit_and_the_breadth_first_walk_see_every_node() {
+  // `Compiler.get_recursive_nodes_breadth_first` lists the root first and
+  // each level before the next, which is what match-jai reads the last
+  // identifier of a case condition off; `Code_Visit` walks depth first and
+  // can stop.
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     #import \"Code_Visit\";\n\
+     kinds :: () -> string {\n  \
+       nodes: [..] *Code_Node;\n  \
+       get_recursive_nodes_breadth_first(compiler_get_nodes(#code Enum.Member), *nodes);\n  \
+       last := cast(*Code_Ident) nodes[nodes.count - 1];\n  \
+       return tprint(\"% % %\", nodes.count, nodes[0].kind, last.name);\n\
+     }\n\
+     count :: (node: *Code_Node, depth: s64, data: *void) -> Visit_Result {\n  \
+       seen := cast(*int) data;\n  \
+       if node.kind == .IDENT  seen.* += 1;\n  \
+       if node.kind == .PROCEDURE_CALL  return .SKIP_CHILDREN;\n  \
+       return .CONTINUE;\n\
+     }\n\
+     idents :: () -> int {\n  \
+       seen := 0;\n  \
+       visit_code(compiler_get_nodes(#code a + b * f(c, d)), count, *seen);\n  \
+       return seen;\n\
+     }\n\
+     KINDS :: #run kinds();\n\
+     IDENTS :: #run idents();\n\
+     main :: () { print(\"%\\n%\\n\", KINDS, IDENTS); }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(output, "3 BINARY_OPERATOR Member\n2\n");
+}
+
+#[test]
 fn print_formats_what_the_type_table_describes() {
   // `print` decides what to write by walking the `Type_Info` the compiler put
   // in the table, so this is as much a test of the table as of the module.

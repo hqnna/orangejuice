@@ -4,3 +4,4 @@
 // `Compiler/Compiler.jai` finds the declarations where it expects them.
 
 #load "Compiler.jai";
+#load "Code_Children.jai";

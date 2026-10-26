@@ -36,12 +36,13 @@ Message_Kind :: enum u32 {
     PERFORMANCE_REPORT :: 9;
 }
 
+// @Volatile: numbered the way `oj-meta` sends them (**C§3.2**).
 Module_Type :: enum u32 {
-    UNKNOWN   :: 0;
-    MAIN      :: 1;
-    FILE      :: 2;
-    DIRECTORY :: 3;
-    STRING    :: 4;
+    UNINITIALIZED   :: 0;
+    PRELOAD         :: 1;
+    RUNTIME_SUPPORT :: 2;
+    MAIN_PROGRAM    :: 3;
+    FILE            :: 4;
 }
 
 // A file the compilation reached, and what brought it in.
@@ -59,10 +60,11 @@ Message_Import :: struct {
     fully_pathed_filename: string;
 }
 
+// @Volatile: numbered the way `oj-meta` sends them (**C§3.2**).
 Import_Status :: enum u32 {
-    UNKNOWN   :: 0;
-    NOT_FOUND :: 1;
-    BLOCKED   :: 2;
+    UNINITIALIZED :: 0;
+    BLOCKED       :: 1;
+    NOT_FOUND     :: 2;
 }
 
 // An import that could not be satisfied. A metaprogram may answer this with
@@ -839,11 +841,14 @@ Import_Flags :: enum_flags u32 {
     UNSHARED :: 0x1;
 }
 
+// What a `provide_import` answers with (**C§3.2**), and what a
+// `Code_Directive_Import` says it was written as: `#import`, `#import,file`,
+// `#import,dir`, `#import,string`.
 Provided_Import_Type :: enum u32 {
-    MODULE :: 0;
-    FILE   :: 1;
-    DIR    :: 2;
-    STRING :: 3;
+    SHORT_NAME        :: 0;
+    PATH_TO_FILE      :: 1;
+    PATH_TO_DIRECTORY :: 2;
+    FULL_TEXT         :: 3;
 }
 
 Code_Directive_Import :: struct {

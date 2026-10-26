@@ -250,14 +250,18 @@ builder_string_length :: (using builder: *String_Builder) -> int {
 // `extra_bytes_to_prepend` leaves room at the front for something the caller
 // did not know when it started writing — a length, most often. The builder is
 // reset afterwards unless told not to, so its buffers are not leaked.
-builder_to_string :: (builder: *String_Builder, extra_bytes_to_prepend := 0, do_reset := true) -> string {
+//
+// `allocator` is the older spelling of `builder_to_string(*b,, allocator)`,
+// which code written for the betas before the context-argument form still
+// passes by name; left unset, the context's allocator is used.
+builder_to_string :: (builder: *String_Builder, extra_bytes_to_prepend := 0, do_reset := true, allocator := Allocator.{}) -> string {
     if !builder.initialized  init_string_builder(builder);
 
     count := builder_string_length(builder);
     if !count && !extra_bytes_to_prepend  return "";
 
     result: string;
-    result.data = alloc(count + extra_bytes_to_prepend);
+    result.data = alloc(count + extra_bytes_to_prepend, ifx allocator.proc then allocator else context.allocator);
     if !result.data  return "";
     result.count = count + extra_bytes_to_prepend;
 
