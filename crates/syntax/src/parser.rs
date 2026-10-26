@@ -1418,7 +1418,22 @@ impl Parser<'_> {
       return self.parse_braced_block(BlockType::Imperative, BlockFlags::empty());
     }
     let start = self.span().start;
-    let expression = self.parse_expression()?;
+    let mut expression = self.parse_expression()?;
+    // `ifx leap then days = 29 else days = 28;` (toml-jai): an `ifx` written
+    // as a statement may assign in its branches.
+    if let Some(operator) = self.assignment_operator() {
+      self.bump();
+      let value = self.parse_expression()?;
+      expression = self.push(
+        self.span_from(start),
+        NodeData::BinaryOperator {
+          operator,
+          flags: BinaryFlags::empty(),
+          left: expression,
+          right: value,
+        },
+      );
+    }
     Some(self.push(
       self.span_from(start),
       NodeData::Block(Block {
@@ -4421,6 +4436,16 @@ mod tests {
         .contains("#overlay (x) c: [2] f64 = ---;")
     );
     assert!(printed("S :: struct { #as using base: Base; }").contains("using #as base: Base;"));
+  }
+
+  #[test]
+  fn an_ifx_statement_may_assign_in_its_branches() {
+    let shape = tree("f :: () { ifx leap then days = 29 else days = 28; }");
+    assert_eq!(shape.matches("BINARY_OPERATOR =").count(), 2, "{shape}");
+    assert_eq!(
+      printed("f :: () { ifx leap then days = 29 else days = 28; }"),
+      "f :: () {\n    ifx leap then days = 29 else days = 28;\n}\n"
+    );
   }
 
   #[test]
