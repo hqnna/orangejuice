@@ -6696,3 +6696,24 @@ fn a_run_hands_back_views_with_what_they_name() {
      [1, 4, 9, 16, 25, 36]\n",
   );
 }
+
+#[test]
+fn a_subscript_with_an_address_operator_is_a_place() {
+  // With `operator *[]` declared, `o[0] = 10` and `*o[7]` reach the element
+  // itself, even beside an `operator []` that reads a copy (**L§7.7**).
+  assert_output(
+    "#import \"Basic\";\n\
+     Obj :: struct { array: [10] int; }\n\
+     operator [] :: (obj: Obj, i: int) -> int { return obj.array[i]; }\n\
+     operator *[] :: (obj: *Obj, i: int) -> *int { return *obj.array[i]; }\n\
+     main :: () {\n\
+       o: Obj;\n\
+       o[0] = 10;\n\
+       p := *o[7];\n\
+       p.* = 3;\n\
+       o[7] *= 5;\n\
+       print(\"% %\\n\", o[0], o[7]);\n\
+     }\n",
+    "10 15\n",
+  );
+}

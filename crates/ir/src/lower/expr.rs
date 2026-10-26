@@ -819,6 +819,24 @@ impl Lowering<'_, '_> {
 
   /// A place: storage the program can read from and write to (**L§7.6**).
   pub(super) fn place(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<Val> {
+    // A subscript with an `operator *[]` names storage, which is what a place
+    // wants even where an `operator []` would read a copy (**L§7.7**).
+    if let Some(NodeData::BinaryOperator {
+      operator: OperatorType::ARRAY_SUBSCRIPT,
+      left,
+      right,
+      ..
+    }) = self
+      .checker
+      .tree_of(source)
+      .map(|ast| ast.data(node).clone())
+      && self
+        .checker
+        .operator_plan(scope, source, node, ADDRESS_SUBSCRIPT, &[left, right])
+        .is_some()
+    {
+      return self.subscript_address(scope, source, node, left, right);
+    }
     let value = self.expression(scope, source, node, None)?;
     if value.indirect {
       return Some(value);
