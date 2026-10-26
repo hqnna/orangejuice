@@ -7454,3 +7454,17 @@ fn a_quick_lambda_is_a_polymorphic_structs_argument() {
   );
 }
 
+#[test]
+fn a_macro_argument_is_read_where_it_was_written() {
+  // `` `v `` in an argument a macro passes to another macro names the first
+  // macro's caller, not the second's (**L§7.13**): toml-jai's
+  // `assert(`output.type.type == .STRUCT)` inside a macro.
+  assert_output(
+    "#import \"Basic\";\n\
+     inner :: (x: bool) #expand { if x print(\"yes\\n\"); }\n\
+     outer :: () #expand { inner(`v == 1); assert(`v == 1); print(\"%\\n\", `v + 1); }\n\
+     main :: () { v := 1; outer(); }\n",
+    "yes\n2\n",
+  );
+}
+

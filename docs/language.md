@@ -1077,6 +1077,8 @@ Procedures may be declared inside procedure bodies (and inside struct bodies, `#
 
 ### 7.13 Macros (`#expand`)
 
+A macro's arguments are expressions of its call site, read where they were written: `` `v `` in `assert(`v == 1)` written inside another macro's body names *that* macro's caller, since the argument belongs to the outer macro's body, not to `assert`'s.
+
 ```
 Sum :: (metric: float, factor: float) #expand { if metric >= 0 { num_valid += 1; sum += metric * factor; } }   // sees caller locals (num_valid, sum) directly
 loop :: (n: int, code: Code) #expand { for 1..n { #insert code; } }   // Code parameters; non-Code arguments are implicitly wrapped in #code

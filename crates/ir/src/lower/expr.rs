@@ -3136,7 +3136,7 @@ impl Lowering<'_, '_> {
     if let Some(site) = site {
       self.call_sites.push(site);
     }
-    let expanded = self.expand_macro_body(plan, instance);
+    let expanded = self.expand_macro_body(plan, instance, previous_instance);
     if site.is_some() {
       self.call_sites.pop();
     }
@@ -3144,7 +3144,12 @@ impl Lowering<'_, '_> {
     expanded
   }
 
-  fn expand_macro_body(&mut self, plan: &CallPlan, instance: InstanceId) -> Option<Vec<Val>> {
+  fn expand_macro_body(
+    &mut self,
+    plan: &CallPlan,
+    instance: InstanceId,
+    caller: Option<InstanceId>,
+  ) -> Option<Vec<Val>> {
     let body = self.checker.instance_body(instance)?;
     let block = body.block?;
     let signature = self
@@ -3185,14 +3190,23 @@ impl Lowering<'_, '_> {
         self.asm_register_aliases.insert(key, target);
         continue;
       }
+      // An argument is the caller's expression, so it is read under the
+      // caller's instantiation: `` `v `` in `assert(`v == 1)` written inside
+      // another macro names that macro's caller (**L§7.13**).
+      let expansion = self.checker.enter_instance(caller);
       let value = match (written, &plan.varargs) {
-        (Some(argument), _) => self.planned_argument(argument, type_id)?,
+        (Some(argument), _) => self.planned_argument(argument, type_id),
         (None, Some((_, view, extra))) => {
           let extra = extra.clone();
-          self.gather_varargs(*view, &extra, plan.varargs_spread)?
+          self.gather_varargs(*view, &extra, plan.varargs_spread)
         }
-        (None, None) => continue,
+        (None, None) => {
+          self.checker.enter_instance(expansion);
+          continue;
+        }
       };
+      self.checker.enter_instance(expansion);
+      let value = value?;
       let Some(decl) = declared else {
         continue;
       };
