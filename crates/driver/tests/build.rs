@@ -6717,3 +6717,34 @@ fn a_subscript_with_an_address_operator_is_a_place() {
     "10 15\n",
   );
 }
+
+#[test]
+fn an_assignment_a_run_rewrote_is_still_an_assignment() {
+  // The tree a `#run` edited comes back as source; an assignment printed in
+  // parentheses would be an expression whose value is dropped.
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     triple :: (code: Code) -> Code {\n\
+       root, expressions := compiler_get_nodes(code);\n\
+       for expressions {\n\
+         if it.kind == .LITERAL {\n\
+           literal := cast(*Code_Literal) it;\n\
+           if literal.value_type == .NUMBER  literal._s64 *= 3;\n\
+         }\n\
+       }\n\
+       return compiler_get_code(root);\n\
+     }\n\
+     twice :: (code: Code) #expand {\n\
+       changed :: #run triple(code);\n\
+       #insert changed;\n\
+       #insert changed;\n\
+     }\n\
+     x := 1;\n\
+     main :: () {\n\
+       twice(#code { x *= 2; });\n\
+       print(\"%\\n\", x);\n\
+     }\n",
+    "36\n",
+  );
+}

@@ -356,13 +356,20 @@ impl<'n> Rewriter<'n> {
       self.node(binary.right, out);
       return;
     }
-    out.push('(');
+    // An assignment is a statement and only ever stands as one: in
+    // parentheses it would read as an expression whose value is dropped.
+    let assignment = text.ends_with('=') && !matches!(text, "==" | "!=" | "<=" | ">=");
+    if !assignment {
+      out.push('(');
+    }
     self.node(binary.left, out);
     out.push(' ');
     out.push_str(text);
     out.push(' ');
     self.node(binary.right, out);
-    out.push(')');
+    if !assignment {
+      out.push(')');
+    }
   }
 
   fn call(&mut self, call: *const CodeProcedureCall, out: &mut String) {
