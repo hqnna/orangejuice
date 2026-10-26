@@ -544,8 +544,12 @@ HEX_DIGITS :: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_."
 // `-7` at four digits is `-007` rather than `0-07`.
 append_format_int :: (builder: *String_Builder, format: *FormatInt) {
     value := format.value;
+    // A variant of an integer formats as the integer it is.
+    while value.type && value.type.type == .VARIANT {
+        value.type = (cast(*Type_Info_Variant) value.type).variant_of;
+    }
     if !value.type || value.type.type != .INTEGER {
-        append_any(builder, value);
+        append_any(builder, format.value);
         return;
     }
 
