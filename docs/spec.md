@@ -402,7 +402,13 @@ Advent of Code's years running to the end on the inputs the repository
 carries; toml-jai's examples exiting 0, which is what its own `tests.jai`
 checks. Programs that cannot be judged here — interactive, Windows-only,
 graphical, deliberately failing, or needing a library nothing ships — are in
-a skip list with a reason each. Every program is built `-- no_metaprogram`.
+a skip list with a reason each. A program is built `-- no_metaprogram`,
+unless it imports `Compiler`, in which case it is built through
+`Default_Metaprogram` the way `jai file.jai` builds it, so that the
+workspaces it creates are numbered from there. What its `#run`s print while
+it compiles is captured too and matched with what it prints when it runs,
+since the book shows both. The book's chapters that import its own modules
+are built with `-import_dir my_modules`, as it says to.
 
 First baseline, at the commit that added the sweep (x86-64 Linux):
 
@@ -422,6 +428,27 @@ and the rest of 9f90a0b through the B4 commit:
 | The Way to Jai | 175 | 70 | 36 |
 | Advent of Code | 10 | 0 | 1 |
 | toml-jai | 0 | 7 | 0 |
+
+After the follow-ups — `#run` results that carry their views, a `void`
+local initialized from a call, `operator *[]` as a place, rewritten
+assignments, BMI `#asm`, `#bake_arguments` of a struct, `Type.[…]`
+constants, cache-line-aligned allocations, `#poke_name` into an overload
+set, struct parameters through `using #as`, `Code` held in a variable,
+range loops that cannot overflow — and the harness changes above:
+
+| Sweep | Passed | Failed | Skipped |
+|---|---|---|---|
+| The Way to Jai | 192 | 46 | 43 |
+| Advent of Code | 10 | 0 | 1 |
+| toml-jai | 0 | 7 | 0 |
+
+Of the 46 left, almost all are the annotations rather than the compiler: an
+annotation written inside a procedure declared above `main` is expected
+before `main`'s output, prose after an arrow (`=> 4 (bytes)`), garbage from
+an uninitialized or freed variable, a machine's CPU count or CPU vendor, a
+Windows path, a random number from the reference's generator, output from
+a book revision older than the code (`swap`, `remove`). Those with a cause
+on this side are in `TODO.md`.
 
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
