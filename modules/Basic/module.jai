@@ -39,10 +39,6 @@
 // `timespec`, `tm` and the clock and calendar calls Apollo_Time is built on.
 #import "POSIX";
 
-// `debug_break` and the check-failure procedures live there; **L§17** puts
-// them in Runtime_Support rather than here.
-Runtime_Support :: #import "Runtime_Support";
-
 #scope_export
 
 // ------------------------------------------------------------ allocation ---
@@ -621,7 +617,7 @@ assert :: (condition: bool, format := "", args: ..Any, loc := #caller_location) 
             message := ifx format.count then tprint(format, ..args) else "";
             should_break := context.assertion_failed(loc, message);
             context.handling_assertion_failure = false;
-            if should_break  Runtime_Support.debug_break();
+            if should_break  debug_break();
         }
     }
 }
@@ -762,7 +758,7 @@ assert_helper :: (message := "", args: .. Any, loc := #caller_location) -> bool 
     context.handling_assertion_failure = true;
 
     text := ifx args.count then tprint(message, ..args) else message;
-    Runtime_Support.assertion_failed(loc, text);
+    context.assertion_failed(loc, text);
 
     context.handling_assertion_failure = false;
     return true;

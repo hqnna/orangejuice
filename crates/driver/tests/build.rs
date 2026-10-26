@@ -7572,3 +7572,21 @@ fn a_declared_context_gets_temporary_storage_on_first_use() {
     "[logged]\n",
   );
 }
+
+#[test]
+fn assert_helper_reports_through_the_contexts_assertion_handler() {
+  // Basic reaches Runtime_Support's names without importing it by name, the
+  // way the reference's does: Jails parses Runtime_Support on its own and
+  // never expects to meet it again among Basic's imports.
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       context.assertion_failed = (loc: Source_Code_Location, message: string) -> bool {\n\
+         print(\"failed: %\\n\", message);\n\
+         return false;\n\
+       };\n\
+       print(\"%\\n\", assert_helper(\"x is %\", 3));\n\
+     }\n",
+    "failed: x is 3\ntrue\n",
+  );
+}
