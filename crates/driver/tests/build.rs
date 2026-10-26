@@ -6478,3 +6478,117 @@ fn a_run_fills_a_placeholder_with_a_string_added_to_its_own_compilation() {
     "42\n",
   );
 }
+
+const C_ABI_SHAPES: &str = r#"
+#include <stdint.h>
+struct Three   { float x, y, z; };
+struct Quad    { double a, b, c, d; };
+struct FloatInt { float f; int32_t i; };
+struct Bytes   { int8_t a; int16_t b; int8_t c; };
+struct Odd     { char tag[3]; };
+float   sum_three(struct Three t)          { return t.x + t.y * 10.0f + t.z * 100.0f; }
+double  sum_quad(struct Quad q)            { return q.a + q.b + q.c + q.d; }
+int64_t mix(struct FloatInt v)             { return (int64_t)(v.f * 10.0f) + v.i; }
+int64_t bytes(struct Bytes b)              { return b.a + b.b * 100 + b.c * 10000; }
+int64_t odd(struct Odd o)                  { return o.tag[0] + o.tag[1] + o.tag[2]; }
+struct Three   make_three(float s)         { struct Three t = {s, s * 2.0f, s * 3.0f}; return t; }
+struct Quad    make_quad(double s)         { struct Quad q = {s, s + 1, s + 2, s + 3}; return q; }
+struct FloatInt make_mix(int32_t i)        { struct FloatInt v = {0.5f, i}; return v; }
+struct Bytes   make_bytes(void)            { struct Bytes b = {1, 2, 3}; return b; }
+int64_t call_back(struct Three (*f)(struct Quad), double s) {
+  struct Quad q = {s, s, s, s};
+  struct Three t = f(q);
+  return (int64_t)(t.x + t.y + t.z);
+}
+"#;
+
+#[test]
+fn every_aggregate_class_crosses_the_c_boundary_both_ways() {
+  // B9 of the 2026 review: the classification in `oj_types::abi` checked
+  // against what a C compiler does, for the shapes the two conventions treat
+  // differently — three and four floats (a homogeneous aggregate on arm64,
+  // vector registers on x86-64), a float beside an int, packed small
+  // integers, a three-byte array — each passed in, returned, and handed to a
+  // callback that C calls (**L§7.11**).
+  let Some(built) = with_c_library(
+    C_ABI_SHAPES,
+    "cabi :: #library \"cabi\";\n\
+     Three    :: struct { x, y, z: float32; }\n\
+     Quad     :: struct { a, b, c, d: float64; }\n\
+     FloatInt :: struct { f: float32; i: s32; }\n\
+     Bytes    :: struct { a: s8; b: s16; c: s8; }\n\
+     Odd      :: struct { tag: [3] u8; }\n\
+     sum_three  :: (t: Three) -> float32 #foreign cabi;\n\
+     sum_quad   :: (q: Quad) -> float64 #foreign cabi;\n\
+     mix        :: (v: FloatInt) -> s64 #foreign cabi;\n\
+     bytes      :: (b: Bytes) -> s64 #foreign cabi;\n\
+     odd        :: (o: Odd) -> s64 #foreign cabi;\n\
+     make_three :: (s: float32) -> Three #foreign cabi;\n\
+     make_quad  :: (s: float64) -> Quad #foreign cabi;\n\
+     make_mix   :: (i: s32) -> FloatInt #foreign cabi;\n\
+     make_bytes :: () -> Bytes #foreign cabi;\n\
+     call_back  :: (f: (Quad) -> Three #c_call, s: float64) -> s64 #foreign cabi;\n\
+     spread :: (q: Quad) -> Three #c_call {\n\
+       t: Three; t.x = cast(float32) q.a; t.y = cast(float32) (q.b * 2); t.z = cast(float32) (q.c * 3);\n\
+       return t;\n\
+     }\n\
+     main :: () {\n\
+       t: Three; t.x = 1; t.y = 2; t.z = 3;\n\
+       put_number(cast(s64) sum_three(t));\n\
+       q: Quad; q.a = 1; q.b = 2; q.c = 3; q.d = 36;\n\
+       put_number(cast(s64) sum_quad(q));\n\
+       v: FloatInt; v.f = 4.0; v.i = 2;\n\
+       put_number(mix(v));\n\
+       b: Bytes; b.a = 1; b.b = 2; b.c = 3;\n\
+       put_number(bytes(b));\n\
+       o: Odd; o.tag[0] = 10; o.tag[1] = 20; o.tag[2] = 12;\n\
+       put_number(odd(o));\n\
+       m := make_three(2);\n\
+       put_number(cast(s64) (m.x + m.y + m.z));\n\
+       n := make_quad(10);\n\
+       put_number(cast(s64) (n.a + n.b + n.c + n.d));\n\
+       w := make_mix(41);\n\
+       put_number(cast(s64) (w.f * 2) + w.i);\n\
+       k := make_bytes();\n\
+       put_number(cast(s64) k.a + cast(s64) k.b * 10 + cast(s64) k.c * 100);\n\
+       put_number(call_back(spread, 7));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(built.status, 0, "the program should exit cleanly");
+  assert_eq!(
+    built.output,
+    "321\n42\n42\n30201\n42\n12\n46\n42\n321\n42\n"
+  );
+}
+
+#[test]
+fn a_run_that_adds_to_its_own_compilation_runs_once_per_round() {
+  // B9 of the 2026 review: the replay that answers a self-modification runs
+  // every `#run` of the program again, so a side effect happens once in the
+  // round that asked and once in the replay — twice, and not the eight times
+  // the round cap would allow (`docs/spec.md` §6.5).
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let log = directory.path().join("rounds.log");
+  let Some(built) = build_and_run(&format!(
+    "fopen  :: (path: *u8, mode: *u8) -> *void #foreign libc;\n\
+     fputs  :: (text: *u8, file: *void) -> s32 #foreign libc;\n\
+     fclose :: (file: *void) -> s32 #foreign libc;\n\
+     #placeholder ANSWER;\n\
+     #run {{\n\
+       #import \"Compiler\";\n\
+       file := fopen(\"{}\", \"a\");\n\
+       fputs(\"round\\n\", file);\n\
+       fclose(file);\n\
+       add_build_string(\"ANSWER :: 7;\", -1);\n\
+     }}\n\
+     main :: () {{ put_number(ANSWER); }}\n",
+    log.display()
+  )) else {
+    return;
+  };
+  assert_eq!(built.output, "7\n");
+  let rounds = std::fs::read_to_string(&log).expect("the #run wrote its log");
+  assert_eq!(rounds.lines().count(), 2, "{rounds}");
+}

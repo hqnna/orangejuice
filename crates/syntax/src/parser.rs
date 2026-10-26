@@ -4518,6 +4518,84 @@ mod tests {
     assert!(printed.contains("mov t, [b + (SIZE + 1)];"));
   }
 
+  /// What the parser recovered: its errors, and the names of the top-level
+  /// declarations it still found.
+  fn recovered(source: &str) -> (Vec<String>, Vec<String>) {
+    let (parsed, interner) = parsed(source);
+    let errors = parsed
+      .diagnostics
+      .iter()
+      .filter(|diagnostic| diagnostic.severity == Severity::Error)
+      .map(|diagnostic| diagnostic.message.clone())
+      .collect();
+    let NodeData::Block(block) = parsed.ast.data(parsed.root) else {
+      return (errors, Vec::new());
+    };
+    let names = block
+      .statements
+      .iter()
+      .filter_map(|statement| match parsed.ast.data(*statement) {
+        NodeData::Declaration(declaration) => declaration.name,
+        _ => None,
+      })
+      .filter_map(|name| match parsed.ast.data(name) {
+        NodeData::Ident(ident) => {
+          Some(String::from_utf8_lossy(interner.resolve(ident.name)).into_owned())
+        }
+        _ => None,
+      })
+      .collect();
+    (errors, names)
+  }
+
+  #[test]
+  fn a_missing_semicolon_is_reported_and_the_file_goes_on() {
+    // Each kind of statement the `;` rule (rules.rs) requires one after.
+    for source in [
+      "a := 1\nlater :: 2;",
+      "a :: struct { x: int; } b := 2\nlater :: 2;",
+      "f :: () { x := 1 y := 2; }\nlater :: 2;",
+      "f :: () { g() h(); }\nlater :: 2;",
+      "f :: () { return 1 }\nlater :: 2;",
+      "P :: #type (int) -> int\nlater :: 2;",
+    ] {
+      let (errors, names) = recovered(source);
+      assert!(!errors.is_empty(), "{source:?} should not parse cleanly");
+      assert!(
+        errors.iter().any(|error| error.contains("';'")),
+        "{source:?}: {errors:?}"
+      );
+      assert!(
+        names.contains(&String::from("later")),
+        "{source:?} lost what follows: {names:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn a_stray_close_brace_is_reported_and_the_file_goes_on() {
+    let (errors, names) = recovered("first :: 1;\n}\nlater :: 2;");
+    assert!(!errors.is_empty());
+    assert!(names.contains(&String::from("first")), "{names:?}");
+    assert!(names.contains(&String::from("later")), "{names:?}");
+  }
+
+  #[test]
+  fn an_unterminated_block_is_reported_where_the_file_ends() {
+    for source in [
+      "f :: () {\n  x := 1;\n",
+      "S :: struct {\n  x: int;\n",
+      "f :: () { if true { x := 1; }\n",
+      "E :: enum { A; B;\n",
+    ] {
+      let (errors, _) = recovered(source);
+      assert!(
+        errors.iter().any(|error| error.contains("'}'")),
+        "{source:?}: {errors:?}"
+      );
+    }
+  }
+
   #[test]
   fn a_modify_may_be_one_expression_without_braces() {
     assert_eq!(
