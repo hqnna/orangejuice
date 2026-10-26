@@ -1499,7 +1499,16 @@ impl<'a> Program<'a> {
     match import {
       Some(import) => {
         let filter = self.name_filter(parsed, filter_type, filter);
-        if let Some(module) = self.instantiate(parsed, import, target.scope, source) {
+        // `using X :: #import "X";` already imported the module to declare
+        // `X`; importing it again would report a missing one twice.
+        let module = match declared {
+          Some(decl) => match self.tree.decl(decl).kind {
+            DeclKind::Module(module) => Some(module),
+            _ => None,
+          },
+          None => self.instantiate(parsed, import, target.scope, source),
+        };
+        if let Some(module) = module {
           let (only, except) = filter;
           self.tree.add_import(
             target.import_destination(),

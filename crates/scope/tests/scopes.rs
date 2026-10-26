@@ -345,6 +345,16 @@ fn a_missing_module_is_reported_at_the_import() {
 }
 
 #[test]
+fn a_missing_module_a_using_declares_is_reported_once() {
+  let fixture = Fixture::new();
+  fixture.write("main.jai", "using Somewhere :: #import \"Nowhere\";\n");
+
+  resolve(&fixture, "main.jai", |program, _| {
+    assert_eq!(errors(program), ["Could not find module 'Nowhere'."]);
+  });
+}
+
+#[test]
 fn a_using_of_an_enum_declaration_widens_the_scope_around_it() {
   let fixture = Fixture::new();
   fixture.write(
