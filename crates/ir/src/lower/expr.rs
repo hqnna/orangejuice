@@ -214,6 +214,22 @@ impl Lowering<'_, '_> {
         indirect: false,
       });
     }
+    // An instantiated procedure constant is that instantiation's address
+    // (**L§7.9**).
+    if let Value::Instance(instance) = constant.value {
+      let id = self.instance_id(instance);
+      let procedure_type = self.procedures[id.0 as usize].type_id;
+      let dest = self.value(procedure_type);
+      self.emit(Inst::ProcedureAddress {
+        dest,
+        procedure: id,
+      });
+      return Some(Val {
+        id: dest,
+        type_id: procedure_type,
+        indirect: false,
+      });
+    }
     // A `Type` is its `Type_Info`'s address at runtime, which is also what
     // makes two of them compare equal exactly when the types are the same
     // (**L§3.10**, **L§3.13**).

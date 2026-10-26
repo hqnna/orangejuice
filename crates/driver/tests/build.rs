@@ -7433,3 +7433,24 @@ fn a_note_after_a_members_inline_type_is_the_members() {
     "scared [\"serialize:default\"]\ninner [\"plain\"]\n",
   );
 }
+
+#[test]
+fn a_quick_lambda_is_a_polymorphic_structs_argument() {
+  // toml-jai bakes `Table(The_Key, u8, k => k.id, (k1, k2) => k1.id == k2.id)`:
+  // each lambda becomes the procedure type its parameter asks for, under the
+  // arguments before it (**L§7.9**, **L§8.5**).
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     K :: struct { id: u32; }\n\
+     KT :: Table(K, u8, k => k.id, (k1, k2) => k1.id == k2.id);\n\
+     main :: () {\n\
+       t: KT;\n\
+       table_add(*t, .{id = 2}, 8);\n\
+       ok, v := table_find(*t, .{id = 2});\n\
+       print(\"% %\\n\", ok, v);\n\
+     }\n",
+    "true 8\n",
+  );
+}
+

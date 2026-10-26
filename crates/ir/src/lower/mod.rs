@@ -1282,6 +1282,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       | Value::EnumName(_)
       | Value::Code { .. }
       | Value::Procedure(_)
+      | Value::Instance(_)
       | Value::Address(_)
       | Value::Location { .. }
       | Value::Array(_)

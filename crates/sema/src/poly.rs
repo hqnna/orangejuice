@@ -52,6 +52,7 @@ pub(crate) enum ConstKey {
   Name(Symbol),
   Code(SourceId, NodeId),
   Procedure(DeclId),
+  Instance(InstanceId),
   Address(crate::constants::Address),
   Location(SourceId, NodeId),
   Written(SourceId, NodeId),
@@ -70,6 +71,7 @@ pub(crate) fn const_key(value: &Const) -> ConstKey {
     Value::EnumName(name) => ConstKey::Name(*name),
     Value::Code { source, node, .. } => ConstKey::Code(*source, *node),
     Value::Procedure(decl) => ConstKey::Procedure(*decl),
+    Value::Instance(instance) => ConstKey::Instance(*instance),
     Value::Address(address) => ConstKey::Address(address.clone()),
     Value::Location { source, node } => ConstKey::Location(*source, *node),
     Value::Written { source, node, .. } => ConstKey::Written(*source, *node),
@@ -468,6 +470,7 @@ impl Checker<'_> {
     let mut overrides = Vec::new();
     let given = given.iter().copied();
     let mut bindings = Vec::with_capacity(parameters.len());
+    let mut deferred = Vec::new();
     for (index, (parameter, expression)) in parameters.iter().zip(given).enumerate() {
       // A `..Type` slot is every argument that landed in it, gathered into a
       // `[N] Type` the body can index and iterate (**L§8.5**).
@@ -498,7 +501,18 @@ impl Checker<'_> {
           // (**L§5.11**), so `Thing(main)` bakes one.
           let written = self.expression_type(scope, source, expression);
           let named = self.named_procedure(&written);
-          written.constant.or(named)?
+          match written.constant.clone().or(named) {
+            Some(value) => value,
+            // A quick lambda or a polymorphic procedure is not a value until
+            // it is instantiated to the procedure type the parameter asks
+            // for, which may name the parameters before it:
+            // `Table(K, u8, k => k.id)` (**L§7.9**, **L§8.5**).
+            None if self.is_procedure_family(&written, source, expression) => {
+              deferred.push((*parameter, expression));
+              continue;
+            }
+            None => return None,
+          }
         }
         // A parameter the instantiation left out takes its default.
         None => self.parameter_default(*parameter)?,
@@ -508,6 +522,15 @@ impl Checker<'_> {
         false => value.convert(self.types(), declared).unwrap_or(value),
       };
       bindings.push((*parameter, value));
+    }
+    for (parameter, expression) in deferred {
+      let value = self.instantiate_struct_argument(
+        &bindings,
+        parameter,
+        (scope, source, expression),
+        (body_source, body, arguments_scope, outer_scope),
+      )?;
+      bindings.push((parameter, value));
     }
     // `Thing :: struct (x: $T)` declares `T` beside `x`; the argument's own
     // type is what it bakes to (**L§8.5**).
@@ -620,6 +643,55 @@ impl Checker<'_> {
       self.record_struct_instance(baked, instance);
     }
     Some(baked)
+  }
+
+  /// Whether an argument is a procedure that only becomes a value once it is
+  /// instantiated: a quick lambda, or a polymorphic procedure (**L§7.8**).
+  fn is_procedure_family(&mut self, written: &Expr, source: SourceId, node: NodeId) -> bool {
+    if self.polymorphic_procedure(written).is_some() {
+      return true;
+    }
+    matches!(
+      self.ast(source).map(|ast| ast.data(node)),
+      Some(NodeData::ProcedureHeader(_))
+    )
+  }
+
+  /// A procedure argument of a polymorphic struct, instantiated to the type
+  /// its parameter declares under the arguments already bound — which is
+  /// what turns `k => k.id` into `(K) -> u32` in `Table(K, u8, k => k.id)`
+  /// (**L§7.9**, **L§8.5**). The parameter's type is read under a provisional
+  /// instantiation that binds those arguments and nothing else; it is never
+  /// cached, so the real one is still made from every argument.
+  fn instantiate_struct_argument(
+    &mut self,
+    bound: &[(DeclId, Const)],
+    parameter: DeclId,
+    (scope, source, node): (ScopeId, SourceId, NodeId),
+    (body_source, body, arguments_scope, outer_scope): (SourceId, NodeId, ScopeId, ScopeId),
+  ) -> Option<Const> {
+    let provisional = InstanceId(self.instances.len() as u32);
+    self.program().mark_instantiated(arguments_scope);
+    self.instances.push(Instance {
+      decl: None,
+      source: body_source,
+      header: body,
+      root: arguments_scope,
+      outer_scope,
+      bindings: bound.to_vec(),
+      overrides: Vec::new(),
+      type_id: TypeId::UNKNOWN,
+      parent: self.current_instance,
+      expansion: None,
+    });
+    let declared = self.with_instance(Some(provisional), |checker| {
+      checker.decl_type(parameter).value
+    });
+    if self.types().procedure_of(declared).is_none() || self.mentions_polymorph(declared) {
+      return None;
+    }
+    let instance = self.procedure_instance_for(scope, source, node, declared)?;
+    Some(Const::new(declared, Value::Instance(instance)))
   }
 
   /// Whether an actual type satisfies a `$T/Base` restriction (**L§7.8**): it

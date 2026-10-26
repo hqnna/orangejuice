@@ -1200,6 +1200,7 @@ Holder :: struct (N: int, T: Type) #modify { if N < 8 N = 8; return true; } { ..
 - Members may use parameters in types and defaults (`values: [N] T; base.size = size_of(T);`), may declare constants from parameters (`NUM_SQUARES :: count_x*count_y;`), and may reference another parameter's struct constants (`value: holder.T` in a procedure header).
 - Bakes on structs: `#bake_arguments`/`#bake_constants` produce partially or fully instantiated struct types. Bakes cannot depend on each other (`foo :: ($T: Type, $R: Type = Thing(T))` is not allowed).
 - A non-polymorphic struct with polymorphic non-constant data members is an error. Polymorphic structs inside polymorphic procedures are supported. Printing a polymorphic struct type shows its parameters.
+- A procedure argument may be a quick lambda or a polymorphic procedure: it is instantiated to the procedure type its parameter declares, read with the arguments before it bound, so `Table(K, u8, k => k.id, (k1, k2) => k1.id == k2.id)` hashes with a `(K) -> u32` (toml-jai). Two lambdas written at different places are different arguments, and so different types.
 
 ### 8.6 `#place`
 

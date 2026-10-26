@@ -61,6 +61,10 @@ pub enum Value {
     node: oj_syntax::ast::NodeId,
     scope: oj_scope::ScopeId,
   },
+  /// One instantiation of a polymorphic procedure — a quick lambda given as a
+  /// polymorphic struct's argument, say — whose address the back end
+  /// supplies, the way it does a [`Value::Procedure`]'s (**L§7.9**).
+  Instance(crate::poly::InstanceId),
 }
 
 /// Where a constant address points, and how far into it (**L§5.11**).
@@ -154,7 +158,7 @@ impl Value {
       // it, which is what makes `#if given_hash_function` in `Hash_Table` take
       // the branch that uses it (**L§5.9**). Any other address the linker
       // settles is not foldable here.
-      Self::Procedure(_) => Some(true),
+      Self::Procedure(_) | Self::Instance(_) => Some(true),
       Self::Address(_) => None,
       // A location and a written aggregate are values the back end builds,
       // which have no truth of their own.
