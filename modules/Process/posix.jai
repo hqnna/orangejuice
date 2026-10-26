@@ -2,7 +2,9 @@
 // The POSIX half: fork, exec, and three pipes.
 //
 
-Linux :: #import "Linux";
+#if OS == .LINUX {
+    Linux :: #import "Linux";
+}
 
 Process :: struct {
     input:  Pipe;
@@ -70,9 +72,13 @@ create_process :: (process: *Process, args: .. string, working_directory := "", 
 
     if pid == 0 {
         // The child. Nothing here may return: whatever happens, it exits.
-        // The child asks the kernel to kill it if this process dies, so a
-        // crash here does not leave it running.
-        Linux.prctl(Linux.PR_SET_PDEATHSIG, cast(u64) SIGKILL, 0, 0, 0);
+        // On Linux the child asks the kernel to kill it if this process dies,
+        // so a crash here does not leave it running. Darwin has no `prctl`
+        // and no such request, and a reference to it is a symbol a `#run`
+        // that starts a process could not resolve there.
+        #if OS == .LINUX {
+            Linux.prctl(Linux.PR_SET_PDEATHSIG, cast(u64) SIGKILL, 0, 0, 0);
+        }
 
         if capture_and_return_output {
             close(input_fds[1]);

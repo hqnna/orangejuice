@@ -48,7 +48,10 @@ fn system_has(packages: &[&str]) -> bool {
   if pkg_config(&["--exists"], packages).is_some() {
     return true;
   }
-  if oj_testsupport::linker_required() {
+  // X11, GLX and ALSA are the Linux stack these modules have backends for;
+  // macOS has none yet (`TODO.md`), and the flake only provides the
+  // libraries to a Linux build, so only there is a missing one an error.
+  if oj_testsupport::linker_required() && cfg!(target_os = "linux") {
     panic!("pkg-config does not know {packages:?}, and this run requires everything to link");
   }
   eprintln!("skipping: pkg-config does not know {packages:?}");
