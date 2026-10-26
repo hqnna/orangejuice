@@ -511,6 +511,9 @@ constant of yet. The Way to Jai and Advent of Code are unchanged.
 | Advent of Code | 10 | 0 | 1 |
 | toml-jai | 5 | 1 | 1 |
 
+Quick lambdas as struct arguments (**L§8.5**) and what `custom_handlers` ran
+into behind them closed the last one: toml-jai is 6 / 0 / 1.
+
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
 book program that prints a workspace number expects to be driven by
