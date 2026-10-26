@@ -1975,13 +1975,7 @@ impl Parser<'_> {
     } else {
       None
     };
-    // `f({ start = 1, count = 2 })` (Focus): a call argument cannot be a
-    // block, so a brace there opens a literal with no type of its own, the
-    // way `.{` does.
-    let expression = match self.at(TokenKind::OPEN_BRACE) {
-      true => self.parse_brace_literal()?,
-      false => self.parse_expression()?,
-    };
+    let expression = self.parse_expression()?;
     Some(Argument { name, expression })
   }
 
@@ -2110,6 +2104,10 @@ impl Parser<'_> {
     let start = self.span().start;
 
     match self.kind() {
+      // `p0: Vector2 = { x0, y0 };` (the betas after 0.2.009): where an
+      // operand is expected a brace cannot open a block, so it opens the
+      // literal `.{` would.
+      TokenKind::OPEN_BRACE => self.parse_brace_literal(),
       TokenKind::NUMBER => {
         let token = self.bump();
         Some(self.number_literal(&token))
@@ -4024,9 +4022,14 @@ impl Parser<'_> {
 
     let assertion_string = if assertion_message.is_some() {
       assertion_message
-    } else if is_assertion && self.eat(TokenKind::COMMA) {
+    } else if is_assertion
+      && self.at(TokenKind::COMMA)
+      && self.kind_at(1) == TokenKind::STRING
+    {
       // `#assert cond, "message";` — the comma form the betas after 0.2.009
-      // write (Focus).
+      // write (Focus). Only a string may follow: in
+      // `#insert(remove = #assert(false), break = …)` the comma is the list's.
+      self.bump();
       Some(self.parse_expression()?)
     } else if is_assertion && self.at(TokenKind::STRING) {
       let token = self.bump();
@@ -4600,6 +4603,13 @@ mod tests {
       printed("f :: () { g({ a = 1, b = 2 }); }"),
       printed("f :: () { g(.{ a = 1, b = 2 }); }")
     );
+    // Anywhere an operand is expected, which is where a block cannot be.
+    assert_eq!(
+      printed("f :: () { p: V = { x, y }; p = {}; q := V.[{0, -1}, {1, 0}]; return { 1, 2 }; }"),
+      printed("f :: () { p: V = .{ x, y }; p = .{}; q := V.[.{0, -1}, .{1, 0}]; return .{ 1, 2 }; }")
+    );
+    // Blocks stay blocks, and a switch is still one.
+    assert!(errors("f :: () { if x { y(); } while x { } for xs { } if x == { case 1; } { z(); } }").is_empty());
   }
 
   #[test]
@@ -4666,8 +4676,8 @@ mod tests {
       "#assert false \"Unsupported OS\";\n"
     );
     assert_eq!(
-      printed("#assert x > 0, MESSAGE;"),
-      "#assert x > 0, MESSAGE;\n"
+      printed("#insert(remove = #assert(false), break = break) body;"),
+      "#insert(break=break, remove=#assert (false)) body;\n"
     );
     assert!(
       printed("#if OS == .LINUX { x :: 1; } else { x :: 2; }").starts_with("#if OS == .LINUX {")
