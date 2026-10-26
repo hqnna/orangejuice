@@ -613,6 +613,15 @@ impl<'a> Checker<'a> {
     Some(self.ast(source)?.node(node).span)
   }
 
+  /// How many errors have been reported so far.
+  pub(crate) fn error_count(&self) -> usize {
+    self
+      .diagnostics()
+      .iter()
+      .filter(|diagnostic| diagnostic.severity == oj_diag::Severity::Error)
+      .count()
+  }
+
   pub(crate) fn checking_a_body(&self) -> bool {
     self.checking_bodies > 0
   }

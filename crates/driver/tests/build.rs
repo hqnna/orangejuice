@@ -541,6 +541,35 @@ fn a_run_that_crashes_fails_the_build_instead_of_the_compiler() {
 }
 
 #[test]
+fn a_run_reports_a_call_no_overload_accepts_and_does_not_execute() {
+  // A `#run`'s body is checked like any other (**L§12.1**): the call is
+  // reported where it is, once, and the run that holds it never reaches the
+  // back end.
+  for run in [
+    "#run f(\"x\");",
+    "#run { f(\"x\"); }",
+    "#run { put_number(1); f(\"x\"); }",
+  ] {
+    let Some(diagnostics) =
+      diagnostics_of(&format!("f :: (a: int) {{}}\n{run}\nmain :: () {{}}\n"))
+    else {
+      return;
+    };
+    let expected = "The arguments given to 'f' did not match any of its overloads. \
+                    The arguments were: (string).";
+    assert_eq!(
+      diagnostics.matches(expected).count(),
+      1,
+      "{run}: {diagnostics}"
+    );
+    assert!(
+      !diagnostics.contains("could not generate code"),
+      "{run}: {diagnostics}"
+    );
+  }
+}
+
+#[test]
 fn a_run_that_calls_exit_ends_the_run_rather_than_the_compiler() {
   // `exit` from a `#run` is answered by the guard: a non-zero status is the
   // run's failure, and zero is a run that finished early.

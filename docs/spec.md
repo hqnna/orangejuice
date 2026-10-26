@@ -757,6 +757,12 @@ now, each pinned by a test in `crates/driver/tests/build.rs`,
   two arguments, and the whole `Socket` module passed pointers where glibc's
   `__attribute__((__transparent_union__))` parameters were bound — `tools/cbind`
   emits those as the member the C ABI actually passes now.
+- **A `#run`'s body was never checked as a body.** A call in it that no
+  overload accepted was not reported — `#run f("x");` compiled to nothing
+  without a word, and a block with a statement before it reached the back end
+  as `could not generate code`. The checker checks what a run evaluates the
+  way it checks a procedure now, and a run whose body has an error does not
+  execute.
 - A **named `for_expansion` reached through `#bake_arguments`** — `only_set ::
   #bake_arguments only_set_or_unset(target_value = true)`, which is how
   `Bit_Array` writes it. The bake's defaults were dropped when the macro was

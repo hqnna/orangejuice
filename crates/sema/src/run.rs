@@ -247,19 +247,38 @@ impl Checker<'_> {
 
     // The condition of an `#assert` is the one thing the run evaluates; what
     // it produces is nothing (**L§12.2**).
+    // What a run evaluates is a body like any other, so a call in it that no
+    // overload accepts is reported where it is rather than reaching the back
+    // end with no type (**L§12.1**), and a run whose body has an error does
+    // not execute.
+    let errors_before = self.error_count();
     let (result, folded) = match shape.value {
       Some(expression) => {
         let expression_scope = self.scope_at(source, expression, scope);
-        let info = self.expression_type(expression_scope, source, expression);
+        let info = self.while_checking_body(|checker| {
+          checker.expression_type(expression_scope, source, expression)
+        });
         let hardened = self.harden(info.type_id);
         (
           if assertion { TypeId::VOID } else { hardened },
           info.constant,
         )
       }
-      None => (self.run_declared_result(source, header, scope), None),
+      None => {
+        let result = self.run_declared_result(source, header, scope);
+        let returns = match result {
+          TypeId::VOID => Vec::new(),
+          other => vec![other],
+        };
+        let defaults = vec![false; returns.len()];
+        self.check_procedure_body(source, scope, block, returns, defaults);
+        (result, None)
+      }
     };
 
+    if self.error_count() > errors_before {
+      return Expr::UNKNOWN;
+    }
     if assertion {
       return self.assertion(&shape, node, folded);
     }
