@@ -294,6 +294,9 @@ struct Lowering<'c, 'p> {
   /// storage of its own (**L§15**), so it is bound here instead of becoming a
   /// local.
   asm_register_aliases: HashMap<(Option<InstanceId>, DeclId), DeclId>,
+  /// A parameter passed by pointer lives where the caller's value does: its
+  /// address is the pointer that came in, not a copy (**L§7.6**).
+  parameter_storage: HashMap<LocalId, ValueId>,
   /// `Runtime_Support.__jai_runtime_init`, which the generated entry point
   /// calls before the program (**C§13**).
   runtime_init: Option<ProcId>,
@@ -379,6 +382,7 @@ impl<'c, 'p> Lowering<'c, 'p> {
       body_source: SourceId(0),
       asm_registers: HashMap::default(),
       asm_register_aliases: HashMap::default(),
+      parameter_storage: HashMap::default(),
       runtime_init: None,
       crash_handler_init: None,
       backtrace_on_crash: true,
@@ -1378,6 +1382,9 @@ impl<'c, 'p> Lowering<'c, 'p> {
   }
 
   fn local_address(&mut self, local: LocalId) -> ValueId {
+    if let Some(incoming) = self.parameter_storage.get(&local) {
+      return *incoming;
+    }
     let type_id = self.locals[local.0 as usize].type_id;
     let pointer = self.pointer_to(type_id);
     let dest = self.value(pointer);

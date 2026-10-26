@@ -7590,3 +7590,29 @@ fn assert_helper_reports_through_the_contexts_assertion_handler() {
     "failed: x is 3\ntrue\n",
   );
 }
+
+#[test]
+fn a_struct_argument_is_the_callers_own_storage() {
+  // jai_parser collects a file's globals by appending through the address of
+  // a struct parameter, and the caller sees them; a string is the callee's
+  // own copy, which toml-jai's `string_to_int_checked` advances (L§7.6).
+  assert_output(
+    "#import \"Basic\";\n\
+     Data :: struct { items: [..] int; }\n\
+     visit :: (n: int, data: Data) { array_add(*data.items, n); }\n\
+     Parser :: struct { visit: (n: int, data: Data); data: Data; }\n\
+     main :: () {\n\
+       d: Data;\n\
+       visit(1, d);\n\
+       visit(2, d);\n\
+       p: Parser;\n\
+       p.visit = visit;\n\
+       p.visit(3, p.data);\n\
+       text := \"abc\";\n\
+       skip(text);\n\
+       print(\"% % %\\n\", d.items, p.data.items, text);\n\
+     }\n\
+     skip :: (s: string) { advance(*s, 1); }\n",
+    "[1, 2] [3] abc\n",
+  );
+}

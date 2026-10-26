@@ -4,7 +4,7 @@ use oj_syntax::ast::{
   Argument, AsmOperandKind, AsmSize, DeclarationFlags, NodeData, NodeId, OperatorType,
   ProcedureFlags,
 };
-use oj_types::TypeId;
+use oj_types::{ArrayKind, TypeId, TypeKind};
 
 use crate::checker::Checker;
 
@@ -708,6 +708,21 @@ impl Checker<'_> {
     let target = self.expression_type(scope, source, left);
     let value = self.expression_type(scope, source, right);
     self.check_must_received(scope, source, right, 1);
+    if let Some(parameter) = self.written_parameter(scope, source, left) {
+      let name = self.program().tree().decl(parameter).name;
+      let name = self.interner().resolve_lossy(name).into_owned();
+      let span = self
+        .ast(source)
+        .map_or(Span::at(0), |ast| ast.node(node).span);
+      self.error(
+        source,
+        span,
+        format!(
+          "Attempt to assign to '{name}', a parameter passed by reference: struct, array and string parameters are immutable. Copy it into a local to change it."
+        ),
+      );
+      return;
+    }
     // A compound assignment goes through the operator, whose result may be
     // wider than the target; only a plain `=` is a straight conversion.
     if operator != OperatorType::ASSIGN {
@@ -720,6 +735,67 @@ impl Checker<'_> {
       .ast(source)
       .map_or(Span::at(0), |ast| ast.node(node).span);
     self.report_mismatch(source, span, target.type_id, value.type_id);
+  }
+
+  /// The parameter an assignment would write, when what it writes is a
+  /// struct, array or string parameter or a part of one held in place rather
+  /// than reached through a pointer. Such a parameter is the caller's value,
+  /// "maybe by reference", and is immutable (**L§7.6**).
+  fn written_parameter(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    mut node: NodeId,
+  ) -> Option<DeclId> {
+    loop {
+      let data = self.ast(source)?.data(node).clone();
+      match data {
+        NodeData::BinaryOperator { operator, left, .. }
+          if operator == OperatorType::DOT || operator == OperatorType::ARRAY_SUBSCRIPT =>
+        {
+          let base = self.expression_type(scope, source, left).type_id;
+          let underlying = self.types().underlying(base);
+          let in_place = match self.types().kind(underlying) {
+            TypeKind::Struct(_) | TypeKind::String | TypeKind::Any => operator == OperatorType::DOT,
+            TypeKind::Array { kind, .. } => match operator == OperatorType::DOT {
+              true => true,
+              false => matches!(kind, ArrayKind::Fixed(_)),
+            },
+            _ => false,
+          };
+          if !in_place {
+            return None;
+          }
+          node = left;
+        }
+        NodeData::Ident(ident) => {
+          let at = self.scope_for(source, node, scope);
+          let oj_scope::Resolution::Found(found) = self.program().tree().lookup(at, ident.name)
+          else {
+            return None;
+          };
+          let [decl] = found[..] else {
+            return None;
+          };
+          let info = self.program().tree().decl(decl);
+          if info.kind != DeclKind::Parameter
+            || self.program().tree().scope_kind(info.scope)
+              != oj_scope::ScopeKind::ProcedureArguments
+            || self.program().is_in_macro(info.scope)
+          {
+            return None;
+          }
+          let type_id = self.expression_type(scope, source, node).type_id;
+          let underlying = self.types().underlying(type_id);
+          let by_reference = matches!(
+            self.types().kind(underlying),
+            TypeKind::Struct(_) | TypeKind::String | TypeKind::Any | TypeKind::Array { .. }
+          );
+          return by_reference.then_some(decl);
+        }
+        _ => return None,
+      }
+    }
   }
 
   /// The return types of the procedure the innermost macro expanded into,

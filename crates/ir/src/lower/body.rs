@@ -34,6 +34,7 @@ impl Lowering<'_, '_> {
     self.union_members.clear();
     self.asm_registers.clear();
     self.asm_register_aliases.clear();
+    self.parameter_storage.clear();
     self.loops.clear();
     self.expanded_loops.clear();
     self.expansions.clear();
@@ -145,13 +146,26 @@ impl Lowering<'_, '_> {
             .unwrap_or_else(|| format!("arg{declared}"));
           let local = self.new_local(name, parameter.type_id);
           self.locals[local.0 as usize].parameter = Some(declared as u32 + 1);
-          let address = self.local_address(local);
-          let value = Val {
-            id: incoming[index],
-            type_id: parameter.type_id,
-            indirect: parameter.kind == ParameterKind::Pointer,
-          };
-          self.store(address, value);
+          // "Maybe by reference": an argument bigger than two words is the
+          // caller's own storage, so `*data.items` reaches what the caller
+          // passed, while a `string`, a view or an `Any` is the callee's own
+          // copy, which `advance(*s)` may move (**L§7.6**, provisional). A
+          // `#c_call` one came by value from C.
+          let (size, _) = self.size_align(parameter.type_id);
+          if parameter.kind == ParameterKind::Pointer
+            && size > 16
+            && !flags.contains(ProcedureFlags::C_CALL)
+          {
+            self.parameter_storage.insert(local, incoming[index]);
+          } else {
+            let address = self.local_address(local);
+            let value = Val {
+              id: incoming[index],
+              type_id: parameter.type_id,
+              indirect: parameter.kind == ParameterKind::Pointer,
+            };
+            self.store(address, value);
+          }
           if let Some(Some(id)) = body.parameters.get(declared) {
             {
               let key = self.local_key(*id);
@@ -2467,6 +2481,7 @@ impl Lowering<'_, '_> {
     self.union_members.clear();
     self.asm_registers.clear();
     self.asm_register_aliases.clear();
+    self.parameter_storage.clear();
     self.loops.clear();
     self.expansions.clear();
     self.call_sites.clear();

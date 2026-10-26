@@ -993,3 +993,32 @@ fn a_backticked_return_leaves_out_the_values_the_caller_gave_defaults() {
     vec!["Not enough return values: Wanted 2, got 0.".to_string()]
   );
 }
+
+#[test]
+fn a_struct_array_or_string_parameter_is_immutable_where_it_is_held_in_place() {
+  // It is the caller's value, "maybe by reference" (L§7.6): what it points at
+  // may change, its address may be taken, and a scalar parameter is a local.
+  let found = errors(
+    "Data :: struct { a: s64; b: [4] s64; items: [] s64; p: *Data; }\n\
+     f :: (d: Data, n: s64, s: string) {\n\
+       n = 3;\n\
+       d.items[0] = 1;\n\
+       d.p.a = 2;\n\
+       q := *d;\n\
+       q.a = 4;\n\
+       d.a = 5;\n\
+       d.b[1] = 6;\n\
+       s.count = 0;\n\
+     }\n\
+     main :: () {}\n",
+  );
+  let immutable: Vec<&String> = found
+    .iter()
+    .filter(|message| message.contains("immutable"))
+    .collect();
+  assert_eq!(immutable.len(), 3, "{found:?}");
+  assert!(
+    immutable[0].contains("'d'") && immutable[1].contains("'d'") && immutable[2].contains("'s'"),
+    "{immutable:?}"
+  );
+}
