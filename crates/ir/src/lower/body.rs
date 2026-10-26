@@ -44,6 +44,7 @@ impl Lowering<'_, '_> {
     self.return_pointers.clear();
     self.context_value = None;
     self.trace_frame = None;
+    self.loop_elements.clear();
   }
 
   pub(super) fn lower_procedure(&mut self, id: ProcId, key: ProcKey) {
@@ -2053,6 +2054,12 @@ impl Lowering<'_, '_> {
         local
       }
     };
+
+    if !by_pointer {
+      self
+        .loop_elements
+        .insert(it_local, (data_local, index_local, element));
+    }
 
     let head = self.new_block();
     let body = self.new_block();

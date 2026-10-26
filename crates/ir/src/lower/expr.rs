@@ -1064,6 +1064,36 @@ impl Lowering<'_, '_> {
     })
   }
 
+  /// The element a `for` over an array is at, as a place.
+  fn loop_element(&mut self, data: LocalId, index: LocalId, element: TypeId) -> Val {
+    let pointer = self.pointer_to(element);
+    let data_address = self.local_address(data);
+    let base = self.value(pointer);
+    self.emit(Inst::Load {
+      dest: base,
+      address: data_address,
+    });
+    let index_address = self.local_address(index);
+    let position = self.value(TypeId::S64);
+    self.emit(Inst::Load {
+      dest: position,
+      address: index_address,
+    });
+    let (stride, _) = self.size_align(element);
+    let slot = self.value(pointer);
+    self.emit(Inst::Index {
+      dest: slot,
+      base,
+      index: position,
+      stride,
+    });
+    Val {
+      id: slot,
+      type_id: element,
+      indirect: true,
+    }
+  }
+
   fn declaration_value(
     &mut self,
     source: SourceId,
@@ -1075,6 +1105,13 @@ impl Lowering<'_, '_> {
       return Some(shared);
     }
     if let Some(local) = self.local_of_decl.get(&self.local_key(decl)).copied() {
+      // `*it` in a `for` over an array is the element's own address, not
+      // the copy's (**L§6.5**): toml-jai returns `*it.value` out of a loop.
+      if self.addressing
+        && let Some((data, index, element)) = self.loop_elements.get(&local).copied()
+      {
+        return Some(self.loop_element(data, index, element));
+      }
       let address = self.local_address(local);
       let local_type = self.locals[local.0 as usize].type_id;
       return Some(Val {
@@ -1546,7 +1583,10 @@ impl Lowering<'_, '_> {
     match operator {
       // `*x` on a value is its address (**L§3.2**).
       OperatorType::TIMES => {
-        let place = self.place(scope, source, operand)?;
+        let previous = std::mem::replace(&mut self.addressing, true);
+        let place = self.place(scope, source, operand);
+        self.addressing = previous;
+        let place = place?;
         let pointer = self.pointer_to(place.type_id);
         Some(Val {
           id: place.id,

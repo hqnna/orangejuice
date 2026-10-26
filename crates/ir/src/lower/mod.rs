@@ -311,6 +311,12 @@ struct Lowering<'c, 'p> {
   /// generated initializer writes into it.
   trace_infos: Vec<trace::TraceInfo>,
   trace_init: Option<ProcId>,
+  /// The `it` of each `for` over an array that copies its element, with the
+  /// data pointer and index that say where the element is: `*it` is the
+  /// element's address rather than the copy's (**L§6.5**).
+  loop_elements: HashMap<LocalId, (LocalId, LocalId, TypeId)>,
+  /// Whether the place being worked out is one whose address is taken.
+  addressing: bool,
   /// Preload's `memcmp`, given a body that narrows C's answer to its sign,
   /// and the C procedure that body calls.
   memcmp_wrapper: Option<ProcId>,
@@ -380,6 +386,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       trace_types: None,
       trace_infos: Vec::new(),
       trace_init: None,
+      loop_elements: HashMap::default(),
+      addressing: false,
       memcmp_wrapper: None,
       c_memcmp: None,
       trace_push: None,

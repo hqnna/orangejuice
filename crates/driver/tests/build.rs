@@ -7361,3 +7361,28 @@ fn the_slot_array_add_hands_back_starts_with_the_defaults() {
     "7 0\n",
   );
 }
+
+#[test]
+fn the_address_of_it_in_an_array_loop_is_the_element() {
+  // `it` is a copy, but `*it` and `*it.member` are the element's own storage
+  // (**L§6.5**): toml-jai returns `*it.value` out of a lookup loop.
+  assert_output(
+    "#import \"Basic\";\n\
+     KV :: struct { key: string; v: int; }\n\
+     find :: (xs: *[..] KV, k: string) -> *int {\n\
+       for xs.* if it.key == k return *it.v;\n\
+       return null;\n\
+     }\n\
+     main :: () {\n\
+       xs: [..] KV;\n\
+       array_add(*xs, .{\"a\", 1});\n\
+       array_add(*xs, .{\"b\", 2});\n\
+       find(*xs, \"b\").* = 20;\n\
+       for xs { q := *it; q.v += 100; }\n\
+       arr: [3] int = .[1, 2, 3];\n\
+       for x: arr { p := *x; p.* *= 2; }\n\
+       print(\"% %\\n\", xs, arr);\n\
+     }\n",
+    "[{\"a\", 101}, {\"b\", 120}] [2, 4, 6]\n",
+  );
+}
