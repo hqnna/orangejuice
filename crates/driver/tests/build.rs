@@ -6417,3 +6417,32 @@ fn a_for_expansion_declared_where_the_loop_is_written_is_found() {
     "10\n21\n32\n",
   );
 }
+
+#[test]
+fn a_modify_may_be_a_macro_whose_backticked_return_answers_for_it() {
+  // `#modify Require(T, .ENUM)` without braces, the macro's `` `return ``
+  // leaving the `#modify` block, and `.ENUM` reaching an enum-typed macro
+  // parameter as that member (The Way to Jai 26.32).
+  let program = "#import \"Basic\";\n\
+     Require :: (t: Type, kind: Type_Info_Tag) #expand {\n\
+       `return (cast(*Type_Info) t).type == kind, tprint(\"T must be %\", kind);\n\
+     }\n\
+     only_enums :: (t: $T) #modify Require(T, .ENUM) { print(\"%\\n\", t); }\n\
+     E :: enum { A; B; }\n";
+  assert_output(
+    &format!("{program}main :: () {{ only_enums(E.B); }}\n"),
+    "B\n",
+  );
+  let Some(diagnostics) = diagnostics_of(&format!("{program}main :: () {{ only_enums(3); }}\n"))
+  else {
+    return;
+  };
+  assert!(
+    diagnostics.contains("The arguments given to 'only_enums' did not match any of its overloads."),
+    "{diagnostics}"
+  );
+  assert!(
+    diagnostics.contains("#modify returned false: T must be ENUM"),
+    "{diagnostics}"
+  );
+}

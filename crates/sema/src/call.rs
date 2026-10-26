@@ -128,11 +128,15 @@ impl Checker<'_> {
       // instantiation, since what its body says depends on it (**L§8.5**).
       let candidates = callee.overloads.clone();
       let previous = self.enter_instance(callee.overload_instance.or(self.current_instance));
+      self.modify_rejections.clear();
       let resolved = self.resolve_overload(&candidates, &arguments);
       self.enter_instance(previous);
       resolved
     };
 
+    if !matches!(resolved, Resolved::None) {
+      self.modify_rejections.clear();
+    }
     match resolved {
       Resolved::One(signature) => {
         if let Some(instance) = signature.instance {
@@ -227,6 +231,12 @@ impl Checker<'_> {
         given.join(", ")
       ),
     );
+    // A candidate a `#modify` turned down says why (**L§7.8**).
+    let mut reasons = std::mem::take(&mut self.modify_rejections);
+    reasons.dedup();
+    for reason in reasons {
+      self.info(source, span, format!("#modify returned false: {reason}"));
+    }
   }
 
   /// Whether an argument's type is one the front end has not worked out, in

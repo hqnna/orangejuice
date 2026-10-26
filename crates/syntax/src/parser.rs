@@ -2449,6 +2449,25 @@ impl Parser<'_> {
     Some(header_id)
   }
 
+  /// `#modify Require(T, .ENUM)` with no braces: the one expression is the
+  /// block's only statement, typically a macro whose `` `return `` answers
+  /// for the `#modify` (The Way to Jai 26.32). It is stored as the braced
+  /// block it means, so it prints and parses back the same.
+  fn parse_modify_expression(&mut self) -> Option<NodeId> {
+    let start = self.span().start;
+    let statement = self.parse_expression()?;
+    let block = self.push(
+      self.span_from(start),
+      NodeData::Block(Block {
+        block_type: BlockType::Imperative,
+        block_flags: BlockFlags::empty(),
+        statements: vec![statement],
+      }),
+    );
+    self.ast.add_flags(block, NodeFlags::IS_PARENTHESIZED);
+    Some(block)
+  }
+
   fn parse_header_directives(&mut self, header_id: NodeId) {
     while let Some(word) = self.directive() {
       let mut flags = ProcedureFlags::empty();
@@ -2471,8 +2490,11 @@ impl Parser<'_> {
           self.bump();
           self.bump();
           let start = self.previous_end();
-          let Some(block) = self.parse_braced_block(BlockType::Imperative, BlockFlags::empty())
-          else {
+          let block = match self.at(TokenKind::OPEN_BRACE) {
+            true => self.parse_braced_block(BlockType::Imperative, BlockFlags::empty()),
+            false => self.parse_modify_expression(),
+          };
+          let Some(block) = block else {
             return;
           };
           let modify = self.push(self.span_from(start), NodeData::DirectiveModify { block });
@@ -4494,6 +4516,15 @@ mod tests {
     assert!(printed.contains("mov t, [b + i*4 + 10];"));
     assert!(printed.contains("mov t, [*p + 8];"));
     assert!(printed.contains("mov t, [b + (SIZE + 1)];"));
+  }
+
+  #[test]
+  fn a_modify_may_be_one_expression_without_braces() {
+    assert_eq!(
+      printed("f :: (t: $T) #modify Require(T, .ENUM) {}"),
+      printed("f :: (t: $T) #modify { Require(T, .ENUM); } {}")
+    );
+    assert!(tree("f :: (t: $T) #modify Require(T) {}").contains("PROCEDURE_CALL"));
   }
 
   #[test]

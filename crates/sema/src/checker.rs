@@ -383,6 +383,11 @@ pub struct Checker<'a> {
   /// block is compiled and run once rather than once per candidate an overload
   /// set offers at every call site (**L§7.8**).
   pub(crate) modify_results: HashMap<crate::modify::ModifyKey, Option<Vec<(DeclId, Const)>>>,
+  /// Why each rejecting `#modify` said no, by the same key.
+  pub(crate) modify_reasons: HashMap<crate::modify::ModifyKey, String>,
+  /// The reasons the `#modify`s consulted since the last call resolved gave
+  /// for saying no, which a call nothing accepted prints (**L§7.8**).
+  pub(crate) modify_rejections: Vec<String>,
   run_index: usize,
   /// How many static `#if`s nobody could decide the checker is inside. The
   /// reference never typechecks a rejected branch (**L§6.10**); orangejuice
@@ -504,6 +509,8 @@ impl<'a> Checker<'a> {
       compile_time_depth: 0,
       runs_in_flight: HashSet::default(),
       modify_results: HashMap::default(),
+      modify_reasons: HashMap::default(),
+      modify_rejections: Vec::new(),
       run_index: 0,
       undecided_static_ifs: 0,
       instances: Vec::new(),

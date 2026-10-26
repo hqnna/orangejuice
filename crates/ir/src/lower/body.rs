@@ -866,7 +866,14 @@ impl Lowering<'_, '_> {
   /// from the procedure it expanded into (**L§7.13**).
   fn return_statement(&mut self, node: NodeId, arguments: &[ast::Argument], backticked: bool) {
     if !backticked && self.inserted_from_outside == 0 && !self.expansions.is_empty() {
-      self.macro_return(node, arguments);
+      self.macro_return(node, arguments, self.expansions.len() - 1);
+      return;
+    }
+    // `` `return `` leaves the macro for whatever it was expanded into, which
+    // is another macro — or a `#modify` block — when one is around it
+    // (**L§7.13**, The Way to Jai 26.32).
+    if backticked && self.inserted_from_outside == 0 && self.expansions.len() >= 2 {
+      self.macro_return(node, arguments, self.expansions.len() - 2);
       return;
     }
     let source = self.body_source;
@@ -994,9 +1001,9 @@ impl Lowering<'_, '_> {
   /// A `return` written in a macro's body: the values go into the storage the
   /// expansion set aside and control leaves the spliced-in block, not the
   /// procedure (**L§7.13**).
-  fn macro_return(&mut self, node: NodeId, arguments: &[ast::Argument]) {
+  fn macro_return(&mut self, node: NodeId, arguments: &[ast::Argument], frame: usize) {
     let source = self.body_source;
-    let Some(frame) = self.expansions.last() else {
+    let Some(frame) = self.expansions.get(frame) else {
       return;
     };
     let (exit, defers) = (frame.exit, frame.defers);

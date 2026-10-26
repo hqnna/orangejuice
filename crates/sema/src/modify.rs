@@ -138,14 +138,23 @@ impl Checker<'_> {
         .map(|(id, value)| (*id, value.type_id, crate::poly::const_key(value)))
         .collect(),
     );
-    if let Some(decided) = self.modify_results.get(&key) {
-      return decided.clone();
+    if let Some(decided) = self.modify_results.get(&key).cloned() {
+      if let Some(reason) = self.modify_reasons.get(&key).cloned() {
+        self.modify_rejections.push(reason);
+      }
+      return decided;
     }
+    let rejections = self.modify_rejections.len();
     let (decided, settled) =
       self.run_modify_uncached(source, header, constants, arguments, outer_scope, bindings);
     // A block that answered by way of the re-entrancy guard has not really
     // spoken yet, so its answer is not one to remember.
     if settled {
+      if decided.is_none()
+        && let Some(reason) = self.modify_rejections.get(rejections).cloned()
+      {
+        self.modify_reasons.insert(key.clone(), reason);
+      }
       self.modify_results.insert(key, decided.clone());
     }
     decided
@@ -203,7 +212,12 @@ impl Checker<'_> {
             binding.1 = value;
           }
         }
-        ModifyOutcome::Rejected(_) => return (None, true),
+        ModifyOutcome::Rejected(reason) => {
+          if !reason.is_empty() {
+            self.modify_rejections.push(reason);
+          }
+          return (None, true);
+        }
         // A block that could not be run leaves the candidate as it was
         // solved, so one unfinished corner does not reject working code.
         ModifyOutcome::Failed => return (Some(bindings), false),

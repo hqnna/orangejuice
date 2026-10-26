@@ -1097,6 +1097,12 @@ impl Checker<'_> {
         });
         match folded {
           Some(value) => {
+            let value = match value.value {
+              Value::EnumName(_) => value
+                .convert(self.types(), parameter.type_id)
+                .unwrap_or(value),
+              _ => value,
+            };
             solution.bindings.push((decl, value));
             continue;
           }
@@ -1119,7 +1125,15 @@ impl Checker<'_> {
           solution.bindings.push((decl, bound));
           continue;
         }
+        // `.ENUM` handed to a `kind: Type_Info_Tag` is that member, not a name
+        // still waiting for an enum (**L§5.12**).
         if let Some(value) = argument.value.constant.clone() {
+          let value = match value.value {
+            Value::EnumName(_) => value
+              .convert(self.types(), parameter.type_id)
+              .unwrap_or(value),
+            _ => value,
+          };
           solution.bindings.push((decl, value));
         }
       }
