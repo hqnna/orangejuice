@@ -690,7 +690,7 @@ impl Exporter<'_, '_> {
         let type_inst = self.optional(source, declaration.type_inst);
         let expression = self.optional(source, declaration.expression);
         let alignment = self.optional(source, declaration.alignment_expression);
-        let notes = self.list(source, &declaration.notes);
+        let mut notes = self.list(source, &declaration.notes);
         let export_name = match &declaration.program_export_name {
           Some(text) => self.text(text),
           None => Str::EMPTY,
@@ -705,6 +705,20 @@ impl Exporter<'_, '_> {
           let header = expression.cast::<CodeProcedureHeader>().cast_mut();
           if unsafe { (*header).name.count } == 0 {
             unsafe { (*header).name = name };
+          }
+          // `f :: () {} @Test` is read off the header by most metaprograms
+          // and off the declaration by The Way to Jai's 30.11, so the
+          // declaration carries the header's notes after its own (**L§2.7**).
+          let own = unsafe { (*header).notes };
+          if own.count > 0 {
+            let mut items: Vec<*const CodeNode> = Vec::new();
+            for slice in [notes, own] {
+              if slice.count > 0 {
+                let nodes = slice.data.cast::<*const CodeNode>();
+                items.extend(unsafe { std::slice::from_raw_parts(nodes, slice.count as usize) });
+              }
+            }
+            notes = self.nodes.arena.alloc_slice(&items);
           }
         }
         unsafe {

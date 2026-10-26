@@ -749,6 +749,7 @@ unsafe extern "C" fn add_build_file(
       workspace.files.push(path);
       workspace.started = true;
     }
+    meta.added_to_watched(w);
   });
 }
 
@@ -775,6 +776,7 @@ unsafe extern "C" fn add_build_string(
           workspace.strings.push(text);
           workspace.started = true;
         }
+        meta.added_to_watched(w);
       }
     }
   });

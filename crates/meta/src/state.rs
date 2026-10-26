@@ -857,6 +857,20 @@ impl Meta {
     }
   }
 
+  /// A file or a string added to a watched workspace whose compilation has
+  /// already been replayed — `add_build_string` of a generated `main` on the
+  /// `TYPECHECKED_ALL_WE_CAN` phase — is one the reference would still have
+  /// taken in, since it was waiting there for more (**C§3.2**). So the
+  /// workspace is compiled again with it in place and the stream starts over.
+  pub fn added_to_watched(&mut self, workspace: i64) {
+    if let Some(intercept) = self.intercept.as_mut()
+      && !intercept.finished
+      && intercept.compiled.contains(&workspace)
+    {
+      intercept.recompile = true;
+    }
+  }
+
   /// Records a string a metaprogram added to a scope a message named, and asks
   /// for the workspace to be compiled again with it in place (**C§3.3**).
   pub fn add_scoped_string(&mut self, workspace: i64, message: usize, text: String) {

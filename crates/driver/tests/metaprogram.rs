@@ -1308,6 +1308,82 @@ fn a_metaprogram_adds_a_string_to_the_scope_a_message_names() {
 }
 
 #[test]
+fn a_metaprogram_adds_the_main_it_generated_once_everything_typechecked() {
+  let fixture = Fixture::new();
+  fixture.write("fruit.jai", "apple :: () {}\n");
+  let Some(report) = build_watching(
+    &fixture,
+    "#run {\n  \
+       w := compiler_create_workspace(\"target\");\n  \
+       options := get_build_options(w);\n  \
+       options.output_executable_name = \"generated\";\n  \
+       set_build_options(options, w);\n  \
+       compiler_begin_intercept(w);\n  \
+       add_build_file(\"fruit.jai\", w);\n  \
+       generated := false;\n  \
+       while true {\n    \
+         message := compiler_wait_for_message();\n    \
+         if message.kind == .PHASE && !generated {\n      \
+           phase := cast(*Message_Phase) message;\n      \
+           if phase.phase == .TYPECHECKED_ALL_WE_CAN {\n        \
+             generated = true;\n        \
+             add_build_string(\"main :: () { apple(); }\", w);\n      \
+           }\n    \
+         }\n    \
+         if message.kind == .COMPLETE  break;\n  \
+       }\n  \
+       compiler_end_intercept(w);\n\
+     }\n\
+     main :: () {}\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("generated"));
+}
+
+#[test]
+fn a_note_after_a_procedure_body_is_on_its_header_and_its_declaration() {
+  let fixture = Fixture::new();
+  fixture.write(
+    "fruit.jai",
+    "apple :: () {} @fruit\nmain :: () { apple(); }\n",
+  );
+  let Some(report) = build(
+    &fixture,
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     #run {\n  \
+       w := compiler_create_workspace(\"target\");\n  \
+       options := get_build_options(w);\n  \
+       options.output_executable_name = \"noted\";\n  \
+       set_build_options(options, w);\n  \
+       compiler_begin_intercept(w);\n  \
+       add_build_file(\"fruit.jai\", w);\n  \
+       on_declaration, on_header := -1, -1;\n  \
+       while true {\n    \
+         message := compiler_wait_for_message();\n    \
+         if message.kind == .TYPECHECKED {\n      \
+           batch := cast(*Message_Typechecked) message;\n      \
+           for batch.declarations  if it.expression.name == \"apple\" {\n        \
+             on_declaration = it.expression.notes.count;\n        \
+             header := cast(*Code_Procedure_Header) it.expression.expression;\n        \
+             on_header = header.notes.count;\n        \
+             if on_declaration && it.expression.notes[0].text != \"fruit\"  compiler_report(\"the declaration's note is not fruit\");\n      \
+           }\n    \
+         }\n    \
+         if message.kind == .COMPLETE  break;\n  \
+       }\n  \
+       compiler_end_intercept(w);\n  \
+       if on_declaration != 1 || on_header != 1  compiler_report(tprint(\"notes: % on the declaration, % on the header\", on_declaration, on_header));\n  \
+       set_build_options_dc(.{do_output=false});\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_built(&report, &fixture.path("noted"));
+}
+
+#[test]
 fn a_metaprogram_makes_a_procedure_live_that_nothing_calls() {
   let fixture = Fixture::new();
   let Some(report) = build(
