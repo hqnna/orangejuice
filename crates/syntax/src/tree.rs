@@ -272,6 +272,7 @@ impl TreePrinter<'_> {
         self.line(label, &header);
         self.optional("name", declaration.name);
         self.optional("elsewhere_library", declaration.elsewhere_library);
+        self.optional("overlay", declaration.overlay);
         self.optional("type", declaration.type_inst);
         self.optional("alignment", declaration.alignment_expression);
         self.optional("expression", declaration.expression);

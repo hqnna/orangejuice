@@ -752,6 +752,9 @@ pub struct Declaration {
   /// `Code_Declaration`, so these two fields are orangejuice's.
   pub elsewhere_library: Option<NodeId>,
   pub elsewhere_symbol: Option<Box<[u8]>>,
+  /// `#overlay (member) name: T;` (**L§8.6**): the member this one is laid
+  /// over. Not in the 0.2.009 `Code_Declaration` either, so it is ours too.
+  pub overlay: Option<NodeId>,
 }
 
 impl Declaration {
@@ -766,6 +769,7 @@ impl Declaration {
       program_export_name: None,
       elsewhere_library: None,
       elsewhere_symbol: None,
+      overlay: None,
     }
   }
 }

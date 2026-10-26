@@ -247,6 +247,74 @@ fn place_overlays_later_members_on_an_earlier_one() {
   );
 }
 
+/// Where `member` of the struct `name` starts, and its member flags.
+fn member_of(checker: &mut Checker<'_>, name: &str, member: &str) -> (u64, oj_types::MemberFlags) {
+  let interner = checker.interner();
+  let symbol = interner.intern(name.as_bytes());
+  let wanted = interner.intern(member.as_bytes());
+  let tree = checker.program().tree();
+  let id = (0..tree.declaration_count() as u32)
+    .map(oj_scope::DeclId)
+    .find(|id| tree.decl(*id).name == symbol)
+    .unwrap_or_else(|| panic!("'{name}' should be declared"));
+  let denoted = checker.decl_type(id).denoted.expect("a type");
+  let definition = checker.types().struct_of(denoted).expect("a struct");
+  let found = checker
+    .types()
+    .struct_info(definition)
+    .members
+    .iter()
+    .find(|candidate| candidate.name == wanted)
+    .unwrap_or_else(|| panic!("'{member}' should be a member of '{name}'"));
+  (found.offset, found.flags)
+}
+
+#[test]
+fn an_overlay_starts_where_its_member_does_and_moves_nothing_after_it() {
+  // `#overlay (m) n: T;` is a one-member `#place` that puts the cursor back
+  // (**L§8.6**): `n` is at `m`'s offset, may run on past `m`, and the members
+  // after it are where they would be without it.
+  check(
+    "
+    Keys :: struct { a: u8; b: u8; c: u8; d: u8; #overlay (a) packed: u32; e: u16; }
+    Pair :: struct { x: float64; y: float64; #overlay (x) component: [2] float64 = ---; }
+    Handle :: struct { ptr: *void; #overlay (ptr) low: s32; #overlay (ptr) bits: u64; tail: u8; }
+    Overhang :: struct { a: u8; #overlay (a) wide: u64; }
+    ",
+    |checker| {
+      assert_eq!(size_of(checker, "Keys"), Some(8));
+      let (offset, flags) = member_of(checker, "Keys", "packed");
+      assert_eq!(offset, 0);
+      assert!(flags.contains(oj_types::MemberFlags::OVERLAY));
+      assert_eq!(member_of(checker, "Keys", "e").0, 4);
+      assert!(
+        !member_of(checker, "Keys", "e")
+          .1
+          .contains(oj_types::MemberFlags::OVERLAY)
+      );
+
+      assert_eq!(size_of(checker, "Pair"), Some(16));
+      assert_eq!(member_of(checker, "Pair", "component").0, 0);
+
+      assert_eq!(size_of(checker, "Handle"), Some(16));
+      assert_eq!(member_of(checker, "Handle", "bits").0, 0);
+      assert_eq!(member_of(checker, "Handle", "tail").0, 8);
+
+      assert_eq!(size_of(checker, "Overhang"), Some(8));
+      assert!(errors(checker).is_empty());
+    },
+  );
+  check(
+    "Bad :: struct { a: u8; #overlay (nope) b: u8; }",
+    |checker| {
+      assert_eq!(
+        errors(checker),
+        vec!["'#overlay' names 'nope', which is not a member declared before it.".to_string()]
+      );
+    },
+  );
+}
+
 #[test]
 fn a_struct_may_point_at_itself_but_not_contain_itself() {
   check(

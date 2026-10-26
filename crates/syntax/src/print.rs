@@ -1133,6 +1133,11 @@ impl Printer<'_> {
     if declaration.flags.contains(DeclarationFlags::NO_RESET) {
       self.write("#no_reset ");
     }
+    if let Some(member) = declaration.overlay {
+      self.write("#overlay (");
+      self.expression(member);
+      self.write(") ");
+    }
     if let Some(alignment) = declaration.alignment_expression {
       self.write("#align ");
       self.expression(alignment);

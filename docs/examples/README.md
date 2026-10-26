@@ -1,11 +1,12 @@
 # Examples
 
-The acceptance suite, and a tour of the language: 23 programs, each with the
+The acceptance suite, and a tour of the language: 25 programs, each with the
 output it must print. `010` through `230` covers values, control flow,
 procedures, structs, arrays, pointers, enums, strings, polymorphism,
 compile-time execution, macros, the context, modules, type info, errors,
 operator overloading, `using` and variants, files, threads, C interop, inline
-assembly and writing a metaprogram.
+assembly and writing a metaprogram; `240` and `250` are syntax of the betas
+after 0.2.009 — reverse ranges without `#v2`, and `#overlay`.
 
 Read in order, they are the shortest path through Jai. Every one of them is a
 program that really runs.
@@ -21,7 +22,10 @@ $ cargo test -p oj-driver --test examples  # build and check them all
 Nothing here is a port of anyone else's example. Each golden was compared
 against the reference compiler, byte for byte, when the example was written —
 which is what makes them evidence of Jai's behaviour rather than a record of
-what orangejuice happened to do.
+what orangejuice happened to do. `240` and `250` are the exception: there was
+no newer reference to compare them with, so their goldens were written by hand
+from **L§6.6** and **L§8.6** and the programs checked against them, never the
+other way round.
 
 ## Adding one
 

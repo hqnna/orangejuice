@@ -257,6 +257,9 @@ bitflags! {
     const USING = 0x4;
     const PROCEDURE_WITH_VOID_POINTER_TYPE_INFO = 0x8;
     const AS = 0x10;
+    /// `#overlay (member) name: T;`: laid over another member's bytes
+    /// (**L§8.6**).
+    const OVERLAY = 0x20;
   }
 }
 
@@ -377,7 +380,7 @@ impl StructInfo {
       .filter(|member| {
         !member
           .flags
-          .intersects(MemberFlags::CONSTANT | MemberFlags::IMPORTED)
+          .intersects(MemberFlags::CONSTANT | MemberFlags::IMPORTED | MemberFlags::OVERLAY)
       })
   }
 

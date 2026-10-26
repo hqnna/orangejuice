@@ -3068,6 +3068,33 @@ impl Parser<'_> {
         self.set_declaration_flags(declaration, DeclarationFlags::IS_MARKED_AS_AS);
         Some(declaration)
       }
+      b"overlay" => {
+        self.bump();
+        self.bump();
+        self.expect(TokenKind::OPEN_PAREN, "'(' after '#overlay'")?;
+        let token = self.expect(
+          TokenKind::IDENT,
+          "the name of the member '#overlay' lays this one over",
+        )?;
+        let member = self.ident_node(&token);
+        self.expect(
+          TokenKind::CLOSE_PAREN,
+          "')' after the member '#overlay' names",
+        )?;
+        let declaration = self.parse_statement(block_type)?;
+        let target = match self.ast.data(declaration) {
+          NodeData::Using(using) => using.expression,
+          _ => declaration,
+        };
+        match &mut self.ast.node_mut(target).data {
+          NodeData::Declaration(payload) => payload.overlay = Some(member),
+          _ => self.error(
+            self.ast.node(declaration).span,
+            "'#overlay' goes in front of a member declaration.",
+          ),
+        }
+        Some(declaration)
+      }
       b"align" => {
         self.bump();
         self.bump();
@@ -4247,6 +4274,13 @@ mod tests {
     assert!(printed("E :: enum_flags #specified { A :: 1; }").contains("enum_flags #specified"));
     assert!(printed("E :: enum @Hi { A; }").contains("enum @Hi"));
     assert!(printed("S :: struct { #place a; b: int; }").contains("#place a;"));
+    assert!(
+      printed("S :: struct { a: u8; #overlay (a) b: u32; }").contains("#overlay (a) b: u32;")
+    );
+    assert!(
+      printed("S :: struct { x: f64; #overlay(x) c: [2] f64 = ---; }")
+        .contains("#overlay (x) c: [2] f64 = ---;")
+    );
     assert!(printed("S :: struct { #as using base: Base; }").contains("using #as base: Base;"));
   }
 

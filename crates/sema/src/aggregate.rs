@@ -204,7 +204,17 @@ impl Checker<'_> {
         else {
           return;
         };
-        self.struct_member(state, statement, name, declaration, MemberFlags::empty());
+        match declaration.overlay {
+          Some(member) => self.overlay_member(
+            state,
+            statement,
+            name,
+            declaration,
+            member,
+            MemberFlags::empty(),
+          ),
+          None => self.struct_member(state, statement, name, declaration, MemberFlags::empty()),
+        }
       }
       // `a, b: float;` declares two members off one type slot (**L§4.5**).
       NodeData::CompoundDeclaration(compound) => {
@@ -249,7 +259,17 @@ impl Checker<'_> {
         else {
           return;
         };
-        self.struct_member(state, expression, name, declaration, MemberFlags::USING);
+        match declaration.overlay {
+          Some(member) => self.overlay_member(
+            state,
+            expression,
+            name,
+            declaration,
+            member,
+            MemberFlags::USING,
+          ),
+          None => self.struct_member(state, expression, name, declaration, MemberFlags::USING),
+        }
       }
       // An anonymous `struct { … }` or `union { … }` contributes its members
       // to the struct around it (**L§8.1**).
@@ -368,6 +388,42 @@ impl Checker<'_> {
       }
       _ => None,
     }
+  }
+
+  /// `#overlay (member) name: T;` (**L§8.6**): `name` starts where `member`
+  /// does and the members after it are laid out as if it were not there — a
+  /// one-member `#place` that puts the cursor back. It may run past `member`,
+  /// and past the end of the struct, which then grows to hold it.
+  fn overlay_member(
+    &mut self,
+    state: &mut Members,
+    node: NodeId,
+    name: Symbol,
+    declaration: &oj_syntax::ast::Declaration,
+    member: NodeId,
+    extra: MemberFlags,
+  ) {
+    let target = self.ident_name(state.source, member);
+    let Some(offset) = target.and_then(|target| state.offset_of(target)) else {
+      let text = target
+        .map(|target| {
+          String::from_utf8_lossy(self.program().interner().resolve(target)).into_owned()
+        })
+        .unwrap_or_default();
+      if let Some(span) = self.span_of(state.source, member) {
+        self.error(
+          state.source,
+          span,
+          format!("'#overlay' names '{text}', which is not a member declared before it."),
+        );
+      }
+      self.struct_member(state, node, name, declaration, extra | MemberFlags::OVERLAY);
+      return;
+    };
+    let resume = state.builder.cursor();
+    state.builder.rewind_to(offset);
+    self.struct_member(state, node, name, declaration, extra | MemberFlags::OVERLAY);
+    state.builder.rewind_to(resume);
   }
 
   fn struct_member(
