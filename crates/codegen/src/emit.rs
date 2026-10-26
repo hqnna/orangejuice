@@ -35,6 +35,9 @@ const ENTRY_SYMBOL: &str = "main";
 /// (`docs/spec.md` §2.1).
 const POINTER_SIZE: usize = 8;
 
+/// The signal a division by zero raises, which is 8 on Linux and Darwin alike.
+const SIGFPE: u64 = 8;
+
 pub struct Emitter<'ctx, 'p> {
   context: ContextRef<'ctx>,
   module: Module<'ctx>,
@@ -1414,6 +1417,58 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       .map_err(|error| error.to_string())
   }
 
+  /// Integer division by zero is a crash with `SIGFPE` (**L§5.2**). x86-64's
+  /// `idiv` raises it itself, but AArch64's `sdiv` answers zero, and to LLVM
+  /// the division is undefined either way — so a divisor that is not a
+  /// nonzero constant is checked, and a zero one raises the signal on every
+  /// target, which is what Runtime_Support's crash handler and a `#run`'s
+  /// guard both report.
+  fn trap_zero_divisor(&self, divisor: IntValue<'ctx>) -> Result<(), String> {
+    if divisor
+      .get_zero_extended_constant()
+      .is_some_and(|value| value != 0)
+    {
+      return Ok(());
+    }
+    let error = |error: inkwell::builder::BuilderError| error.to_string();
+    let current = self
+      .builder
+      .get_insert_block()
+      .ok_or_else(|| String::from("a division outside any block"))?;
+    let function = current
+      .get_parent()
+      .ok_or_else(|| String::from("a division outside any function"))?;
+    let trap = self.context.append_basic_block(function, "divided_by_zero");
+    let rest = self.context.append_basic_block(function, "divided");
+    let is_zero = self
+      .builder
+      .build_int_compare(
+        IntPredicate::EQ,
+        divisor,
+        divisor.get_type().const_zero(),
+        "",
+      )
+      .map_err(error)?;
+    self
+      .builder
+      .build_conditional_branch(is_zero, trap, rest)
+      .map_err(error)?;
+    self.builder.position_at_end(trap);
+    let i32_type = self.context.i32_type();
+    let raise = self.module.get_function("raise").unwrap_or_else(|| {
+      self
+        .module
+        .add_function("raise", i32_type.fn_type(&[i32_type.into()], false), None)
+    });
+    self
+      .builder
+      .build_call(raise, &[i32_type.const_int(SIGFPE, false).into()], "")
+      .map_err(error)?;
+    self.builder.build_unreachable().map_err(error)?;
+    self.builder.position_at_end(rest);
+    Ok(())
+  }
+
   fn binary(
     &self,
     operator: BinaryOp,
@@ -1492,6 +1547,9 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       }
       _ => right,
     };
+    if matches!(operator, BinaryOp::Divide | BinaryOp::Modulus) {
+      self.trap_zero_divisor(right)?;
+    }
     let builder = &self.builder;
     let result: BasicValueEnum<'ctx> = match operator {
       BinaryOp::Add => builder.build_int_add(left, right, ""),

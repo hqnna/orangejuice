@@ -327,3 +327,26 @@ fn one_unit_keeps_internal_linkage() {
   assert!(text.contains("define internal"), "{text}");
   assert!(text.contains("define i32 @main("), "{text}");
 }
+
+#[test]
+fn a_division_by_what_may_be_zero_raises_sigfpe_on_every_target() {
+  // AArch64's `sdiv` answers zero where x86-64's `idiv` traps, and LLVM calls
+  // the division undefined either way; L§5.2 says it is a SIGFPE crash.
+  let module = llvm_ir(
+    "f :: (a: int, b: int) -> int, int { return a / b, a % b; }\n\
+     g :: (a: int) -> int { return a / 4; }\n\
+     main :: () { x, y := f(7, 2); z := g(8); }\n",
+  );
+  assert_eq!(
+    module.matches("call i32 @raise(i32 8)").count(),
+    2,
+    "{module}"
+  );
+  let g = &module[module.find("define").unwrap_or(0)..];
+  let g_body = g
+    .split("\ndefine")
+    .find(|body| body.contains("sdiv") && body.contains(", 4"))
+    .unwrap_or("");
+  assert!(g_body.contains("sdiv"), "{module}");
+  assert!(!g_body.contains("@raise"), "{g_body}");
+}
