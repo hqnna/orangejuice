@@ -923,12 +923,21 @@ append_flag_names :: (builder: *String_Builder, value: s64, info: *Type_Info_Enu
 // — `{x = 1; y = 3; z = 5}`. Which is used depends on how many members there
 // are, and long form can put each on its own line.
 append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct, format: FormatStruct) {
+    // A member laid over bytes an earlier one already shows — a `#place`d
+    // or `#overlay` view such as `Vector3.xy`, or a union's second member —
+    // is the same value again, so it is not printed: a `Vector3` is
+    // `{5, 8, 8.5}` (**L§17**).
+    shown :: (member: *Type_Info_Struct_Member, covered: s64) -> bool {
+        if member.flags & .CONSTANT  return false;
+        return member.offset_in_bytes >= covered || member.type.runtime_size <= 0;
+    }
+
     printable := 0;
+    covered := 0;
     for * member: info.members {
-        // A constant has no storage in the value, so there is nothing here to
-        // read for it (**L§17**).
-        if member.flags & .CONSTANT  continue;
+        if !shown(member, covered)  continue;
         printable += 1;
+        covered = max(covered, member.offset_in_bytes + member.type.runtime_size);
     }
 
     long := format.use_long_form_if_more_than_this_many_members < 0
@@ -941,8 +950,10 @@ append_struct :: (builder: *String_Builder, data: *void, info: *Type_Info_Struct
     if newlines  context.print_style.indentation_depth += 1;
 
     written := 0;
+    covered = 0;
     for * member: info.members {
-        if member.flags & .CONSTANT  continue;
+        if !shown(member, covered)  continue;
+        covered = max(covered, member.offset_in_bytes + member.type.runtime_size);
 
         // Long form puts a separator after every field, the last one included;
         // short form only between them.

@@ -199,6 +199,12 @@ seconds_since_init :: () -> float64 {
     return elapsed;
 }
 
+// The same, under the name the betas between 0.2.009 and 0.2.029 used and
+// The Way to Jai still calls (`start := get_time(); … get_time() - start`).
+get_time :: () -> float64 {
+    return seconds_since_init();
+}
+
 timespec_to_apollo :: (ts: timespec) -> Apollo_Time {
     return seconds_to_apollo(ts.tv_sec) + nanoseconds_to_apollo(ts.tv_nsec) + APOLLO_TIME_FOR_JAN_1_1970;
 }

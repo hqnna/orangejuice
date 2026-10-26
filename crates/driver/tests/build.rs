@@ -6319,3 +6319,37 @@ fn a_struct_and_its_members_carry_their_notes_into_the_type_table() {
     "[\"Version9\"] [\"JsonName(alpha)\"] [\"Skip\"] 0\n",
   );
 }
+
+#[test]
+fn get_time_is_the_seconds_a_program_has_run() {
+  // The betas after 0.2.009 time a span with `get_time()`, a `float64` of
+  // seconds (The Way to Jai 11.5, 26.33, 31.4).
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       start := get_time();\n\
+       elapsed := get_time() - start;\n\
+       print(\"% % %\\n\", type_of(start), elapsed >= 0, elapsed < 1);\n\
+     }\n",
+    "float64 true true\n",
+  );
+}
+
+#[test]
+fn operator_names_an_overload_set_and_print_shows_overlaid_storage_once() {
+  // `operator -(d, e)` calls the overload by its name (The Way to Jai 24.1),
+  // and a `#place`d view of storage an earlier member already shows is not
+  // printed again, so a Vector3 is `{2, 2, -0.5}` (**L§8.6**).
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Math\";\n\
+     main :: () {\n\
+       d := Vector3.{3, 4, 2.5}; e := Vector3.{1, 2, 3};\n\
+       print(\"%\\n\", operator -(d, e));\n\
+       U :: union { a: u32; b: float; }\n\
+       u: U; u.a = 7;\n\
+       print(\"%\\n\", u);\n\
+     }\n",
+    "{2, 2, -0.5}\n{7}\n",
+  );
+}

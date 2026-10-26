@@ -261,8 +261,11 @@ get_process_id :: () -> s32 {
     return getpid();
 }
 
-// Seconds and nanoseconds since the epoch.
-get_time :: () -> (seconds: s64, nanoseconds: s64) {
+// Seconds and nanoseconds since the epoch. Basic's `get_time` is the
+// seconds a program has run, which is what programs written for the betas
+// after 0.2.009 call; one name for both would be an ambiguous call in every
+// file that imports the two modules.
+get_wall_clock_time :: () -> (seconds: s64, nanoseconds: s64) {
     now: timespec;
     if clock_gettime(.REALTIME, *now) != 0  return 0, 0;
     return now.tv_sec, now.tv_nsec;

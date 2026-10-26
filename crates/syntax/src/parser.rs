@@ -898,7 +898,8 @@ impl Parser<'_> {
   }
 
   /// One element of a declaration's name list. `operator +` declares an
-  /// operator overload (**L§7.7**), whose name is the operator's text.
+  /// operator overload (**L§7.7**), whose name is the operator's text — and
+  /// in an expression names that overload set, so `operator -(d, e)` calls it.
   fn parse_declaration_target(&mut self) -> Option<NodeId> {
     if self.at(TokenKind::KEYWORD_OPERATOR) {
       return self.parse_operator_name();
@@ -916,6 +917,7 @@ impl Parser<'_> {
         | TokenKind::SEMICOLON
         | TokenKind::COMMA
         | TokenKind::CLOSE_PAREN
+        | TokenKind::OPEN_PAREN
         | TokenKind::CLOSE_BRACE
         | TokenKind::END_OF_INPUT
     ) {
@@ -4492,6 +4494,17 @@ mod tests {
     assert!(printed.contains("mov t, [b + i*4 + 10];"));
     assert!(printed.contains("mov t, [*p + 8];"));
     assert!(printed.contains("mov t, [b + (SIZE + 1)];"));
+  }
+
+  #[test]
+  fn operator_and_its_text_name_an_overload_set_in_an_expression() {
+    let tree = tree("x := operator -(d, e);");
+    assert!(tree.contains("procedure: IDENT - IdentFlags"), "{tree}");
+    assert!(tree.contains("argument[1]: IDENT e"), "{tree}");
+    assert_eq!(
+      printed("operator + :: (a: V, b: V) -> V { return a; }"),
+      "operator + :: (a: V, b: V) -> V {\n    return a;\n}\n"
+    );
   }
 
   #[test]
