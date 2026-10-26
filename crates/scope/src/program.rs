@@ -476,6 +476,13 @@ pub struct Program<'a> {
   /// matched up: the expression, and where it was written, since it is made of
   /// the importer's names rather than the module's.
   module_bindings: RefCell<HashMap<DeclId, ParameterBinding>>,
+  /// The program parameters each module declares, by the module's entry
+  /// file: every instantiation of a module shares what the main program set
+  /// them to (**L§11.3**).
+  program_parameters: RefCell<HashMap<PathBuf, Vec<(usize, DeclId)>>>,
+  /// What the main program's `#import "X"()(…)` set a module's program
+  /// parameters to, by the module's entry file. The first one wins.
+  program_arguments: RefCell<HashMap<PathBuf, ImportArguments>>,
   preload: ScopeId,
   main: ScopeId,
 }
@@ -594,6 +601,8 @@ impl<'a> Program<'a> {
       unshared_instances: Cell::new(0),
       module_arguments: RefCell::default(),
       module_bindings: RefCell::default(),
+      program_parameters: RefCell::default(),
+      program_arguments: RefCell::default(),
       preload,
       main,
     };
@@ -1791,6 +1800,21 @@ impl<'a> Program<'a> {
       0
     };
     let entry = module_identity(&resolved.entry);
+    if let Some(arguments) = import
+      .program_parameters
+      .as_ref()
+      .filter(|arguments| !arguments.is_empty())
+      && self.tree.enclosing_module(scope) == Some(self.main)
+    {
+      self.set_program_arguments(
+        &entry,
+        ImportArguments {
+          scope,
+          source,
+          arguments: arguments.clone(),
+        },
+      );
+    }
     let key = ModuleKey {
       entry: entry.clone(),
       parameters: self.parameter_text(parsed, &import, source),
@@ -2007,6 +2031,12 @@ impl<'a> Program<'a> {
     // Only the *module* parameters take what an `#import` wrote; the program
     // parameters are the main program's to set (**L§11.3**).
     let given = self.module_arguments.borrow().get(&destination).cloned();
+    let entry = self
+      .module_records
+      .borrow()
+      .iter()
+      .find(|record| record.scope == destination)
+      .map(|record| module_identity(&record.entry));
     for (takes_arguments, header) in [(true, Some(module_parameters)), (false, program_parameters)]
       .into_iter()
       .filter_map(|(takes_arguments, header)| Some((takes_arguments, header?)))
@@ -2020,10 +2050,45 @@ impl<'a> Program<'a> {
         if let (true, Some(declared), Some(given)) = (takes_arguments, declared, given.as_ref()) {
           self.bind_module_argument(declared, index, given);
         }
+        if let (false, Some(declared), Some(entry)) = (takes_arguments, declared, entry.as_ref()) {
+          self
+            .program_parameters
+            .borrow_mut()
+            .entry(entry.clone())
+            .or_default()
+            .push((index, declared));
+          let given = self.program_arguments.borrow().get(entry).cloned();
+          if let Some(given) = given {
+            self.bind_module_argument(declared, index, &given);
+          }
+        }
       }
     }
     if let Some(common_code) = common_code {
       self.walk(parsed, common_code, destination, source);
+    }
+  }
+
+  /// Records what the main program set a module's program parameters to, and
+  /// binds the ones that module has already declared: a module is usually
+  /// instantiated by something else before the main program's own `#import`
+  /// of it is walked (**L§11.3**).
+  fn set_program_arguments(&self, entry: &Path, given: ImportArguments) {
+    if self.program_arguments.borrow().contains_key(entry) {
+      return;
+    }
+    self
+      .program_arguments
+      .borrow_mut()
+      .insert(entry.to_path_buf(), given.clone());
+    let declared = self
+      .program_parameters
+      .borrow()
+      .get(entry)
+      .cloned()
+      .unwrap_or_default();
+    for (index, declared) in declared {
+      self.bind_module_argument(declared, index, &given);
     }
   }
 

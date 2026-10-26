@@ -27,6 +27,10 @@ calloc  :: (count: u64, size: u64) -> *void #foreign libc;
 realloc :: (memory: *void, size: u64) -> *void #foreign libc;
 free    :: (memory: *void) #foreign libc;
 
+// ------------------------------------------------------------- numbers ---
+
+strtod :: (text: *u8, end: **u8) -> float64 #foreign libc;
+
 // ---------------------------------------------------------- file handles ---
 
 STDIN_FILENO  :: 0;

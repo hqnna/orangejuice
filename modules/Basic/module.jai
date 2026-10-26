@@ -15,8 +15,9 @@
 #load "String_Builder.jai";
 #load "Int128.jai";
 #load "Apollo_Time.jai";
+#load "Memory_Debugger.jai";
 
-#module_parameters (ENABLE_ASSERT := true);
+#module_parameters () (ENABLE_ASSERT := true, MEMORY_DEBUGGER := false);
 
 #scope_module
 
@@ -41,7 +42,9 @@ alloc :: (size: s64, allocator := context.allocator) -> *void {
     if size <= 0  return null;
     proc := ifx allocator.proc then allocator.proc else context.allocator.proc;
     data := ifx allocator.proc then allocator.data else context.allocator.data;
-    return proc(.ALLOCATE, size, 0, null, data);
+    memory := proc(.ALLOCATE, size, 0, null, data);
+    #if MEMORY_DEBUGGER  debugger_note_allocation(memory, size, proc, context.stack_trace);
+    return memory;
 }
 
 #scope_module
@@ -60,13 +63,19 @@ alloc_zeroed :: (size: s64, allocator := context.allocator) -> *void {
 realloc :: (memory: *void, new_size: s64, old_size: s64, allocator := context.allocator) -> *void {
     proc := ifx allocator.proc then allocator.proc else context.allocator.proc;
     data := ifx allocator.proc then allocator.data else context.allocator.data;
-    return proc(.RESIZE, new_size, old_size, memory, data);
+    result := proc(.RESIZE, new_size, old_size, memory, data);
+    #if MEMORY_DEBUGGER {
+        if result && memory  debugger_note_free(memory);
+        debugger_note_allocation(result, new_size, proc, context.stack_trace);
+    }
+    return result;
 }
 
 free :: (memory: *void, allocator := context.allocator) {
     if !memory  return;
     proc := ifx allocator.proc then allocator.proc else context.allocator.proc;
     data := ifx allocator.proc then allocator.data else context.allocator.data;
+    #if MEMORY_DEBUGGER  debugger_note_free(memory);
     proc(.FREE, 0, 0, memory, data);
 }
 
@@ -363,7 +372,9 @@ temporary_add_page :: (ts: *Temporary_Storage, needed: s64) -> bool {
 
     header := size_of(Temporary_Storage.Overflow_Page);
     size := max(needed + header, TEMPORARY_PAGE_SIZE);
-    memory := alloc(size, allocator);
+    // Straight to the allocator rather than through `alloc`, so that the memory
+    // debugger does not count temporary storage it is told nothing about.
+    memory := allocator.proc(.ALLOCATE, size, 0, null, allocator.data);
     if !memory  return false;
 
     page := cast(*Temporary_Storage.Overflow_Page) memory;
@@ -660,6 +671,20 @@ get_stack_trace_string :: (node: *Stack_Trace_Node) -> string {
         walk = walk.next;
     }
     return builder_to_string(*builder);
+}
+
+// One line per frame, innermost first, in the form `get_stack_trace_string`
+// writes them.
+get_stack_trace_strings :: (node: *Stack_Trace_Node) -> [..] string {
+    result: [..] string;
+    walk := node;
+    while walk {
+        if walk.info {
+            array_add(*result, sprint("'%' at %:%", walk.info.name, walk.info.location.fully_pathed_filename, walk.line_number));
+        }
+        walk = walk.next;
+    }
+    return result;
 }
 
 // The chain flattened into an array, with the `next` pointers rewired to point

@@ -4058,6 +4058,26 @@ fn a_break_inside_a_case_leaves_the_loop_around_the_switch() {
   );
 }
 
+#[test]
+fn a_program_parameter_is_what_the_main_program_set_it_to() {
+  // The second `#module_parameters` list is the main program's to set, once,
+  // for every import of the module (**L§11.3**). An empty first list supplies
+  // nothing, so the instantiation the module was already given is the one the
+  // main program's own `#import` reaches, however late it is written.
+  assert_output_with_module(
+    "#module_parameters (SCALE := 1) (VERBOSE := false, LEVEL := 3);\n\
+     report :: () -> int {\n  \
+       #if VERBOSE  return LEVEL * SCALE;\n  \
+       return -1;\n\
+     }\n",
+    "#import \"Parameterized\";\n\
+     LOUD :: true;\n\
+     main :: () { put_number(report()); }\n\
+     #import \"Parameterized\"()(VERBOSE=LOUD, LEVEL=7);\n",
+    "7\n",
+  );
+}
+
 /// Builds a program that imports a module written beside it, which is what a
 /// `#module_parameters` test needs: the arguments live at the `#import`.
 fn assert_output_with_module(module: &str, body: &str, expected: &str) {

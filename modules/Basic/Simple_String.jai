@@ -131,7 +131,8 @@ to_upper :: (c: u8) -> u8 {
 string_to_int :: (s: string, base := 10, $T := int) -> (value: T, success: bool, remainder: string) {
     if base < 2 || base > 16  return 0, false, s;
 
-    at := 0;
+    // Leading white space is skipped, the way the reference's parser does.
+    at := skip_spaces(s);
     negative := false;
     if at < s.count && (s[at] == #char "-" || s[at] == #char "+") {
         negative = s[at] == #char "-";
@@ -169,59 +170,87 @@ string_to_float :: (s: string) -> (result: float32, success: bool, remainder: st
 }
 
 // The leading float, and what follows it. Handles a sign, a decimal point and
-// an exponent; anything else stops the parse where it stands.
+// an exponent; anything else stops the parse where it stands. The digits are
+// found here and converted by the C library, which rounds correctly.
 string_to_float64 :: (s: string) -> (result: float64, success: bool, remainder: string) {
+    at := skip_spaces(s);
+    first := at;
+    if at < s.count && (s[at] == #char "-" || s[at] == #char "+")  at += 1;
+
+    start := at;
+    while at < s.count && is_digit(s[at])  at += 1;
+    digits := at - start;
+    if at < s.count && s[at] == #char "." {
+        at += 1;
+        while at < s.count && is_digit(s[at]) { at += 1; digits += 1; }
+    }
+
+    // Nothing but a sign and a point is not a number.
+    if !digits  return 0, false, s;
+
+    if at < s.count && (s[at] == #char "e" || s[at] == #char "E") {
+        after := at + 1;
+        if after < s.count && (s[after] == #char "-" || s[after] == #char "+")  after += 1;
+        if after < s.count && is_digit(s[after]) {
+            while after < s.count && is_digit(s[after])  after += 1;
+            at = after;
+        }
+    }
+
+    return float_from_text(string_from(s, first), at - first), true, string_from(s, at);
+}
+
+// The newer spelling, with the success first. It reads the same numbers
+// `string_to_float64` does, and also `inf`, `infinity` and `nan` in either
+// case with an optional sign.
+string_to_float64_new :: (s: string) -> (success: bool, result: float64, remainder: string) {
+    value, ok, rest := string_to_float64(s);
+    if ok  return true, value, rest;
+
     at := 0;
     negative := false;
     if at < s.count && (s[at] == #char "-" || s[at] == #char "+") {
         negative = s[at] == #char "-";
         at += 1;
     }
-
-    start := at;
-    value: float64 = 0;
-    while at < s.count && is_digit(s[at]) {
-        value = value * 10 + cast(float64) (s[at] - #char "0");
-        at += 1;
-    }
-
-    if at < s.count && s[at] == #char "." {
-        at += 1;
-        scale: float64 = 0.1;
-        while at < s.count && is_digit(s[at]) {
-            value += cast(float64) (s[at] - #char "0") * scale;
-            scale *= 0.1;
-            at += 1;
+    word := string_from(s, at);
+    for name: string.["infinity", "inf", "nan"] {
+        if word.count < name.count  continue;
+        matches := true;
+        for i: 0..name.count - 1 {
+            c := word[i];
+            if c >= #char "A" && c <= #char "Z"  c += #char "a" - #char "A";
+            if c != name[i] { matches = false; break; }
         }
+        if !matches  continue;
+        result: float64 = ifx name[0] == #char "n" then 0h7FF8000000000000 else 0h7FF0000000000000;
+        if negative  result = -result;
+        return true, result, string_from(word, name.count);
     }
+    return false, 0, s;
+}
 
-    // Nothing but a sign and a point is not a number.
-    if at == start || (at == start + 1 && s[start] == #char ".")  return 0, false, s;
-
-    if at < s.count && (s[at] == #char "e" || s[at] == #char "E") {
-        after := at + 1;
-        exponent_negative := false;
-        if after < s.count && (s[after] == #char "-" || s[after] == #char "+") {
-            exponent_negative = s[after] == #char "-";
-            after += 1;
-        }
-        if after < s.count && is_digit(s[after]) {
-            exponent := 0;
-            while after < s.count && is_digit(s[after]) {
-                exponent = exponent * 10 + cast(s64) (s[after] - #char "0");
-                after += 1;
-            }
-            step: float64 = ifx exponent_negative then 0.1 else 10.0;
-            for 1..exponent  value *= step;
-            at = after;
-        }
-    }
-
-    if negative  value = -value;
-    return value, true, string_from(s, at);
+string_to_float_new :: (s: string) -> (success: bool, result: float32, remainder: string) {
+    ok, value, rest := string_to_float64_new(s);
+    return ok, cast(float32) value, rest;
 }
 
 #scope_module
+
+skip_spaces :: (s: string) -> s64 {
+    at := 0;
+    while at < s.count && (s[at] == #char " " || s[at] == #char "\t" || s[at] == #char "\n" || s[at] == #char "\r")  at += 1;
+    return at;
+}
+
+float_from_text :: (s: string, count: s64) -> float64 {
+    buffer: [128] u8 = ---;
+    text := buffer.data;
+    if count >= buffer.count  text = alloc(count + 1,, temp);
+    memcpy(text, s.data, count);
+    text[count] = 0;
+    return strtod(text, null);
+}
 
 // -1 for a byte that is not a digit in any base up to 16.
 digit_value :: (byte: u8) -> s64 {

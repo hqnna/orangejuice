@@ -76,6 +76,72 @@ fn a_program_builds_and_runs_with_no_jai_distribution() {
 }
 
 #[test]
+fn the_memory_debugger_reports_what_was_not_freed() {
+  // `MEMORY_DEBUGGER` is a *program* parameter of Basic (**L§11.3**): the main
+  // program sets it with an empty module-parameter list, which is the same
+  // instantiation everything else that imports Basic reaches.
+  let Some(output) = build_and_run(
+    "#import \"Basic\"()(MEMORY_DEBUGGER=true);\n\
+     main :: () {\n  \
+       kept := alloc(100);\n  \
+       freed := alloc(7);\n  \
+       free(freed);\n  \
+       report := make_leak_report();\n  \
+       print(\"% %\\n\", report.sorted_summaries.count, report.total_bytes);\n  \
+       for report.sorted_summaries  print(\"% % %\\n\", it.count, it.bytes, it.alloc_site_trace.nodes[1].info.name);\n  \
+       free(kept);\n  \
+       report_memory_leaks();\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(
+    output,
+    "1 100\n1 100 main\nTotal: 0 bytes in 0 allocations.\n\nMarked as non-leaks: 0 bytes in 0 allocations.\n"
+  );
+}
+
+#[test]
+fn the_memory_debugger_is_off_unless_the_program_asks() {
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       kept := alloc(100);\n  \
+       report := make_leak_report();\n  \
+       print(\"%\\n\", report.sorted_summaries.count);\n  \
+       report_memory_leaks();\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(output, "0\n");
+}
+
+#[test]
+fn the_newer_basic_parsers_take_what_current_code_passes_them() {
+  // `string_to_float64_new` puts the success first, and both parsers skip
+  // leading white space; `get_stack_trace_strings` is one line per frame.
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     main :: () {\n  \
+       ok, value, rest := string_to_float64_new(\"2.5e1x\");\n  \
+       print(\"% % %\\n\", ok, value, rest);\n  \
+       ok, value = string_to_float64_new(\"-inf\");\n  \
+       print(\"% %\\n\", ok, value < 0);\n  \
+       n, parsed := string_to_int(\" 42,\");\n  \
+       print(\"% %\\n\", n, parsed);\n  \
+       f, f_ok := string_to_float64(\"0.1\");\n  \
+       print(\"%\\n\", f == 0.1);\n  \
+       lines := get_stack_trace_strings(context.stack_trace);\n  \
+       print(\"%\\n\", lines.count > 0 && lines[0].count > 0);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(output, "true 25 x\ntrue true\n42 true\ntrue\ntrue\n");
+}
+
+#[test]
 fn print_formats_what_the_type_table_describes() {
   // `print` decides what to write by walking the `Type_Info` the compiler put
   // in the table, so this is as much a test of the table as of the module.
