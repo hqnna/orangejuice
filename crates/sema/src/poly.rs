@@ -287,9 +287,18 @@ impl Checker<'_> {
       return None;
     };
     let call = call.clone();
-    let family = self
-      .expression_type(scope, source, call.procedure_expression)
-      .denoted?;
+    // `TwoDb :: #bake_arguments TwoD(M = 5)` is the family with some of its
+    // arguments already given: `TwoDb(N = 2)` is `TwoD(M = 5, N = 2)`
+    // (**L§7.10**, **L§8.5**).
+    let (family, baked) = match self.baked_struct_call(scope, source, call.procedure_expression) {
+      Some((family, baked)) => (family, baked),
+      None => (
+        self
+          .expression_type(scope, source, call.procedure_expression)
+          .denoted?,
+        Vec::new(),
+      ),
+    };
     let definition = self.types().struct_of(family)?;
     if !self
       .types()
@@ -310,12 +319,17 @@ impl Checker<'_> {
     // argument from that slot on, the way a procedure's `..T` does (**L§7.3**).
     let mut gathered: Vec<NodeId> = Vec::new();
     let mut next = 0usize;
-    for argument in &call.arguments {
+    for argument in baked.iter().chain(&call.arguments) {
       let index = match argument.name.and_then(|node| self.ident_name(source, node)) {
         Some(name) => parameters
           .iter()
           .position(|id| self.program().tree().decl(*id).name == name)?,
         None => {
+          // A slot a bake already filled is not one a positional argument
+          // takes.
+          while variadic != Some(next) && given.get(next).is_some_and(Option::is_some) {
+            next += 1;
+          }
           next += 1;
           next - 1
         }
@@ -330,6 +344,50 @@ impl Checker<'_> {
       *given.get_mut(index)? = Some(argument.expression);
     }
     self.bake_struct(family, definition, &given, &gathered, scope, source)
+  }
+
+  /// The family a `#bake_arguments` of a polymorphic struct names, and the
+  /// arguments it baked in. Those are read in the call's own file, so a bake
+  /// written in another one is left to the ordinary path.
+  fn baked_struct_call(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    callee: NodeId,
+  ) -> Option<(TypeId, Vec<oj_syntax::ast::Argument>)> {
+    let NodeData::Ident(ident) = self.ast(source)?.data(callee) else {
+      return None;
+    };
+    let name = ident.name;
+    let written = self.scope_at(source, callee, scope);
+    let oj_scope::Resolution::Found(candidates) = self.program().tree().lookup(written, name)
+    else {
+      return None;
+    };
+    let [candidate] = candidates[..] else {
+      return None;
+    };
+    let (bake_source, bake, bake_scope) = self.bake_of(candidate)?;
+    if bake_source != source {
+      return None;
+    }
+    let NodeData::DirectiveBake { procedure_call, .. } = self.ast(source)?.data(bake) else {
+      return None;
+    };
+    let NodeData::ProcedureCall(baked) = self.ast(source)?.data(*procedure_call) else {
+      return None;
+    };
+    let baked = baked.clone();
+    let family = self
+      .expression_type(bake_scope, source, baked.procedure_expression)
+      .denoted?;
+    let definition = self.types().struct_of(family)?;
+    self
+      .types()
+      .struct_info(definition)
+      .nontextual_flags
+      .contains(oj_types::StructNontextualFlags::POLYMORPHIC)
+      .then_some((family, baked.arguments.clone()))
   }
 
   /// Which of a struct's parameters was written `..`, when one was

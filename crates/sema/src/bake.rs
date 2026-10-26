@@ -171,7 +171,7 @@ impl Checker<'_> {
 
   /// The `#bake_arguments` a declaration's value is, and the scope it was
   /// written in.
-  fn bake_of(&mut self, candidate: DeclId) -> Option<(SourceId, NodeId, ScopeId)> {
+  pub(crate) fn bake_of(&mut self, candidate: DeclId) -> Option<(SourceId, NodeId, ScopeId)> {
     self.bake_of_at(candidate, 0)
   }
 

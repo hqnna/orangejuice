@@ -6763,3 +6763,20 @@ fn a_bmi_instruction_assembles() {
     "224\n",
   );
 }
+
+#[test]
+fn a_bake_of_a_polymorphic_struct_is_the_family_with_arguments_given() {
+  // `TwoDb :: #bake_arguments TwoD(M = 5)` makes `TwoDb(2)` and
+  // `TwoDb(N = 2)` both `TwoD(5, 2)` (**L§7.10**, **L§8.5**).
+  assert_output(
+    "#import \"Basic\";\n\
+     TwoD :: struct (M: int, N: int) { array: [M][N] int; }\n\
+     TwoDb :: #bake_arguments TwoD(M = 5);\n\
+     main :: () {\n\
+       a: TwoDb(2);\n\
+       b: TwoDb(N = 1);\n\
+       print(\"% % % % %\\n\", a.M, a.N, b.M, b.N, type_of(a) == TwoD(5, 2));\n\
+     }\n",
+    "5 2 5 1 true\n",
+  );
+}
