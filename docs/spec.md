@@ -334,6 +334,46 @@ instructions and memoizing the second one measured *slower* than repeating it.
 What is expensive is the *number* of lookups, which is a caching question with
 `#insert` semantics attached (§10) rather than a hot loop to tighten.
 
+### 7.3 Sweeps over other people's code
+
+`crates/driver/tests/sweep.rs` builds and runs code nobody here wrote, as the
+regression net the 2026 review asked for. Each sweep is `#[ignore]`d and reads
+a checkout from an environment variable, so the default `cargo test` neither
+needs one nor passes vacuously without one:
+
+```console
+$ OJ_TTWJ_DIR=…/The_Way_to_Jai OJ_AOC_DIR=…/AdventOfCode OJ_TOML_JAI_DIR=…/toml-jai \
+    cargo test -p oj-driver --test sweep -- --ignored --nocapture --test-threads 1
+```
+
+What a program must print comes from the project, never from orangejuice:
+The Way to Jai's `// =>` annotations, compared word for word and in order
+(punctuation is not compared, since the annotations are written by hand; one
+on a commented-out line, inside a `/* */`, starting `Error` or `Warning`, or
+naming an address, a Windows path or a time is not output and is left out);
+Advent of Code's years running to the end on the inputs the repository
+carries; toml-jai's examples exiting 0, which is what its own `tests.jai`
+checks. Programs that cannot be judged here — interactive, Windows-only,
+graphical, deliberately failing, or needing a library nothing ships — are in
+a skip list with a reason each. Every program is built `-- no_metaprogram`.
+
+First baseline, at the commit that added the sweep (x86-64 Linux):
+
+| Sweep | Passed | Failed | Skipped |
+|---|---|---|---|
+| The Way to Jai (`19cb4b7`, 281 programs) | 159 | 86 | 36 |
+| Advent of Code (`mimhufford`, 11 years) | 10 | 0 | 1 |
+| toml-jai (7 examples) | 0 | 7 | 0 |
+
+Before any of the review's fixes, 75 of the 281 book programs did not even
+build. Of the 86 failures left, some cannot pass under this harness — a
+book program that prints a workspace number expects to be driven by
+`Default_Metaprogram`, one that prints how many CPUs it found expects the
+author's — and the rest are real gaps, sorted in the A6 report of the commit
+that recorded this table. toml-jai stops at the tagged unions of the betas
+after 0.2.009 (`union kind: Kind { .INT,, value: s64; }`), which nothing in
+`docs/changes.md` mentions and orangejuice does not parse.
+
 ## 8. Testing strategy
 
 1. **Unit tests** in every crate (lexer token tables, number parsing edge cases from **L§2.6**, here-strings, backslash identifiers; parser precedence/`<<` ambiguity/all statement forms; layout computations against sizes recorded from the reference compiler; Match rules; constant folding; overload scoring; polymorph solving cases; IR passes; ABI classification; link-line construction).

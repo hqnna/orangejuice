@@ -24,3 +24,4 @@ oj-link.workspace = true
 oj-meta.workspace = true
 oj-testsupport.workspace = true
 tempfile.workspace = true
+walkdir.workspace = true
