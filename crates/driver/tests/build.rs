@@ -6748,3 +6748,18 @@ fn an_assignment_a_run_rewrote_is_still_an_assignment() {
     "36\n",
   );
 }
+
+#[test]
+fn a_bmi_instruction_assembles() {
+  if skip_without_asm() {
+    return;
+  }
+  assert_output(
+    "main :: () {\n\
+       a: u64 = 0xF0;\n\
+       #asm { blsr.q a, a; }\n\
+       put_number(xx a);\n\
+     }\n",
+    "224\n",
+  );
+}

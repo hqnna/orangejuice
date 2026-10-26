@@ -1604,6 +1604,18 @@ static FORMS: &[(&str, Form)] = &[
   ("popcnt", form("popcnt", Ops::All, AsmClass::Gpr)),
   ("lzcnt", form("lzcnt", Ops::All, AsmClass::Gpr)),
   ("tzcnt", form("tzcnt", Ops::All, AsmClass::Gpr)),
+  // BMI1 and BMI2: the destination is written, everything after it read.
+  ("andn", form("andn", Ops::All, AsmClass::Gpr)),
+  ("bextr", form("bextr", Ops::All, AsmClass::Gpr)),
+  ("blsi", form("blsi", Ops::All, AsmClass::Gpr)),
+  ("blsmsk", form("blsmsk", Ops::All, AsmClass::Gpr)),
+  ("blsr", form("blsr", Ops::All, AsmClass::Gpr)),
+  ("bzhi", form("bzhi", Ops::All, AsmClass::Gpr)),
+  ("pdep", form("pdep", Ops::All, AsmClass::Gpr)),
+  ("pext", form("pext", Ops::All, AsmClass::Gpr)),
+  ("sarx", form("sarx", Ops::All, AsmClass::Gpr)),
+  ("shlx", form("shlx", Ops::All, AsmClass::Gpr)),
+  ("shrx", form("shrx", Ops::All, AsmClass::Gpr)),
   ("rdrand", form("rdrand", Ops::All, AsmClass::Gpr)),
   ("rdseed", form("rdseed", Ops::All, AsmClass::Gpr)),
   // `op1:op2 = op2 * op3` lists every register the encoding uses, and the two
