@@ -401,9 +401,10 @@ hand; one on a commented-out line, inside a `/* */`, starting `Error` or
 is left out);
 Advent of Code's years running to the end on the inputs the repository
 carries; toml-jai's examples exiting 0, which is what its own `tests.jai`
-checks. Programs that cannot be judged here — interactive, Windows-only,
-graphical, deliberately failing, or needing a library nothing ships — are in
-a skip list with a reason each. A program is built `-- no_metaprogram`,
+checks. Programs that cannot be judged here — Windows-only, deliberately
+failing, or needing a library nothing ships — are in a skip list with a
+reason each; interactive, graphical and build-script programs are run the way
+their plan says (below). A program is built `-- no_metaprogram`,
 unless it imports `Compiler`, in which case it is built through
 `Default_Metaprogram` the way `jai file.jai` builds it, so that the
 workspaces it creates are numbered from there. What its `#run`s print while
@@ -525,6 +526,47 @@ that depend on the clock or are out of order, The Way to Jai passes whole:
 | The Way to Jai | 232 | 0 | 49 |
 | Advent of Code | 10 | 0 | 1 |
 | toml-jai | 6 | 0 | 1 |
+
+The sweep then took in what it used to skip for want of a way to run it
+(`Plan` in `crates/driver/tests/sweep.rs`). What a program reads from
+standard input is the book's own `// <=` lines (19.7); a `/* => … */` block is
+output, one line each, like `// =>` (8.1, 18.1, 26.11). The guessing game
+(50.1) is answered prompt by prompt — one guess it cannot read, then 1 to 100
+— and must count that one input error. 27.4 runs the way the book shows it,
+without arguments and then on a tree made for it, and must remove exactly the
+directories of the name it was given. Chapter 30's build scripts are compiled
+in a copy of the chapter with what follows their `-`, and the program each one
+built must print what the book's text says it prints; the files they `#load`
+or build (08/part1, part3, 30/dynlib, main4, main7) are judged as the program
+that uses them. The window programs of chapters 33, 51 and 52 run on an `Xvfb`
+of the sweep's own (through `OJ_TEST_GL_LOADER` where the GL driver needs it,
+and with ALSA's default device the null one): each must still be running
+after three seconds, have a window up, and exit 0 within five once that window
+is asked to close the way a window manager asks — 33.10, whose loop never reads
+events, is stopped instead, and 51.1, which prints generations forever, is
+stopped after three seconds. Without a display with GLX they are skipped and
+say why. Two skip entries named files the checkout does not have (11.6 and
+50.2, which are in the book's text only), which is why the skip list counted
+two more than the sweep did; 34.7 stays skipped, since it imports `Mail`,
+which the distribution does not ship, to send mail to a server named by
+placeholders. Getting the build scripts through needed two fixes on this
+side: a string added to a watched workspace after its stream had begun is
+compiled in (30.11 adds the `main` it generates at `TYPECHECKED_ALL_WE_CAN`),
+and a note after a procedure's body is on its declaration as well as its
+header (**L§2.7**). 26.11's printed node list adds a provisional
+`ALLOWED_BY_CONTEXT` on a declaration `#code` quotes (**L§13.1**), and 18.1
+one erratum:
+
+| Sweep | Passed | Failed | Skipped |
+|---|---|---|---|
+| The Way to Jai | 256 | 0 | 25 |
+| Advent of Code | 10 | 0 | 1 |
+| toml-jai | 6 | 0 | 1 |
+
+The 25 left are Windows-only (5), need a library or module nothing ships
+(SDL, GLFW, raylib, rpmalloc, Mail, the reader's own `TestInside`: 10), fail
+on purpose (4), or are written for an older Jai or contradict themselves (6,
+33.12's `PI` among them).
 
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
