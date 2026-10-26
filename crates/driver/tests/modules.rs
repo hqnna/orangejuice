@@ -1,6 +1,6 @@
 //! The distribution modules a graphical program leans on: `stb_image`,
-//! `stb_image_write`, `stb_image_resize`, `freetype`, `X11`, `GL`,
-//! `Clipboard` and `Unmapping_Allocator`.
+//! `stb_image_write`, `stb_image_resize`, `stb_vorbis`, `freetype`, `X11`,
+//! `GL`, `Clipboard`, `Unmapping_Allocator` and `Sound_Player`.
 //!
 //! Each is built against orangejuice's own modules and run. The bindings are
 //! generated from the system's C headers, so what a header fixes — a struct's
@@ -339,6 +339,219 @@ fn stb_image_reads_back_what_stb_image_write_wrote() {
       "{} should have been built",
       archive.display()
     );
+  }
+}
+
+const SOUND_PROGRAM: &str = r##"#import "Basic";
+#import "Math";
+#import "Sound_Player";
+#import "stb_vorbis";
+
+pcm :: (samples: [] s16, channels: u16, rate: u32) -> *Mixer_Sound_Data {
+    data := New(Mixer_Sound_Data);
+    data.type = .LINEAR_SAMPLE_ARRAY;
+    data.samples = samples.data;
+    data.nsamples_times_nchannels = samples.count;
+    data.nchannels = channels;
+    data.sampling_rate = rate;
+    return data;
+}
+
+mix_frames :: (player: *Sound_Player, frames: int) -> [] s16 {
+    output := NewArray(frames * 2, s16);
+    mix_streams(player, output);
+    return output;
+}
+
+// An IMA ADPCM encoder, the mirror of the decoder: what it writes is what a
+// WAV file's `data` chunk holds for one channel.
+encode_ima :: (samples: [] s16, per_block: int) -> [..] u8, [..] s16 {
+    STEPS :: s32.[
+        7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+        50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+        253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+        1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+        3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+        11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+        32767,
+    ];
+    CHANGE :: s32.[-1, -1, -1, -1, 2, 4, 6, 8];
+    out: [..] u8;
+    heard: [..] s16;
+    at := 0;
+    while at < samples.count {
+        predictor := cast(s32) samples[at];
+        index: s32 = 0;
+        array_add(*out, cast(u8) (predictor & 0xFF), cast(u8) ((predictor >> 8) & 0xFF), cast(u8) index, 0);
+        array_add(*heard, cast(s16) predictor);
+        codes: [..] u8;
+        for i: 1..per_block - 1 {
+            target := ifx at + i < samples.count then cast(s32) samples[at + i] else predictor;
+            step := STEPS[index];
+            difference := target - predictor;
+            code: u8 = 0;
+            if difference < 0 { code = 8; difference = -difference; }
+            delta := step >> 3;
+            if difference >= step { code |= 4; difference -= step; delta += step; }
+            if difference >= step >> 1 { code |= 2; difference -= step >> 1; delta += step >> 1; }
+            if difference >= step >> 2 { code |= 1; delta += step >> 2; }
+            if code & 8 predictor -= delta; else predictor += delta;
+            predictor = clamp(predictor, -32768, 32767);
+            index = clamp(index + CHANGE[code & 7], 0, 88);
+            array_add(*codes, code);
+            array_add(*heard, cast(s16) predictor);
+        }
+        for i: 0..(codes.count / 2) - 1  array_add(*out, codes[i * 2] | (codes[i * 2 + 1] << 4));
+        at += per_block;
+    }
+    return out, heard;
+}
+
+main :: () {
+    player := New(Sound_Player);
+
+    // A mono ramp at half the mix rate is played on both channels, twice as
+    // slowly, at the volume asked for.
+    ramp: [8] s16;
+    for 0..7  ramp[it] = cast(s16) (it * 1000);
+    stream := make_stream(player, pcm(ramp, 1, 22050));
+    stream.user_volume_scale = 0.5;
+    out := mix_frames(player, 6);
+    print("mono %\n", out);
+
+    // It runs out and stops, and the next update lets go of it.
+    out = mix_frames(player, 20);
+    print("ended % %\n", stream.flags & .STOPPED != 0, out[out.count - 1]);
+    pre_entity_update(player);
+    for player.streams  it.marked = true;
+    post_entity_update(player, 0);
+    print("released %\n", player.streams.count);
+
+    // A repeating stereo sound goes back to its start at the repeat end.
+    stereo := s16.[100, -100, 200, -200, 300, -300, 400, -400];
+    looping := make_stream(player, pcm(stereo, 2, 44100), .MUSIC);
+    looping.flags |= .REPEATING;
+    looping.repeat_end_position = 3;
+    out = mix_frames(player, 7);
+    print("repeat %\n", out);
+
+    // A category's level and the master volume scale it; faster plays fewer
+    // frames of the sound per frame of the mix.
+    player.category_volumes[Sound_Category.MUSIC] = 0.5;
+    player.master_volume = 2;
+    looping.desired_rate = 2;
+    looping.play_cursor = 0;
+    out = mix_frames(player, 2);
+    print("levels %\n", out);
+    player.master_volume = 1;
+
+    // An unmarked stream is stopped by the update that finds it unmarked.
+    pre_entity_update(player);
+    post_entity_update(player, 0);
+    print("unmarked %\n", player.streams.count);
+
+    // The history keeps what was mixed last.
+    player.update_history = true;
+    make_stream(player, pcm(ramp, 1, 44100));
+    mix_frames(player, 3);
+    print("history %\n", player.history);
+
+    // IMA ADPCM decodes to what the encoder was given, within its error.
+    wave: [512] s16;
+    for 0..wave.count - 1  wave[it] = cast(s16) (12000 * sin(it * 0.05));
+    PER_BLOCK :: 129;
+    encoded, heard := encode_ima(wave, PER_BLOCK);
+    adpcm := New(Mixer_Sound_Data);
+    adpcm.type = .ADPCM_COMPRESSED;
+    adpcm.buffer = xx encoded;
+    adpcm.samples = cast(*s16) encoded.data;
+    adpcm.nchannels = 1;
+    adpcm.sampling_rate = 44100;
+    adpcm.nBlockAlign = 4 + (PER_BLOCK - 1) / 2;
+    adpcm.wSamplesPerBlock = PER_BLOCK;
+    adpcm.nsamples_times_nchannels = wave.count;
+    frames := sound_length_in_frames(adpcm);
+    same := frames == wave.count && heard.count >= frames;
+    for 0..frames - 1  if adpcm.decoded[it] != heard[it]  same = false;
+    // Once the step size has adapted, the codec follows the wave closely.
+    worst := 0;
+    for 32..frames - 1  if it % PER_BLOCK >= 32  worst = max(worst, abs(cast(int) adpcm.decoded[it] - wave[it]));
+    print("adpcm % frames, as encoded %, close %\n", frames, same, worst < 200);
+
+    // Bytes that are not Ogg Vorbis do not decode, and a stream of them stops.
+    bad := New(Mixer_Sound_Data);
+    bad.type = .OGG_COMPRESSED;
+    bad.name = "bad";
+    bad.buffer = "not an ogg file";
+    pre_entity_update(player);
+    post_entity_update(player, 0);
+    broken := make_stream(player, bad);
+    mix_frames(player, 4);
+    print("bad ogg % %\n", bad.decode_failed, broken.flags & .STOPPED != 0);
+
+    // Through ALSA's null device: the update writes what the device has room
+    // for and the streams move on by that much.
+    playback_device_name = "null";
+    opened := init(player, 0);
+    tone: [44100] s16;
+    played := make_stream(player, pcm(tone, 1, 44100));
+    pre_entity_update(player);
+    played.marked = true;
+    post_entity_update(player, 0);
+    print("device % moved %\n", opened, played.play_cursor > 0);
+    shutdown(player);
+    print("shut down % %\n", player.streams.count, player.initted);
+
+    args := get_command_line_arguments();
+    if args.count > 1 {
+        File :: #import "File";
+        bytes, ok := File.read_entire_file(args[1]);
+        ogg := New(Mixer_Sound_Data);
+        ogg.type = .OGG_COMPRESSED;
+        ogg.buffer = bytes;
+        print("ogg % % % %\n", ok, sound_length_in_frames(ogg) > 44100, ogg.nchannels, ogg.sampling_rate);
+    }
+}
+"##;
+
+const SOUND_MIXED: &str = "mono [0, 0, 250, 250, 500, 500, 750, 750, 1000, 1000, 1250, 1250]\n\
+  ended true 0\n\
+  released 0\n\
+  repeat [100, -100, 200, -200, 300, -300, 100, -100, 200, -200, 300, -300, 100, -100]\n\
+  levels [100, -100, 300, -300]\n\
+  unmarked 0\n\
+  history [0, 0, 1000, 1000, 2000, 2000]\n\
+  adpcm 512 frames, as encoded true, close true\n\
+  bad ogg true true\n\
+  device true moved true\n\
+  shut down 0 false\n";
+
+/// Sound_Player mixes without a device: a mono sound on both channels at the
+/// rate and volume asked for, a stream that ends and is let go of, one that
+/// repeats from its repeat end, category levels and the master volume, the
+/// entity marking that keeps a stream alive, the history, IMA ADPCM decoded
+/// to exactly what an encoder produced, and bytes that are not Ogg Vorbis.
+/// Then through ALSA's `null` device, which takes frames and plays nothing.
+/// With `OJ_TTWJ_DIR` set, the book's own `.ogg` decodes through stb_vorbis.
+#[test]
+fn sound_player_mixes_decodes_and_writes_to_a_device() {
+  if !system_has(&["alsa"]) {
+    return;
+  }
+  let Some(built) = build(SOUND_PROGRAM) else {
+    return;
+  };
+  let output = run(&built, &[], &[]);
+  assert!(
+    output.status.success(),
+    "{}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  assert_eq!(String::from_utf8_lossy(&output.stdout), SOUND_MIXED);
+  if let Some(book) = std::env::var_os("OJ_TTWJ_DIR") {
+    let ogg = Path::new(&book).join("examples/33/assets/sounds/lux_aeterna.ogg");
+    let output = run_ok(&built, &[&ogg.display().to_string()], &[]);
+    assert!(output.ends_with("ogg true true 2 44100\n"), "{output}");
   }
 }
 

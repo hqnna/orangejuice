@@ -1,0 +1,8 @@
+_snd_pcm
+snd_pcm_t
+snd_pcm_uframes_t
+snd_pcm_sframes_t
+snd_pcm_stream_t
+snd_pcm_format_t
+snd_pcm_access_t
+snd_pcm_state_t

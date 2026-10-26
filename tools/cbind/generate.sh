@@ -8,7 +8,8 @@
 #     tools/cbind/generate.sh darwin   # on a Mac; the others want Linux
 #     tools/cbind/generate.sh lz4      # needs lz4's headers; see README
 #     tools/cbind/generate.sh x11      # and gl, glx, freetype, stb_image,
-#                                      # stb_image_write, stb_image_resize
+#                                      # stb_image_write, stb_image_resize,
+#                                      # stb_vorbis, alsa
 #
 # What comes out is written beside the module's file as `<name>.new`, and the
 # diff against what is committed is printed. It is *not* moved into place:
@@ -52,6 +53,8 @@ case "$module" in
   stb_image)        target=$root/modules/stb_image/generated.jai        ; lib=libstb_image ;;
   stb_image_write)  target=$root/modules/stb_image_write/generated.jai  ; lib=libstb_image_write ;;
   stb_image_resize) target=$root/modules/stb_image_resize/generated.jai ; lib=libstb_image_resize ;;
+  stb_vorbis)       target=$root/modules/stb_vorbis/generated.jai       ; lib=libstb_vorbis ;;
+  alsa)             target=$root/modules/Sound_Player/alsa_generated.jai ; lib=libasound ;;
   *) echo "unknown module: $module" >&2; exit 2 ;;
 esac
 : "$lib"

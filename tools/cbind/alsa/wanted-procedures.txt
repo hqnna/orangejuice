@@ -1,0 +1,15 @@
+snd_pcm_avail
+snd_pcm_avail_update
+snd_pcm_close
+snd_pcm_drain
+snd_pcm_drop
+snd_pcm_get_params
+snd_pcm_nonblock
+snd_pcm_open
+snd_pcm_prepare
+snd_pcm_recover
+snd_pcm_set_params
+snd_pcm_start
+snd_pcm_state
+snd_pcm_writei
+snd_strerror

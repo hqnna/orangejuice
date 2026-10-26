@@ -650,6 +650,8 @@ hand-written `module.jai` that says what the module is.
 | `GL` | `gl.h` + `glext.h` (1.0–4.6 and the registered extensions), `glx.h` | `GL_Procedures`, filled in at run time by `gl_load`; GLX through `#library,system "libGL"` |
 | `freetype` | `freetype.h` and its public siblings | `#library,system "libfreetype"` |
 | `stb_image`, `stb_image_write`, `stb_image_resize` | the vendored public-domain stb headers (`stb_image_resize` is the 0.97 interface) | a static archive built from the vendored C |
+| `stb_vorbis` | the vendored public-domain `stb_vorbis.c`, kept as `stb_vorbis.h` since it is its own header | a static archive built from the vendored C |
+| `Sound_Player`'s ALSA half | `alsa/asoundlib.h`'s PCM playback interface | `#library,system "libasound"` (package `alsa`) |
 | `Clipboard` | the ICCCM's CLIPBOARD selection, over `X11` | — |
 | `Unmapping_Allocator` | `mmap`/`mprotect`/`munmap` | — |
 
@@ -671,7 +673,9 @@ missing and the directory unwritable is a compile error that says so. Being
 static, the archives are linked into the executable and are not loadable by
 the JIT: a `#run` cannot call into stb.
 
-`crates/driver/tests/modules.rs` holds one test per module. What a header
+`crates/driver/tests/modules.rs` holds one test per module; Sound_Player's
+mixes into a buffer and writes through ALSA's `null` device, so it is never
+heard. What a header
 fixes — sizes, offsets, constants — is measured against a C program built from
 the same headers, the way §7's POSIX check is; what needs a display runs on an
 `Xvfb` of its own (the dev shell provides one), and `Clipboard` runs *only*
@@ -693,6 +697,7 @@ compiles.
 | `Window_Creation` | `create_window`, `get_dimensions`, `get_mouse_pointer_position`, `toggle_fullscreen` | `X11` on `x_global_display`; the visual from `glXChooseVisual` when there is GLX |
 | `Input` | `update_window_events`, `events_this_frame`, `input_button_states`, `get_window_resizes`, the mouse deltas, `Key_Code` | the X event queue of `x_global_display` |
 | `Simp` | `set_render_target`, the `immediate_*` batch, shaders, `Texture`/`Bitmap`, `Dynamic_Font`, `swap_buffers` | OpenGL 3.3 through `GL` and GLX; `stb_image`; `freetype` |
+| `Sound_Player` | `Sound_Player`, `Mixer_Sound_Data`, `Sound_Stream`, `make_stream`, `pre_entity_update`/`post_entity_update`, `mix_streams` | ALSA on Linux; `stb_vorbis` for Ogg, its own IMA ADPCM decoder |
 | `GetRect` | immediate-mode `button`, `slider`, `dropdown` and `draw_popups` over a `Rect`, with `Overall_Theme` and `default_theme_procs` | `Simp`, `Input`'s events, `Window_Creation`'s pointer |
 
 Choices that are ours, since nothing a program does pins them: a `Key_Code`
@@ -713,16 +718,22 @@ a widget is identified by its `#caller_location` and an `identifier`, a click
 is the left button going down and up over the same widget, a dropdown's list
 is drawn by `draw_popups` and keeps the widgets under it from answering the
 mouse for as long as it is open, and the font is whatever `fc-match sans`
-names (or a common path), since the distribution ships none.
+names (or a common path), since the distribution ships none. Sound_Player
+is the interface The Way to Jai 33.10 plays through — a player whose streams
+the program keeps alive by marking them between `pre_entity_update` and
+`post_entity_update` — and what is ours is that the mix is 44100 Hz stereo
+with linear resampling, that it is written in `post_entity_update` on the
+program's thread (there is no mixing thread), and that an Ogg file is
+decoded whole the first time a stream plays it.
 
 `crates/driver/tests/simp.rs` sends the program's own window synthetic X
 events and checks what `Input` reports, and reads back the framebuffer after
 each way of drawing. On a machine whose OpenGL driver was built against a
 newer C library than the dev shell's, GLX looks absent to the program;
 `OJ_TEST_GL_LOADER` names the system's dynamic loader to run it through.
-With `OJ_TTWJ_DIR` set it also builds the book's graphical programs: eleven
-of fifteen build, and the rest need `Sound_Player`, `Windows` or
-`Windows_Resources`, or (33.12) make a float64 of `2*PI/30 * it`. GetRect is
+With `OJ_TTWJ_DIR` set it also builds the book's graphical programs: twelve
+of fifteen build, and the rest need `Windows` or `Windows_Resources`, or
+(33.12) make a float64 of `2*PI/30 * it`. GetRect is
 driven frame by frame on the test's own display and read back the same way.
 
 ### 10.2 Gaps found while writing our own modules

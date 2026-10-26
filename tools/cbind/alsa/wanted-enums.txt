@@ -1,0 +1,4 @@
+_snd_pcm_stream
+_snd_pcm_format
+_snd_pcm_access
+_snd_pcm_state

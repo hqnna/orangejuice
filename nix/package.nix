@@ -90,7 +90,7 @@ let
     postInstall = ''
       cp -r ${src}/modules $out/modules
       chmod -R u+w $out/modules
-      for name in stb_image stb_image_write stb_image_resize; do
+      for name in stb_image stb_image_write stb_image_resize stb_vorbis; do
         dir=$out/modules/$name/.build/${pkgs.stdenv.hostPlatform.system}
         mkdir -p "$dir"
         $CC -O2 -fPIC -w -c "$out/modules/$name/$name.c" -o "$dir/$name.o"

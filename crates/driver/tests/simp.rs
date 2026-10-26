@@ -943,10 +943,7 @@ const TTWJ_PROGRAMS: &[(&str, Option<&str>)] = &[
   ),
   ("33/33.8_load_font.jai", None),
   ("33/33.9_load_texture.jai", None),
-  (
-    "33/33.10_play_sound.jai",
-    Some("needs Sound_Player, which the distribution does not ship"),
-  ),
+  ("33/33.10_play_sound.jai", None),
   ("33/33.11_colored_triangle.jai", None),
   (
     "33/33.12_drawing_circle.jai.jai",

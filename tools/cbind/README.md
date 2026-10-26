@@ -19,7 +19,8 @@ anyone's source.
 | `gl`     | `gl.h`, `glext.h` | `modules/GL/generated.jai` |
 | `glx`    | `glx.h`, `glxext.h` | `modules/GL/glx_generated.jai` |
 | `freetype` | `freetype.h` and its public siblings | `modules/freetype/generated.jai` |
-| `stb_image`, `stb_image_write`, `stb_image_resize` | the headers vendored in each module | `modules/<name>/generated.jai` |
+| `stb_image`, `stb_image_write`, `stb_image_resize`, `stb_vorbis` | the headers vendored in each module | `modules/<name>/generated.jai` |
+| `alsa` | `alsa/asoundlib.h`'s PCM playback interface | `modules/Sound_Player/alsa_generated.jai` |
 
 `posix` writes the file for the architecture it runs on, because that binding
 is the *architecture's* and not just the system's: 299 of its declarations
