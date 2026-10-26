@@ -531,6 +531,7 @@ Rules:
 - Members declared `= ---` in the struct are left uninitialized only when not mentioned. Holes (padding) are zero-initialized.
 - A literal with no type designation (`.{...}`) gets its type from the Match against the expected type; it can also match a polymorphic variable in a header when `#modify` assigns the type (0.2.006). Struct literals for polymorphic structs without an argument list use the struct's default parameters.
 - `-Thing.{5}` negates the literal (operator overload).
+- In a call argument a bare `{ … }` is the same literal as `.{ … }` — `array_add(*stack, { start = s, count = n });`, which Focus writes against the betas after 0.2.009. An argument cannot be a block, so the brace is not ambiguous there; everywhere else a `{` still opens a block. Accepted by orangejuice from that usage, not measured.
 - Struct literals in global data have holes zeroed and pointers to other globals resolved. Several literals may be deduplicated by the compiler (not ones containing pointers, except compiler-generated `Source_Code_Location`s).
 - Exported as `Code_Literal { value_type = .STRUCT, struct_literal_info: { type_expression (null when undesignated), arguments } }`.
 - A struct literal can be `push_context`ed (`push_context .{allocator = temp} { }`) and used as a `using` source (`using Ice_Cream.{...};`).

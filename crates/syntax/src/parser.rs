@@ -1956,8 +1956,37 @@ impl Parser<'_> {
     } else {
       None
     };
-    let expression = self.parse_expression()?;
+    // `f({ start = 1, count = 2 })` (Focus): a call argument cannot be a
+    // block, so a brace there opens a literal with no type of its own, the
+    // way `.{` does.
+    let expression = match self.at(TokenKind::OPEN_BRACE) {
+      true => self.parse_brace_literal()?,
+      false => self.parse_expression()?,
+    };
     Some(Argument { name, expression })
+  }
+
+  fn parse_brace_literal(&mut self) -> Option<NodeId> {
+    let start = self.span().start;
+    self.expect(TokenKind::OPEN_BRACE, "'{'")?;
+    let mut arguments = Vec::new();
+    while !self.at(TokenKind::CLOSE_BRACE) && !self.at_end() {
+      arguments.push(self.parse_struct_literal_argument()?);
+      if !self.eat(TokenKind::COMMA) {
+        break;
+      }
+    }
+    self.expect(TokenKind::CLOSE_BRACE, "'}'")?;
+    Some(self.push(
+      self.span_from(start),
+      NodeData::Literal(Literal {
+        value: LiteralValue::Struct(StructLiteral {
+          type_expression: None,
+          arguments,
+        }),
+        flags: LiteralFlags::empty(),
+      }),
+    ))
   }
 
   fn parse_argument_list(&mut self, terminator: TokenKind) -> Option<Vec<Argument>> {
@@ -4392,6 +4421,14 @@ mod tests {
         .contains("#overlay (x) c: [2] f64 = ---;")
     );
     assert!(printed("S :: struct { #as using base: Base; }").contains("using #as base: Base;"));
+  }
+
+  #[test]
+  fn a_brace_in_argument_position_opens_an_untyped_literal() {
+    assert_eq!(
+      printed("f :: () { g({ a = 1, b = 2 }); }"),
+      printed("f :: () { g(.{ a = 1, b = 2 }); }")
+    );
   }
 
   #[test]
