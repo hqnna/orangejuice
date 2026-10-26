@@ -75,6 +75,14 @@ const TTWJ_SKIPS: &[(&str, &str)] = &[
     "21/21.3_allocators_check.jai",
     "needs the reference's rpmalloc module",
   ),
+  (
+    "30/main7.jai",
+    "the program the chapter's build script compiles against its library, not one of its own",
+  ),
+  (
+    "30/30.9_house_rules.jai",
+    "its plugin reports the triple pointer in main5.jai on purpose",
+  ),
 ];
 
 /// Chapters whose programs open a window, which a sweep cannot look at.
@@ -245,8 +253,15 @@ fn run_for(executable: &Path, directory: &Path, limit: Duration) -> Result<(i32,
 /// Builds one program the way `oj <file> -- no_metaprogram` would, into a
 /// directory of its own.
 fn build(path: &Path, output: &Path) -> Result<PathBuf, String> {
+  build_with(path, output, &[])
+}
+
+/// The same, with directories added to the import path the way
+/// `-import_dir` adds them.
+fn build_with(path: &Path, output: &Path, import_dirs: &[PathBuf]) -> Result<PathBuf, String> {
   let mut options = oj_driver::BuildOptions::new();
   options.output_path = Some(output.to_path_buf());
+  options.import_dirs.extend(import_dirs.iter().cloned());
   let report = oj_driver::run(path, &options, oj_driver::Stage::Executable, None);
   if report.failed {
     let text = report.diagnostics.join("");
@@ -282,7 +297,9 @@ fn judge_ttwj(root: &Path, path: &Path, scratch: &Path) -> Verdict {
   let expected = annotations(&source);
   let output = scratch.join(relative.replace('/', "_"));
   let _ = std::fs::create_dir_all(&output);
-  let executable = match build(path, &output) {
+  // The book compiles the chapters that import a module of its own with
+  // `-import_dir my_modules` (§8.6).
+  let executable = match build_with(path, &output, &[root.join("my_modules")]) {
     Ok(executable) => executable,
     Err(first) => return Verdict::BuildFailed(first),
   };
