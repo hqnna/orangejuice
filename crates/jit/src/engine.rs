@@ -307,8 +307,13 @@ impl Engine {
     }
 
     let bytes = buffer.as_slice();
-    let accepted =
-      read_integer(IntKind::S64, &bytes[oj_ir::MODIFY_ACCEPT as usize..]).unwrap_or(1) != 0;
+    // A buffer too short to hold the answer is the wrapper's mistake, and a
+    // candidate nobody could say was accepted is not one.
+    let Some(accepted) = modify_accepted(bytes) else {
+      return Err(String::from(
+        "its answer did not fit the storage it was given, so the candidate is rejected",
+      ));
+    };
     if !accepted {
       let reason = read_value(
         checker.types(),
@@ -880,6 +885,13 @@ fn read_value(types: &Types, type_id: TypeId, bytes: &[u8]) -> Option<oj_sema::C
   }
 }
 
+/// Whether a `#modify` block accepted its candidate, read out of the buffer
+/// its wrapper wrote; `None` when the buffer is too short to say.
+fn modify_accepted(bytes: &[u8]) -> Option<bool> {
+  let slot = bytes.get(oj_ir::MODIFY_ACCEPT as usize..)?;
+  Some(read_integer(IntKind::S64, slot)? != 0)
+}
+
 fn read_integer(kind: IntKind, bytes: &[u8]) -> Option<i128> {
   let size = kind.size() as usize;
   let slice = bytes.get(..size)?;
@@ -964,4 +976,37 @@ fn install_struct_locations(
     meta.set_struct_locations(locations);
     meta.set_types_at(types);
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_modify_answer_too_short_to_read_is_not_an_acceptance() {
+    let accept = oj_ir::MODIFY_ACCEPT as usize;
+    let mut bytes = vec![0u8; accept + 8];
+    assert_eq!(modify_accepted(&bytes), Some(false));
+    bytes[accept] = 1;
+    assert_eq!(modify_accepted(&bytes), Some(true));
+    assert_eq!(modify_accepted(&bytes[..accept + 4]), None);
+    assert_eq!(modify_accepted(&[]), None);
+  }
+
+  #[test]
+  fn a_crash_is_described_the_way_the_crash_handler_names_it() {
+    let crashed = Ending::Crashed {
+      signal: SIGSEGV,
+      address: 0,
+    };
+    assert_eq!(
+      crashed.describe("'#run'"),
+      "This '#run' crashed: Segmentation fault. The faulty address is 0x0."
+    );
+    assert!(
+      Ending::Exited(2)
+        .describe("'#modify'")
+        .contains("called exit(2)")
+    );
+  }
 }

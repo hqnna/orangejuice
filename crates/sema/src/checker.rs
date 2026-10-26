@@ -253,8 +253,8 @@ impl Names {
 ///
 /// Resolution is demand-driven and memoized rather than scheduled: asking for a
 /// declaration's type resolves whatever it depends on first, which makes data
-/// scopes order-independent (**L§11.7**) without the work queue of
-/// `docs/spec.md` §6.2. A declaration that is asked for while it is still being
+/// scopes order-independent (**L§11.7**) without a work queue
+/// (`docs/spec.md` §6.2). A declaration that is asked for while it is still being
 /// resolved is a circular dependency; a nominal type publishes its (incomplete)
 /// `TypeId` before its members are resolved, so a struct may still point at
 /// itself.

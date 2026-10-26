@@ -544,7 +544,7 @@ impl Lowering<'_, '_> {
         self.error(
           at.source,
           at.node,
-          "An '#asm' mask has to name a register the block declared (**L§15**).",
+          "An '#asm' mask has to name a register the block declared.",
         );
         return None;
       };
@@ -768,7 +768,7 @@ impl Lowering<'_, '_> {
             at.source,
             at.node,
             "An '#asm' operand has to fit in a register; write '*' before it to address \
-             it instead (**L§15**).",
+             it instead.",
           );
           return None;
         }
@@ -887,7 +887,7 @@ impl Lowering<'_, '_> {
           at.source,
           at.node,
           "The scale and the displacement of an '#asm' memory operand have to be \
-           constants (**L§15**).",
+           constants.",
         );
         None
       }
@@ -963,7 +963,7 @@ impl Lowering<'_, '_> {
                 source,
                 node,
                 "There are too many registers alive in this '#asm' block; nothing is \
-                 spilled to the stack (**L§15**).",
+                 spilled to the stack.",
               );
               return false;
             }

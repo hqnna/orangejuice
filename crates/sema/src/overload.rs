@@ -150,23 +150,39 @@ impl Checker<'_> {
     // declared next to the call and the one Preload declares. The nearer one
     // wins, which is what shadowing amounts to; a tie *within* one scope is
     // the ambiguity the reference reports (**L§7.5**).
-    let scope_of = |checker: &Self, signature: &Signature| {
-      signature
-        .decl
-        .map(|decl| checker.program().tree().decl(decl).scope)
+    //
+    // How near a scope is, is where it first contributed to `candidates`:
+    // the lookup gathers nearest-first, and ranking by that order here, rather
+    // than trusting `winners` to still be in it, keeps the rule from depending
+    // on how the scoring above happened to order what it kept. A candidate an
+    // alias brought in, or a value of procedure type, ranks by the alias.
+    let tree = self.program().tree();
+    let scope_of = |decl: DeclId| tree.decl(decl).scope;
+    let rank_of = |signature: &Signature| -> usize {
+      let Some(decl) = signature.decl else {
+        return usize::MAX;
+      };
+      let scope = scope_of(decl);
+      candidates
+        .iter()
+        .position(|candidate| scope_of(*candidate) == scope)
+        .unwrap_or(usize::MAX)
     };
-    let nearest = scope_of(
-      self,
-      winners.first().expect("the minimum came from the list"),
-    );
-    if winners
-      .iter()
-      .skip(1)
-      .any(|signature| scope_of(self, signature) == nearest)
-    {
+    let ranks: Vec<usize> = winners.iter().map(rank_of).collect();
+    let nearest = *ranks.iter().min().expect("the minimum came from the list");
+    if ranks.iter().filter(|rank| **rank == nearest).count() > 1 {
       return Resolved::Ambiguous;
     }
-    Resolved::One(winners.into_iter().next().expect("checked above"))
+    let chosen = ranks
+      .iter()
+      .position(|rank| *rank == nearest)
+      .expect("the nearest rank is one of them");
+    Resolved::One(
+      winners
+        .into_iter()
+        .nth(chosen)
+        .expect("a winner at that index"),
+    )
   }
 
   /// Whether a candidate's own parameters or returns mention a type the front

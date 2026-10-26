@@ -226,10 +226,7 @@ impl Parser<'_> {
     while !self.at_end() {
       let before = self.position;
       match self.parse_statement_in(BlockType::DataDeclarations) {
-        Some(statement) => {
-          self.attach_trailing_notes(statement);
-          statements.push(statement);
-        }
+        Some(statement) => statements.push(statement),
         None => self.recover(),
       }
       if self.position == before {
@@ -281,10 +278,7 @@ impl Parser<'_> {
         continue;
       }
       match self.parse_statement_in(block_type) {
-        Some(statement) => {
-          self.attach_trailing_notes(statement);
-          statements.push(statement);
-        }
+        Some(statement) => statements.push(statement),
         None => self.recover(),
       }
       if self.position == before {
@@ -382,10 +376,14 @@ impl Parser<'_> {
     }
   }
 
+  /// One statement and its `;`, with the notes written on either side of the
+  /// `;` — `f :: () {} @Note` and `member: int; @Note` both belong to it
+  /// (**L§2.7**).
   fn parse_statement_in(&mut self, block_type: BlockType) -> Option<NodeId> {
     let statement = self.parse_statement(block_type)?;
     self.attach_trailing_notes(statement);
     self.finish_statement(statement);
+    self.attach_trailing_notes(statement);
     Some(statement)
   }
 

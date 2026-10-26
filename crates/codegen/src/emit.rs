@@ -31,7 +31,8 @@ use oj_types::{Classification, Eightbyte, FloatKind, TypeId, TypeKind, Types};
 /// through `initializer_of` and a `push_context` (`docs/spec.md` §10).
 const ENTRY_SYMBOL: &str = "main";
 
-/// A pointer on the one target orangejuice has (`docs/spec.md` §2).
+/// A pointer on every target orangejuice has: all three are 64-bit
+/// (`docs/spec.md` §2.1).
 const POINTER_SIZE: usize = 8;
 
 pub struct Emitter<'ctx, 'p> {
@@ -156,9 +157,21 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
       // (**L§3.1**, **L§15**).
       TypeKind::V128 => self.context.i64_type().vec_type(2).into(),
       // Everything else is storage of a known size, addressed by byte offset.
+      // A type with no layout never gets here: `oj-ir` refuses to lower a
+      // value whose type has none ("could not generate code for a declaration
+      // of unknown type"), so the size is always known, and an empty struct is
+      // the `[0 x i8]` it really is.
       _ => {
-        let size = types.size_of(underlying).unwrap_or(0);
-        self.context.i8_type().array_type(size as u32).into()
+        let size = types.size_of(underlying);
+        debug_assert!(
+          size.is_some(),
+          "a type with no layout reached code generation"
+        );
+        self
+          .context
+          .i8_type()
+          .array_type(size.unwrap_or(0) as u32)
+          .into()
       }
     }
   }
@@ -175,7 +188,11 @@ impl<'ctx, 'p> Emitter<'ctx, 'p> {
   /// (**L§7.11**): a general-purpose register takes an integer as wide as what
   /// is left, a vector register takes a float or two.
   fn eightbyte_types(&self, type_id: TypeId, classes: &[Eightbyte]) -> Vec<BasicTypeEnum<'ctx>> {
-    let size = self.types().size_of(type_id).unwrap_or(0);
+    // Classified, so laid out: `oj_types::classify` has no answer for a type
+    // without a size, and nothing without one is passed by value.
+    let size = self.types().size_of(type_id);
+    debug_assert!(size.is_some(), "a classified type has a layout");
+    let size = size.unwrap_or(0);
     classes
       .iter()
       .enumerate()
