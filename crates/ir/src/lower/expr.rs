@@ -1382,6 +1382,9 @@ impl Lowering<'_, '_> {
   ) {
     let underlying = self.checker.types().underlying(type_id);
     let Some(definition) = self.checker.types().struct_of(underlying) else {
+      if let Some(fields) = self.builtin_fields(underlying) {
+        self.fill_builtin_literal(scope, source, address, &fields, arguments);
+      }
       return;
     };
     let settable: Vec<(Symbol, TypeId, u64)> = self
@@ -1439,6 +1442,56 @@ impl Lowering<'_, '_> {
       };
       let slot = self.offset(address, offset, member_type);
       if let Some(value) = self.expression(scope, source, argument.expression, Some(member_type)) {
+        self.store(slot, value);
+      }
+    }
+  }
+
+  /// The members a `string` or an array view or resizable array has without
+  /// being a struct, in the order a positional literal fills them: `string.{1,
+  /// *c}` is a count and a data pointer (**L§3.3**, **L§3.4**).
+  fn builtin_fields(&mut self, underlying: TypeId) -> Option<Vec<(Symbol, TypeId, u64)>> {
+    let count = self.checker.interner().intern(b"count");
+    let data = self.checker.interner().intern(b"data");
+    if underlying == TypeId::STRING {
+      let bytes = self.pointer_to(TypeId::U8);
+      return Some(vec![(count, TypeId::S64, 0), (data, bytes, VIEW_DATA)]);
+    }
+    let (element, kind) = self.checker.types().array_of(underlying)?;
+    let pointer = self.pointer_to(element);
+    let mut fields = vec![(count, TypeId::S64, 0), (data, pointer, VIEW_DATA)];
+    match kind {
+      ArrayKind::View => {}
+      ArrayKind::Resizable => {
+        let allocated = self.checker.interner().intern(b"allocated");
+        fields.push((allocated, TypeId::S64, 16));
+      }
+      ArrayKind::Fixed(_) => return None,
+    }
+    Some(fields)
+  }
+
+  fn fill_builtin_literal(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    address: ValueId,
+    fields: &[(Symbol, TypeId, u64)],
+    arguments: &[ast::Argument],
+  ) {
+    for (position, argument) in arguments.iter().enumerate() {
+      let field = match argument
+        .name
+        .and_then(|node| self.checker.name_at(source, node))
+      {
+        Some(name) => fields.iter().find(|entry| entry.0 == name).copied(),
+        None => fields.get(position).copied(),
+      };
+      let Some((_, field_type, offset)) = field else {
+        continue;
+      };
+      let slot = self.offset(address, offset, field_type);
+      if let Some(value) = self.expression(scope, source, argument.expression, Some(field_type)) {
         self.store(slot, value);
       }
     }

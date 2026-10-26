@@ -514,6 +514,7 @@ Vector3.{1, 2, 3}                 // positional: exactly as many values as setta
 Vector4.{w = .7}                  // named: any subset; others take defaults
 .{x = 1, y = 2}                   // type inferred from context (declared type, parameter, member, return, comparison)
 .{}                               // all defaults
+string.{3, text.data}             // a string or array view is a count then a data pointer; `[..] T` adds `allocated`
 Allocator.{allocator_proc, null}  // procedure and pointer values
 string.{count, data}              // strings and array views ([] T) are struct-literal-able
 Renderer.Buffer.{size = xx n}     // nested type

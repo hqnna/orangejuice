@@ -6284,3 +6284,22 @@ fn a_file_scope_using_does_not_hide_an_undeclared_name() {
     "{diagnostics}"
   );
 }
+
+#[test]
+fn a_literal_of_a_string_or_a_view_fills_its_count_and_data() {
+  // A `string` and a `[] T` are a count and a data pointer without being
+  // structs, and a literal of one fills them positionally or by name.
+  assert_output(
+    "main :: () {\n\
+       text := \"hello\";\n\
+       t := string.{3, text.data};\n\
+       put(t); put(\"\\n\");\n\
+       v := string.{data = text.data + 1, count = 2};\n\
+       put(v); put(\"\\n\");\n\
+       numbers: [4] int = .[1, 2, 3, 4];\n\
+       view := ([] int).{2, numbers.data + 1};\n\
+       put_number(view.count); put_number(view[1]);\n\
+     }\n",
+    "hel\nel\n2\n3\n",
+  );
+}
