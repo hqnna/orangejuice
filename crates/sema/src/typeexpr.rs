@@ -17,6 +17,7 @@ impl Checker<'_> {
     node: NodeId,
   ) -> TypeId {
     if !self.enter() {
+      self.too_deep(Some((source, node)));
       return TypeId::UNKNOWN;
     }
     let result = self.type_from_node_inner(scope, source, node);

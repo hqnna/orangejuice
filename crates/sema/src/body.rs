@@ -62,6 +62,7 @@ impl Checker<'_> {
 
   fn check_runs_in(&mut self, source: SourceId, scope: ScopeId, node: NodeId) {
     if !self.enter() {
+      self.too_deep(Some((source, node)));
       return;
     }
     self.check_runs_in_inner(source, scope, node);
@@ -318,6 +319,7 @@ impl Checker<'_> {
 
   fn check_statement(&mut self, context: &Context, node: NodeId) {
     if !self.enter() {
+      self.too_deep(Some((context.source, node)));
       return;
     }
     self.check_statement_inner(context, node);

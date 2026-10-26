@@ -17,6 +17,7 @@ impl Checker<'_> {
   /// rather than as an error.
   pub(crate) fn expression_type(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
     if !self.enter() {
+      self.too_deep(Some((source, node)));
       return Expr::UNKNOWN;
     }
     let result = self.expression_type_inner(scope, source, node);

@@ -32,7 +32,7 @@ mod run;
 mod typeexpr;
 mod used;
 
-pub use checker::{Checker, DeclType, Expr};
+pub use checker::{Checker, DeclType, Expr, MAX_DEPTH};
 pub use constants::{Address, AddressOf, Const, RunBytes, RunLink, RunTarget, Value};
 pub use dump::{print_types, summary};
 pub use export::Exporter;

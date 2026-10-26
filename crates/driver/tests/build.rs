@@ -481,6 +481,41 @@ fn diagnostics_of(body: &str) -> Option<String> {
 }
 
 #[test]
+fn a_long_chain_of_flags_is_typed_rather_than_given_up_on() {
+  // Generated code or's a flag enum together hundreds of times; each `|` is a
+  // level of the checker's recursion, and running out of levels used to make
+  // the expression `unknown` without a word (`docs/spec.md` §6.3).
+  let chain: Vec<String> = (0..200).map(|index| format!("F.B{}", index % 20)).collect();
+  let members: String = (0..20).map(|index| format!("B{index}; ")).collect();
+  assert_output(
+    &format!(
+      "F :: enum_flags u32 {{ {members}}}\n\
+       main :: () {{ x := {}; put_number(cast(u32) x); }}\n",
+      chain.join(" | ")
+    ),
+    "1048575\n",
+  );
+}
+
+#[test]
+fn an_expression_too_deep_to_follow_is_reported_rather_than_crashing() {
+  // Past `oj_sema::MAX_DEPTH` the checker says so, once, where the expression
+  // starts — on a stack deep enough that the cap is what stops it.
+  let terms = vec!["1"; oj_sema::MAX_DEPTH as usize + 100];
+  let Some(diagnostics) = diagnostics_of(&format!(
+    "main :: () {{ x := {}; put_number(x); }}\n",
+    terms.join("+")
+  )) else {
+    return;
+  };
+  let expected = format!(
+    "This nests too deeply for the compiler to follow (more than {} levels).",
+    oj_sema::MAX_DEPTH
+  );
+  assert_eq!(diagnostics.matches(&expected).count(), 1, "{diagnostics}");
+}
+
+#[test]
 fn a_run_computes_the_constant_a_declaration_was_waiting_for() {
   assert_output(
     "factorial :: (x: int) -> int {\n\

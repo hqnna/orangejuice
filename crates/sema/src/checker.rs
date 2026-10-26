@@ -339,6 +339,10 @@ pub struct Checker<'a> {
   diagnostics: Vec<Diagnostic>,
   reported: HashSet<(SourceId, Span, String)>,
   depth: u32,
+  /// Whether the checker has said that something nests deeper than
+  /// [`MAX_DEPTH`]; once is enough, since every frame above it would say the
+  /// same.
+  too_deep: bool,
   /// Whoever can execute a `#run`, when anything can (**L§12.1**). A dump
   /// stage installs none, and a run whose expression folds needs none.
   pub(crate) compile_time: Option<std::rc::Rc<dyn crate::run::CompileTime>>,
@@ -410,9 +414,13 @@ pub struct Checker<'a> {
   pub(crate) argument_instances: HashMap<(Option<InstanceId>, SourceId, NodeId), InstanceId>,
 }
 
-/// Deep enough for the module tree's nested types, shallow enough that a
-/// pathological expression fails instead of overflowing the stack.
-const MAX_DEPTH: u32 = 128;
+/// How deep the checker follows an expression, a statement or a chain of
+/// declarations before it says so rather than recursing further. Generated
+/// code — a flag enum or'd together a few hundred times over — is far from
+/// it; only a pathological program reaches it, and the driver runs the
+/// checker on a stack big enough that it is the cap that stops it, not the
+/// stack (`docs/spec.md` §6.3).
+pub const MAX_DEPTH: u32 = 8192;
 
 /// The size of a thread's temporary storage, which the compiler defines for
 /// Runtime_Support out of `Build_Options.temporary_storage_size` (**C§4**).
@@ -471,6 +479,7 @@ impl<'a> Checker<'a> {
       diagnostics: Vec::new(),
       reported: HashSet::default(),
       depth: 0,
+      too_deep: false,
       compile_time: None,
       backticked_owner: HashMap::default(),
       runs: HashMap::default(),
@@ -1229,9 +1238,30 @@ impl<'a> Checker<'a> {
     self.names.loose
   }
 
+  /// Steps one level deeper, or says it cannot. A `false` is not paired with
+  /// a `leave`.
   pub(crate) fn enter(&mut self) -> bool {
+    if self.depth >= MAX_DEPTH {
+      return false;
+    }
     self.depth += 1;
-    self.depth < MAX_DEPTH
+    true
+  }
+
+  /// Reports, once, that the program nests deeper than the checker follows.
+  /// Whatever was being typed is `unknown` from here on, which is never
+  /// reported again — so this is the one diagnostic that says why.
+  pub(crate) fn too_deep(&mut self, at: Option<(SourceId, NodeId)>) {
+    if self.too_deep {
+      return;
+    }
+    self.too_deep = true;
+    let message =
+      format!("This nests too deeply for the compiler to follow (more than {MAX_DEPTH} levels).");
+    match at.and_then(|(source, node)| Some((source, self.span_of(source, node)?))) {
+      Some((source, span)) => self.error(source, span, message),
+      None => self.report(Diagnostic::error(SourceId::NONE, Span::at(0), message)),
+    }
   }
 
   pub(crate) fn leave(&mut self) {

@@ -220,14 +220,52 @@ struct Watching {
 }
 
 /// Runs the pipeline over a whole workspace.
+///
+/// On a thread of its own with a stack deep enough for the checker's
+/// [`oj_sema::MAX_DEPTH`]: the front end recurses with the program, and a
+/// generated expression a few thousand terms long must reach the cap and be
+/// reported rather than overflow the stack of whichever thread called this.
 pub fn run_input(
   input: &Input,
   options: &BuildOptions,
   stage: Stage,
   only: Option<&str>,
 ) -> Report {
-  run_workspace(input, options, stage, only, None)
+  std::thread::scope(|scope| {
+    let compile = move || {
+      let mut report = run_workspace(input, options, stage, only, None);
+      // The trees a watching metaprogram reads live in storage this thread
+      // owns; nobody above here reads them.
+      report.compiled.typechecked.clear();
+      Sendable(report)
+    };
+    std::thread::Builder::new()
+      .name(String::from("oj-compile"))
+      .stack_size(COMPILER_STACK)
+      .spawn_scoped(scope, compile)
+      .map(|handle| match handle.join() {
+        Ok(Sendable(report)) => report,
+        Err(panic) => std::panic::resume_unwind(panic),
+      })
+      .unwrap_or_else(|error| {
+        Report::failure(format!("could not start the compiler thread: {error}"))
+      })
+  })
 }
+
+/// The stack the compiler runs on: reserved, not committed, so it costs
+/// nothing a program does not use.
+const COMPILER_STACK: usize = 1 << 30;
+
+/// A report crossing back from the compiler thread. Everything in it is owned
+/// data except the exported trees, which are cleared before it crosses.
+struct Sendable(Report);
+
+// SAFETY: `Report` is plain owned data apart from `compiled.typechecked`,
+// whose node pointers name storage of the thread that made them; that is
+// emptied before a `Sendable` is built, and the thread is joined before the
+// report is read.
+unsafe impl Send for Sendable {}
 
 /// Runs the pipeline over a workspace a metaprogram is watching, exporting its
 /// trees into the storage that metaprogram reads (**C§3.2**, **C§5.3**). The

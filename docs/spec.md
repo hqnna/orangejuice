@@ -227,6 +227,19 @@ Work items (declarations, headers, bodies, structs, enums, `#run`s, `#if`s, impo
 
 Implements **L§5.10** Match, the downward inference passes (integer literals, unknown-enum unary dots, untyped literals, `null`), casts (**L§5.6**) with all modifiers and the three syntaxes, overload resolution (**L§7.5**, **C§6.4**) with scored candidates and ambiguity errors that print argument types, polymorph solving/instantiation/dedup (**C§6.3**) with a program-wide cache keyed by (source header, constants), `#modify` execution through the JIT, `#if`/`#ifx` evaluation, macro expansion (hygiene + backticks + `#insert` variants + loop-control remapping + `#caller_code`/`#caller_location`), `for_expansion` lookup, `using`/`#as` conversions, `,,` context arguments, `#discard`, `#must` (checked in IR generation), quick lambdas, struct literal/array literal typing, `#place`/`#align` layout, enum value assignment, `#specified`/`#complete`, struct initializers, variants, `Any` boxing, `#exists`, `#this`, `#procedure_name`, `#compile_time`, notes attachment, and every diagnostic string listed in **C§12**.
 
+**How deep the checker goes.** Typing recurses with the program — an operand of
+`a | b | c` is typed inside the `|` around it — so the depth is bounded:
+`oj_sema::MAX_DEPTH` (8192) levels of expressions, statements and the
+declarations one needs typed before another, after which the checker reports,
+once, `This nests too deeply for the compiler to follow (more than 8192
+levels).` at the expression it stopped in. That is about pathology: `oj_driver`
+runs every compilation on a thread with a 1 GiB stack (reserved, not
+committed), which a program at the cap does not come near, and a flag enum
+or'd together a few hundred times — what generated bindings write — is typed
+like anything else. It used to be 128 levels and a silent `unknown`, which
+converts to everything and is never reported, so a long enough chain reached
+the back end as an expression nobody could type.
+
 ### 6.4 IR (`oj-ir`)
 
 A typed, backend-neutral instruction set that plays the role of jai's bytecode: virtual registers, explicit memory ops with sizes, calls with the Jai convention (hidden context pointer, hidden return pointers, big args by pointer), `#c_call` marshalling markers, string-compare, bounds/cast/null/overflow check instructions (lowered to calls into Runtime_Support), stack-trace node push/pop, `defer` expansion, `push_context` copy/pop, `#asm` and `#bytes` blobs, intrinsics. Passes: DCE (**L§11.6**), inliner (`inline`/`no_inline`, never across `#asm`), deduplication by IR hash (polymorph merge), initializer emission policy (`max_bytecode_instructions_for_inlined_initializer`), `#dump` printing (`oj <file> -- dump ir` and `Message_Debug_Dump`).

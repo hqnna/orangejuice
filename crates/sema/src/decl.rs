@@ -254,6 +254,7 @@ impl Checker<'_> {
     outer: ScopeId,
   ) -> TypeId {
     if !self.enter() {
+      self.too_deep(Some((source, header)));
       return TypeId::UNKNOWN;
     }
     let result = self.procedure_type_inner(source, header, outer);

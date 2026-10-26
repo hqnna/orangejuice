@@ -77,6 +77,7 @@ impl Checker<'_> {
     answer: impl Fn(&mut Self, ScopeId, ScopeId, &oj_scope::UsedValue, Symbol) -> Option<T>,
   ) -> Option<T> {
     if !self.enter() {
+      self.too_deep(None);
       return None;
     }
     let mut found = None;
