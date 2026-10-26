@@ -342,9 +342,8 @@ whole compile, most of it re-typing. Once every declaration has a type,
 the node, the scope it was read from (for a name, the one it was written
 in), the instantiation and the call being resolved around it; under a `#if`
 nobody could decide nothing is remembered, and a tree that grew — an
-`#insert`, a module a `#run` brought in — throws the memory away. A
-procedure call's overload is still resolved again (`call_plan`), which is
-what is left of the 2026 review's B3. Measured the same way, release build:
+`#insert`, a module a `#run` brought in — throws the memory away. Measured
+the same way, release build:
 
 | | before | after |
 |---|---|---|
@@ -365,6 +364,22 @@ change forgets them all, since one declaration further out can change what
 every scope under it sees. `ScopeTree::lookup`'s own cost on `wide` drops
 from 117 M instructions to 47 M, and the whole compile from 2.34 G to 2.22 G;
 the wall clock moves less than the benchmark's noise.
+
+The last of B3 was overload resolution: `call_plan` used to score a call's
+candidates again for the back end. The same memory now holds the candidate
+each call resolved to, and `call_plan` reads it and only puts the arguments
+in parameter order. Its key leaves out two things the expression key keeps:
+the call being resolved *around* this one, since resolving a call happens
+entirely at its own call site, and the block the question came from, since
+the callee and the arguments are read from where they were written — the
+checker often asks from the procedure's scope and the back end from the
+innermost block, and keyed by that the two never met. On `wide`,
+`resolve_overload` drops from 54 M instructions to 20 M (what is left is the
+checker's own pass), lowering from 601 M to 556 M and the whole compile from
+2.22 G to 2.18 G; the wall clock is within noise again (`wide` 693 → 688 ms
+through the metaprogram). `report_once` stays: lowering still walks
+expressions the memory does not hold — anything under a `#if` nobody could
+decide, and anything whose type came out unknown — and those report again.
 
 ### 7.3 Sweeps over other people's code
 

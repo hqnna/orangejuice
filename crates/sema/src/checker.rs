@@ -422,7 +422,19 @@ pub struct Checker<'a> {
   /// (`docs/spec.md` §7.1). `None` while the checker is still deciding
   /// things; the declaration count it was filled at says when the tree grew
   /// under it and it has to start over.
-  pub(crate) expression_memo: Option<(usize, HashMap<ExpressionKey, Expr>)>,
+  pub(crate) expression_memo: Option<Memo>,
+}
+
+/// What the checker remembers once every declaration has a type: each
+/// expression's type, and the candidate each call resolved to, so that the
+/// back end asking again reads the answer rather than scoring the overloads a
+/// second time (`docs/spec.md` §7.1).
+#[derive(Default)]
+pub(crate) struct Memo {
+  /// The declaration count the memo was filled at.
+  pub declarations: usize,
+  pub expressions: HashMap<ExpressionKey, Expr>,
+  pub signatures: HashMap<ExpressionKey, crate::overload::Signature>,
 }
 
 /// Everything an expression's type can depend on outside the tree itself:

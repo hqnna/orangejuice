@@ -18,8 +18,8 @@ impl Checker<'_> {
   pub(crate) fn expression_type(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
     let key = self.memo_key(scope, source, node);
     if let Some(key) = key
-      && let Some((_, memo)) = &self.expression_memo
-      && let Some(found) = memo.get(&key)
+      && let Some(memo) = &self.expression_memo
+      && let Some(found) = memo.expressions.get(&key)
     {
       return found.clone();
     }
@@ -29,11 +29,13 @@ impl Checker<'_> {
     }
     let result = self.expression_type_inner(scope, source, node);
     self.leave();
+    let count = self.program().tree().declaration_count();
     if let Some(key) = key
       && !result.is_unknown()
-      && let Some((_, memo)) = &mut self.expression_memo
+      && let Some(memo) = &mut self.expression_memo
+      && memo.declarations == count
     {
-      memo.insert(key, result.clone());
+      memo.expressions.insert(key, result.clone());
     }
     result
   }
@@ -42,16 +44,23 @@ impl Checker<'_> {
   /// being remembered at all. Under a `#if` nobody could decide the same node
   /// can mean something else next time; and a tree that has grown since the memo was filled may resolve a name
   /// differently, so it starts over.
-  fn memo_key(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<ExpressionKey> {
+  pub(crate) fn memo_key(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+  ) -> Option<ExpressionKey> {
     if self.expression_memo.is_none() || self.undecided_static_ifs > 0 {
       return None;
     }
     let count = self.program().tree().declaration_count();
-    if let Some((seen, memo)) = &mut self.expression_memo
-      && *seen != count
+    if let Some(memo) = &mut self.expression_memo
+      && memo.declarations != count
     {
-      *seen = count;
-      memo.clear();
+      *memo = crate::checker::Memo {
+        declarations: count,
+        ..Default::default()
+      };
     }
     // A name is looked up from where it was written, whatever scope the
     // question came with, so two walks that reach it from different blocks
@@ -69,10 +78,10 @@ impl Checker<'_> {
   /// every declaration has a type.
   pub fn remember_expressions(&mut self, on: bool) {
     self.expression_memo = match on {
-      true => Some((
-        self.program().tree().declaration_count(),
-        Default::default(),
-      )),
+      true => Some(crate::checker::Memo {
+        declarations: self.program().tree().declaration_count(),
+        ..Default::default()
+      }),
       false => None,
     };
   }

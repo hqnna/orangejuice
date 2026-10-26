@@ -58,15 +58,46 @@ impl Checker<'_> {
 
   /// The candidate a call site resolves to, with its polymorphic header
   /// already instantiated (**L§7.5**, **L§7.8**).
-  fn resolve_call(
+  pub(crate) fn resolve_call(
     &mut self,
     scope: ScopeId,
     source: SourceId,
     node: NodeId,
   ) -> Option<crate::overload::Signature> {
-    self.at_call_site(scope, source, node, |checker| {
+    // Everything below runs at this call site, so the call being resolved
+    // around it does not change the answer; and the callee and the arguments
+    // are read from where they were written, so neither does the block the
+    // question came from. Leaving both out of the key is what lets the back
+    // end, asking from a block of its own, find what the checker decided.
+    let key = self
+      .memo_key(scope, source, node)
+      .map(|(_, source, node, instance, _)| {
+        (
+          self.nearest_scope(source, node, scope),
+          source,
+          node,
+          instance,
+          None,
+        )
+      });
+    if let Some(key) = key
+      && let Some(memo) = &self.expression_memo
+      && let Some(found) = memo.signatures.get(&key)
+    {
+      return Some(found.clone());
+    }
+    let resolved = self.at_call_site(scope, source, node, |checker| {
       checker.resolve_call_inner(scope, source, node)
-    })
+    });
+    let count = self.program().tree().declaration_count();
+    if let Some(key) = key
+      && let Some(signature) = &resolved
+      && let Some(memo) = &mut self.expression_memo
+      && memo.declarations == count
+    {
+      memo.signatures.insert(key, signature.clone());
+    }
+    resolved
   }
 
   fn resolve_call_inner(

@@ -15,7 +15,6 @@ use oj_types::{Layout, TypeId};
 
 use crate::checker::{Checker, Expr};
 use crate::constants::{Const, Value};
-use crate::overload::Resolved;
 use crate::poly::InstanceId;
 
 /// One argument of a resolved call, in parameter order.
@@ -582,9 +581,14 @@ impl Checker<'_> {
   /// (**L§7.5**). `None` when the front end cannot decide — a polymorphic
   /// candidate, an argument of unknown type — which is what the back end
   /// reports as a call it could not build.
+  ///
+  /// The candidate is the one the checker chose when it typed the call, read
+  /// back from what it remembered rather than scored again (`docs/spec.md`
+  /// §7.1).
   pub fn call_plan(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<CallPlan> {
+    let signature = self.resolve_call(scope, source, node)?;
     self.at_call_site(scope, source, node, |checker| {
-      checker.call_plan_inner(scope, source, node)
+      checker.call_plan_inner(scope, source, node, signature)
     })
   }
 
@@ -593,6 +597,7 @@ impl Checker<'_> {
     scope: ScopeId,
     source: SourceId,
     node: NodeId,
+    signature: crate::overload::Signature,
   ) -> Option<CallPlan> {
     let ast = self.ast(source)?;
     let NodeData::ProcedureCall(call) = ast.data(node) else {
@@ -600,30 +605,10 @@ impl Checker<'_> {
     };
     let call = call.clone();
 
-    let arguments = self.call_arguments(scope, source, &call.arguments);
     let callee = self.expression_type(scope, source, call.procedure_expression);
     if callee.denoted.is_some() {
       return None;
     }
-
-    let signature = if callee.overloads.is_empty() {
-      let signature = self.signature_of_annotated(scope, source, call.procedure_expression)?;
-      match self.accepts(&signature, &arguments) {
-        true => signature,
-        false => return None,
-      }
-    } else {
-      // A name reached through an instantiated struct is resolved under that
-      // instantiation, since what its body says depends on it (**L§8.5**).
-      let candidates = callee.overloads.clone();
-      let previous = self.enter_instance(callee.overload_instance.or(self.current_instance));
-      let resolved = self.resolve_overload(&candidates, &arguments);
-      self.enter_instance(previous);
-      match resolved {
-        Resolved::One(signature) => signature,
-        Resolved::Ambiguous | Resolved::None => return None,
-      }
-    };
     if signature.polymorphic {
       return None;
     }

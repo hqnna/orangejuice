@@ -372,15 +372,20 @@ fn a_procedure_that_calls_nothing_keeps_no_trace_node() {
 fn what_the_checker_remembers_is_what_lowering_would_have_worked_out() {
   // Once every declaration has its type the checker remembers what each
   // expression was typed as, and lowering reads that rather than typing the
-  // body again (`docs/spec.md` §7.1). A program lowered with the memory
-  // thrown away first must come out the same.
+  // body again, and which candidate each call resolved to, which lowering
+  // reads rather than scoring the overloads again — even when it asks from a
+  // block nested deeper than the checker did (`docs/spec.md` §7.1). A program
+  // lowered with the memory thrown away first must come out the same.
   let source = "#import \"Basic\";\n\
     Point :: struct { x, y: int; }\n\
     add :: (a: Point, b: Point) -> Point { return .{a.x + b.x, a.y + b.y}; }\n\
     twice :: (x: $T) -> T { return x + x; }\n\
+    pick :: (x: int) -> int { return x; }\n\
+    pick :: (x: float) -> float { return x; }\n\
     main :: () {\n\
       p := add(.{1, 2}, .{3, 4});\n\
       for 0..3 print(\"% % %\\n\", p.x, twice(it), twice(2.5));\n\
+      if p.x > 0 { { q := add(p, add(p, .{pick(1), pick(2)})); print(\"% %\\n\", q.y, pick(2.5)); } }\n\
     }\n";
   let directory = tempfile::tempdir().expect("a temporary directory");
   let path = directory.path().join("input.jai");
