@@ -149,6 +149,26 @@ const TTWJ_ERRATA: &[(&str, &str, &str)] = &[
     "a variable left uninitialized with ---",
   ),
   ("09/9.1_types.jai", "4 bytes", "prose"),
+  (
+    "29/29.3_c_call.jai",
+    "You have been logged!",
+    "annotated after the print the program runs after it",
+  ),
+  (
+    "06/6.6_random.jai",
+    "15685560710023859762",
+    "drawn after seeding from the clock",
+  ),
+  (
+    "06/6.6_random.jai",
+    "0.571844",
+    "drawn after seeding from the clock",
+  ),
+  (
+    "06/6.6_random.jai",
+    "29.475393",
+    "drawn after seeding from the clock",
+  ),
   ("09/9.1_types.jai", "s64 int is an alias for s64", "prose"),
   ("13/13.1_unions.jai", "same as 6", "prose"),
   (

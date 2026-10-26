@@ -514,6 +514,18 @@ constant of yet. The Way to Jai and Advent of Code are unchanged.
 Quick lambdas as struct arguments (**L§8.5**) and what `custom_handlers` ran
 into behind them closed the last one: toml-jai is 6 / 0 / 1.
 
+Taking best guesses at the newer betas from what the book prints on 0.2.024
+— `Context` as a type name, eighteen significant digits, `(null)` and
+`(union)`, `random_get_within_range`, `Pool`'s header, all provisional in L or
+the modules (`TODO.md` lists them) — and three more errata for annotations
+that depend on the clock or are out of order, The Way to Jai passes whole:
+
+| Sweep | Passed | Failed | Skipped |
+|---|---|---|---|
+| The Way to Jai | 232 | 0 | 49 |
+| Advent of Code | 10 | 0 | 1 |
+| toml-jai | 6 | 0 | 1 |
+
 Before any of the review's fixes, 75 of the 281 book programs did not even
 build. Of the 86 failures left, some cannot pass under this harness — a
 book program that prints a workspace number expects to be driven by
