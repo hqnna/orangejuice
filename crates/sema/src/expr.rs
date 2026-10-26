@@ -624,7 +624,11 @@ impl Checker<'_> {
     let Some((source, span)) = here else {
       return;
     };
-    if self.undecided_static_ifs > 0
+    // Only a body being checked is somewhere to conclude a name is missing:
+    // the `Code_*` export types every node it walks, a rejected `#if` branch
+    // included (**C§5.3**).
+    if !self.checking_a_body()
+      || self.undecided_static_ifs > 0
       || !self.program().follows_imports()
       || self.program().is_uninstantiated(start)
       || self.program().is_in_macro(start)

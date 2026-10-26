@@ -893,6 +893,42 @@ fn the_distributions_default_metaprogram_drives_the_build() {
 }
 
 #[test]
+fn a_file_scope_using_does_not_make_the_export_report_rejected_branches() {
+  // The `Code_*` export the default metaprogram watches through types every
+  // node, a `#if` branch the build rejected included. With a file-scope
+  // `using` of a value in the program — GL's `using gl` — the names in
+  // Runtime_Support's other-platform branches used to come out as
+  // undeclared there; only a body being checked may conclude that.
+  if !linker_is_available() {
+    oj_testsupport::skip_without_linker("no C driver on PATH to link with");
+    return;
+  }
+  // SAFETY: as above.
+  unsafe { oj_testsupport::use_own_modules() };
+  let metaprogram =
+    oj_driver::default_metaprogram().expect("the distribution ships a Default_Metaprogram");
+  let fixture = Fixture::new();
+  fixture.write(
+    "used.jai",
+    "#import \"Basic\";\n#import \"Math\";\nS :: struct { f: bool; }\nusing g: S;\n\
+     main :: () { if !f print(\"%\\n\", -Vector3.{1, 2, 3}); }\n",
+  );
+  let report = oj_driver::run_through_metaprogram(
+    &metaprogram,
+    &[fixture.path("used.jai")],
+    &[],
+    &oj_driver::BuildOptions::new(),
+    oj_driver::Stage::Executable,
+  );
+  assert!(!report.failed, "{}", report.diagnostics.join(""));
+  let executable = report.executable.expect("an executable");
+  let output = std::process::Command::new(&executable)
+    .output()
+    .expect("the produced program runs");
+  assert_eq!(String::from_utf8_lossy(&output.stdout), "{-1, -2, -3}\n");
+}
+
+#[test]
 fn a_program_the_default_metaprogram_cannot_compile_fails_the_build() {
   if !linker_is_available() {
     oj_testsupport::skip_without_linker("no C driver on PATH to link with");
