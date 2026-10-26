@@ -255,6 +255,11 @@ const TTWJ_ERRATA: &[(&str, &str, &str)] = &[
     "the author's machine",
   ),
   (
+    "26/26.5_if.jai",
+    "name is Microsoft Windows",
+    "the author's machine",
+  ),
+  (
     "30/30.12_placeholder.jai",
     "TRUTH is true is a constant true",
     "a typo against the format string",
