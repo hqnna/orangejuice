@@ -43,6 +43,16 @@ fn final_node(ast: &Ast, statement: NodeId) -> NodeId {
       (None, Some(type_inst)) => node = type_inst,
       (None, None) => return statement,
     },
+    // `code = #string END … END` ends at its terminator line the way a
+    // declaration of one does (Focus).
+    NodeData::BinaryOperator {
+      operator, right, ..
+    } if operator.is_assignment() => {
+      return match ast.data(*right) {
+        NodeData::Literal(literal) if literal.flags.contains(LiteralFlags::HERE_STRING) => *right,
+        _ => statement,
+      };
+    }
     NodeData::CompoundDeclaration(compound) => match ast.data(compound.declaration_properties) {
       NodeData::Declaration(declaration) => match declaration.expression {
         Some(expression) => node = expression,

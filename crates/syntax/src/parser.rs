@@ -4588,6 +4588,13 @@ mod tests {
   }
 
   #[test]
+  fn an_assignment_of_a_here_string_ends_at_its_terminator() {
+    let source = "f :: () {\n    code = #string END\nbody\nEND\n    g(code);\n}\n";
+    assert!(errors(source).is_empty(), "{:?}", errors(source));
+    assert_eq!(tree(source).matches("statement[").count(), 3);
+  }
+
+  #[test]
   fn a_brace_in_argument_position_opens_an_untyped_literal() {
     assert_eq!(
       printed("f :: () { g({ a = 1, b = 2 }); }"),
