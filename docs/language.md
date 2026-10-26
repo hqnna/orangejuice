@@ -1470,7 +1470,7 @@ See 4.7 and 5.14. The interpreter and the runtime share one view of global data 
 | Form | Meaning |
 |---|---|
 | `#code expr` | an unevaluated, **untypechecked** expression; identifiers are not resolved until inserted somewhere (so they may not exist at the `#code` site) |
-| `#code { stmts }` | a block of statements; `#code x = 3;` statement form without braces is allowed, and so is one that starts with a keyword — `#code using self.state;`, `#code if x == { … }`, `#code return false, Any.{}`, `#code case -1;` (yield-jai, match-jai, jai-utils); inside a call such a statement keeps the `;` it ended with |
+| `#code { stmts }` | a block of statements; `#code x = 3;` statement form without braces is allowed, and so is one that starts with a keyword — `#code using self.state;`, `#code if x == { … }`, `#code return false, Any.{}`, `#code case -1;` (yield-jai, match-jai, jai-utils); inside a call such a statement keeps the `;` it ended with. A declaration quoted this way (`#code a := Vector3.{1,2,3};`) carries `node_flags.ALLOWED_BY_CONTEXT` when exported — **provisional**, read off The Way to Jai 26.11's printed node list on 0.2.024 |
 | `#code,typed expr` | typecheck the expression in the current scope now; `.type` and `get_root_type` work |
 | `#code,null` | the null Code; tests false in `if`; `c.type` on it is an error; `#insert`ing it inserts nothing; a default `$code := #code,null` parameter |
 | `code_of(x)` | the definition Code of a declaration / the Code of an expression after constant substitution |

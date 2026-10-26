@@ -4313,7 +4313,14 @@ impl Parser<'_> {
       let expression = self.parse_expression()?;
       if self.at(TokenKind::EQUALS) || self.at(TokenKind::COLON) {
         self.position = statement_start;
-        self.parse_declaration_statement()?
+        // A declaration where an expression stands is let in by the `#code`
+        // around it, and says so (**L§13.1**, provisional: The Way to Jai
+        // 26.11 prints `DECLARATION ALLOWED_BY_CONTEXT` for `#code a := …;`).
+        let statement = self.parse_declaration_statement()?;
+        if matches!(self.ast.data(statement), NodeData::Declaration(_)) {
+          self.ast.node_mut(statement).flags |= NodeFlags::ALLOWED_BY_CONTEXT;
+        }
+        statement
       } else {
         expression
       }
@@ -4470,6 +4477,17 @@ mod tests {
       "{source} did not round-trip through {printed}"
     );
     printed
+  }
+
+  #[test]
+  fn a_declaration_code_quotes_is_allowed_by_context() {
+    let (parsed, _) = parsed("code :: #code a := 1;\n");
+    let flagged: Vec<NodeFlags> = (0..parsed.ast.len())
+      .map(|index| NodeId(index as u32))
+      .filter(|id| matches!(parsed.ast.data(*id), NodeData::Declaration(_)))
+      .map(|id| parsed.ast.node(id).flags)
+      .collect();
+    assert_eq!(flagged, [NodeFlags::ALLOWED_BY_CONTEXT, NodeFlags::empty()]);
   }
 
   #[test]
