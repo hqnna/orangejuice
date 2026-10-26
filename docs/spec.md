@@ -6,7 +6,7 @@ orangejuice (`oj`) is a cleanroom implementation of the Jai programming language
 
 ## 1. Goals
 
-1. **A distribution of its own.** orangejuice ships `modules/`: a clean-room standard library written from **L** and **C** rather than derived from anyone else's source — `Preload`, `Runtime_Support`, `Default_Allocator`, `Basic`, `String`, `Math`, `Hash_Table`, `Compiler`, `Default_Metaprogram`, `Metaprogram_Plugins`, `Check`, `Program_Print`, `Code_Visit`, `File`, `File_Utilities`, `Process`, `System`, `Thread`, `Atomics`, `Bit_Operations`, `Hash`, `Random`, `Sort`, `Command_Line`, `Text_File_Handler`, `Pool`, `Flat_Pool`, `Bucket_Array`, `Bit_Array`, `Reflection`, `Machine_X64`, `POSIX`, `Linux`, `Darwin`, `Socket`, the graphical stack's bindings — `GL`, `X11`, `Clipboard`, `freetype`, `stb_image`, `stb_image_write`, `stb_image_resize` — `Unmapping_Allocator` and the rest. `Linux` and `Darwin` are each what only that system has, so a module named for a system exists only where a program could use it. Each one is API-compatible with the module of that name in beta 0.2.009: a program written against the reference's `Basic` compiles against ours, with the same declarations at the same layouts. Nothing in the repository depends on a reference distribution being installed, and none is (§10.1).
+1. **A distribution of its own.** orangejuice ships `modules/`: a clean-room standard library written from **L** and **C** rather than derived from anyone else's source — `Preload`, `Runtime_Support`, `Default_Allocator`, `Basic`, `String`, `Math`, `Hash_Table`, `Compiler`, `Default_Metaprogram`, `Metaprogram_Plugins`, `Check`, `Program_Print`, `Code_Visit`, `File`, `File_Utilities`, `Process`, `System`, `Thread`, `Atomics`, `Bit_Operations`, `Hash`, `Random`, `Sort`, `Command_Line`, `Text_File_Handler`, `Pool`, `Flat_Pool`, `Bucket_Array`, `Bit_Array`, `Reflection`, `Machine_X64`, `POSIX`, `Linux`, `Darwin`, `Socket`, the graphical stack's bindings — `GL`, `X11`, `Clipboard`, `freetype`, `stb_image`, `stb_image_write`, `stb_image_resize` — the windowing and 2D drawing stack over them — `Window_Type`, `Window_Creation`, `Input`, `Simp` — `Unmapping_Allocator` and the rest. `Linux` and `Darwin` are each what only that system has, so a module named for a system exists only where a program could use it. Each one is API-compatible with the module of that name in beta 0.2.009: a program written against the reference's `Basic` compiles against ours, with the same declarations at the same layouts. Nothing in the repository depends on a reference distribution being installed, and none is (§10.1).
 2. **Compatibility with metaprograms.** Programs drive the build the same way as with jai: the default metaprogram (`Default_Metaprogram.jai`) runs first, plugins work (`-plug Check`, `Program_Print`, `Iprof`...), `#import "Compiler"` exposes the same `Build_Options`, messages and `Code_*` structures with identical layouts, and `#run`/`#insert`/`add_build_string`/`compiler_get_nodes` behave as specified.
 3. **Full language.** Everything in **L**, including polymorphism, macros, `#modify`, `#insert`, `#asm` (x86-64), operator overloading, `#c_call`/`#foreign`/`#library` FFI, context arguments, type variants, `#no_reset`, global data injection, and the three cast syntaxes.
 4. **Correct runtime semantics** on Linux x86_64: System V ABI, the fixed Preload/Runtime_Support layouts, checks and panic messages, stack traces, entry point sequence, linking against system and user libraries.
@@ -358,6 +358,14 @@ The typecheck stage pays for filling the memory, so the win is lowering's
 and the whole build's, about 5%. `crates/ir/tests/lower.rs` lowers a program
 with the memory and without it and asserts the two listings are the same.
 
+The scope tree remembers its answers the same way (B4): a lookup of a name
+from a scope is kept until anything changes the tree — a declaration, an
+import, a `using`, a construct that may still declare names — and any such
+change forgets them all, since one declaration further out can change what
+every scope under it sees. `ScopeTree::lookup`'s own cost on `wide` drops
+from 117 M instructions to 47 M, and the whole compile from 2.34 G to 2.22 G;
+the wall clock moves less than the benchmark's noise.
+
 ### 7.3 Sweeps over other people's code
 
 `crates/driver/tests/sweep.rs` builds and runs code nobody here wrote, as the
@@ -391,12 +399,12 @@ First baseline, at the commit that added the sweep (x86-64 Linux):
 
 After the fixes the sweep itself turned up — global struct defaults, a
 `#run`'s own global initializer, `\%` in `print`, `#align` on a variable,
-literal-to-overload ranking, `@notes` in the type table, `New`'s allocator
-and the rest of 9f90a0b through 98da115:
+literal-to-overload ranking, `@notes` in the type table, `New`'s allocator,
+and the rest of 9f90a0b through the B4 commit:
 
 | Sweep | Passed | Failed | Skipped |
 |---|---|---|---|
-| The Way to Jai | 166 | 79 | 36 |
+| The Way to Jai | 175 | 70 | 36 |
 | Advent of Code | 10 | 0 | 1 |
 | toml-jai | 0 | 7 | 0 |
 
@@ -594,6 +602,43 @@ fixes — sizes, offsets, constants — is measured against a C program built fr
 the same headers, the way §7's POSIX check is; what needs a display runs on an
 `Xvfb` of its own (the dev shell provides one), and `Clipboard` runs *only*
 there, since owning the desktop's CLIPBOARD would overwrite its user's.
+
+#### The windowing stack
+
+`Window_Creation`, `Input` and `Simp` are what a graphical program writes
+against, and they are written from what programs call — The Way to Jai's
+chapters 33, 51 and 52, Focus, hitboxer, jai-simpler and the editor that use
+them — and from the X11 and OpenGL specifications, not from anyone's
+implementation. Linux (X11 and GLX) is the only backend so far; `Window_Type`
+alone has a fallback elsewhere, so that a program that merely names the type
+compiles.
+
+| Module | What it is | Over |
+|---|---|---|
+| `Window_Type` | the type a window is (`X11.Window` on Linux) | — |
+| `Window_Creation` | `create_window`, `get_dimensions`, `get_mouse_pointer_position`, `toggle_fullscreen` | `X11` on `x_global_display`; the visual from `glXChooseVisual` when there is GLX |
+| `Input` | `update_window_events`, `events_this_frame`, `input_button_states`, `get_window_resizes`, the mouse deltas, `Key_Code` | the X event queue of `x_global_display` |
+| `Simp` | `set_render_target`, the `immediate_*` batch, shaders, `Texture`/`Bitmap`, `Dynamic_Font`, `swap_buffers` | OpenGL 3.3 through `GL` and GLX; `stb_image`; `freetype` |
+
+Choices that are ours, since nothing a program does pins them: a `Key_Code`
+of a letter is its upper-case ASCII value, the control keys keep theirs and
+every named key comes after 127; typed text is the keysym `XLookupString`
+picks rather than an input method's composition; an image file is stored
+bottom row first when the coordinate system is right-handed, so a quad with
+the default texture coordinates shows it upright; glyph atlases are one
+channel swizzled to white-with-coverage, so text draws with the image shader;
+and a texture or font made before there is a render target keeps its pixels
+and uploads them when first drawn — The Way to Jai loads both without a
+window.
+
+`crates/driver/tests/simp.rs` sends the program's own window synthetic X
+events and checks what `Input` reports, and reads back the framebuffer after
+each way of drawing. On a machine whose OpenGL driver was built against a
+newer C library than the dev shell's, GLX looks absent to the program;
+`OJ_TEST_GL_LOADER` names the system's dynamic loader to run it through.
+With `OJ_TTWJ_DIR` set it also builds the book's graphical programs: nine of
+fifteen build, and the rest need `GetRect`, `Sound_Player`, `Windows` or
+`Windows_Resources`, or (33.12) make a float64 of `2*PI/30 * it`.
 
 ### 10.2 Gaps found while writing our own modules
 

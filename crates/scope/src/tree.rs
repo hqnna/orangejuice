@@ -272,6 +272,10 @@ pub enum Resolution {
 pub struct ScopeTree {
   scopes: RefCell<Vec<Scope>>,
   declarations: RefCell<Vec<Decl>>,
+  /// What each lookup answered, for as long as nothing has changed the tree
+  /// since: a declaration, an import, a `using` or a pending construct
+  /// anywhere can change the answer, so any of them starts over.
+  answers: RefCell<HashMap<(ScopeId, Symbol), Resolution>>,
   /// The interned `_`, which may be declared any number of times (**L§4.6**).
   discard: Cell<Option<Symbol>>,
 }
@@ -389,6 +393,7 @@ impl ScopeTree {
   }
 
   pub fn set_file(&self, id: ScopeId, source: SourceId, path: &Path) {
+    self.answers.borrow_mut().clear();
     let mut scopes = self.scopes.borrow_mut();
     let scope = &mut scopes[id.0 as usize];
     scope.source = Some(source);
@@ -398,6 +403,7 @@ impl ScopeTree {
   /// Adds `decl` to its scope. Returns the declaration it collides with, if the
   /// scope already holds a non-overloadable name (**L§4.3**).
   pub fn declare(&self, decl: Decl) -> Result<DeclId, DeclId> {
+    self.answers.borrow_mut().clear();
     let scope = decl.scope;
     let name = decl.name;
     let existing = self.with_scope(scope, |scope| scope.names.get(&name).cloned());
@@ -442,26 +448,31 @@ impl ScopeTree {
 
   /// Tells the tree which symbol is the discard identifier `_` (**L§4.6**).
   pub fn set_discard_name(&self, name: Symbol) {
+    self.answers.borrow_mut().clear();
     self.discard.set(Some(name));
   }
 
   pub fn set_decl_kind(&self, id: DeclId, kind: DeclKind) {
+    self.answers.borrow_mut().clear();
     self.declarations.borrow_mut()[id.0 as usize].kind = kind;
   }
 
   pub fn add_import(&self, scope: ScopeId, edge: ImportEdge) {
+    self.answers.borrow_mut().clear();
     self.scopes.borrow_mut()[scope.0 as usize]
       .imports
       .push(edge);
   }
 
   pub fn add_used_value(&self, scope: ScopeId, value: UsedValue) {
+    self.answers.borrow_mut().clear();
     self.scopes.borrow_mut()[scope.0 as usize]
       .used_values
       .push(value);
   }
 
   pub fn add_pending(&self, scope: ScopeId, provider: PendingProvider) {
+    self.answers.borrow_mut().clear();
     let mut scopes = self.scopes.borrow_mut();
     let pending = &mut scopes[scope.0 as usize].pending;
     if !pending.contains(&provider) {
@@ -473,6 +484,7 @@ impl ScopeTree {
   /// does once it has spliced its declarations in: a lookup that missed
   /// before now has its final answer (**L§4.3**).
   pub fn clear_pending(&self, scope: ScopeId, provider: PendingProvider) {
+    self.answers.borrow_mut().clear();
     let mut scopes = self.scopes.borrow_mut();
     scopes[scope.0 as usize]
       .pending
@@ -490,6 +502,18 @@ impl ScopeTree {
   /// Looks `name` up from `scope` outward (**L§4.3**): the lexical chain, and
   /// at each step the exported names of that scope's unnamed imports.
   pub fn lookup(&self, scope: ScopeId, name: Symbol) -> Resolution {
+    if let Some(known) = self.answers.borrow().get(&(scope, name)) {
+      return known.clone();
+    }
+    let answer = self.lookup_uncached(scope, name);
+    self
+      .answers
+      .borrow_mut()
+      .insert((scope, name), answer.clone());
+    answer
+  }
+
+  fn lookup_uncached(&self, scope: ScopeId, name: Symbol) -> Resolution {
     let mut pending = false;
     let mut current = Some(scope);
     // An overload set is open across every scope that can see it (**L§7.7**),
@@ -879,6 +903,22 @@ mod tests {
 
     assert!(matches!(tree.lookup(main, shown), Resolution::Found(_)));
     assert_eq!(tree.lookup(main, hidden), Resolution::Undeclared);
+  }
+
+  #[test]
+  fn a_remembered_answer_is_forgotten_when_the_tree_changes() {
+    let interner = oj_lexer::Interner::new();
+    let name = interner.intern(b"late");
+    let tree = ScopeTree::new();
+    let file = tree.push_scope(ScopeKind::File, None);
+    let block = tree.push_scope(ScopeKind::Imperative, Some(file));
+
+    assert_eq!(tree.lookup(block, name), Resolution::Undeclared);
+    assert_eq!(tree.lookup(block, name), Resolution::Undeclared);
+    let id = tree.declare(decl(name, file, DeclKind::Variable)).unwrap();
+    assert_eq!(tree.lookup(block, name), Resolution::Found(vec![id]));
+    let shadow = tree.declare(decl(name, block, DeclKind::Variable)).unwrap();
+    assert_eq!(tree.lookup(block, name), Resolution::Found(vec![shadow]));
   }
 
   #[test]
