@@ -130,6 +130,8 @@ IDENT
 
 `#char "x"` is a `u8` constant equal to the first byte of the one-character string literal (`#char" "` without a space is also accepted). There is no dedicated char type.
 
+The betas after 0.2.009 let a one-byte string literal stand for its byte without the `#char`: toml-jai writes `buffer[i] = "\t";`, `c >= "a"` and `c - "0"`, and Advent of Code `digits[it] - "0"` throughout. orangejuice reads it the way that code needs: a constant string of exactly one byte converts implicitly to any integer type that holds the byte (at the distance of a literal, so an overload taking a `string` is still the nearer one — `append(*builder, "^")` stays the string append), and as the operand of an arithmetic or comparison operator whose other operand is a typed integer it is that byte as a `u8`, so `c - "0"` with `c: u8` is a `u8`. `cast(u8) "a"` is 97. A string of any other length is unchanged, and so is ordering two strings, which is still the "does not work on strings" error. Whether the reference also accepts it beside an untyped literal (`"a" + 1`) is not measured; orangejuice leaves that a string.
+
 #### Struct and array literals
 
 See sections 5.7 and 5.8.

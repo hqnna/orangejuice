@@ -256,6 +256,7 @@ impl Const {
         Value::Int(value) => *value,
         Value::Bool(value) => i128::from(*value),
         Value::Float(value) => *value as i128,
+        Value::String(text) if text.len() == 1 => i128::from(text[0]),
         _ => return None,
       };
       return Some(Self::new(target, Value::Int(wrap(value, kind))));

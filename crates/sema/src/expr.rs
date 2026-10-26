@@ -1443,6 +1443,12 @@ impl Checker<'_> {
     if operator.is_assignment() {
       return Expr::value(TypeId::VOID);
     }
+    // A one-byte string literal beside an integer is the byte it holds:
+    // `c - "0"`, `c >= "a"` (**L§2.6**).
+    let (left_type, right_type) = (
+      self.as_character_beside(left_type.clone(), &right_type),
+      self.as_character_beside(right_type, &left_type),
+    );
     if let Some(result) = self.operator_overload(
       scope,
       source,
@@ -1608,6 +1614,22 @@ impl Checker<'_> {
         result
       }
     }
+  }
+
+  /// A one-byte string literal operand read as the `u8` it holds, when the
+  /// other operand is an integer a program computed (**L§2.6**).
+  fn as_character_beside(&self, operand: Expr, other: &Expr) -> Expr {
+    let Some(byte) = self.character_of(&operand) else {
+      return operand;
+    };
+    let other_type = self.types().underlying(other.type_id);
+    if self.types().is_untyped(other_type)
+      || self.types().integer_kind(other_type).is_none()
+      || self.types().enum_of(other_type).is_some()
+    {
+      return operand;
+    }
+    Expr::constant(Const::new(TypeId::U8, Value::Int(i128::from(byte))))
   }
 
   /// `Match` for two flexible operands (**L§5.10**): a literal or a numeric

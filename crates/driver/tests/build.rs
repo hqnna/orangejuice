@@ -546,9 +546,9 @@ fn a_run_reports_a_call_no_overload_accepts_and_does_not_execute() {
   // reported where it is, once, and the run that holds it never reaches the
   // back end.
   for run in [
-    "#run f(\"x\");",
-    "#run { f(\"x\"); }",
-    "#run { put_number(1); f(\"x\"); }",
+    "#run f(\"xy\");",
+    "#run { f(\"xy\"); }",
+    "#run { put_number(1); f(\"xy\"); }",
   ] {
     let Some(diagnostics) =
       diagnostics_of(&format!("f :: (a: int) {{}}\n{run}\nmain :: () {{}}\n"))
@@ -7161,5 +7161,25 @@ fn a_tagged_union_lays_its_tag_before_its_variants_and_describes_them() {
      }\n",
     "24 0 8 8\n40 32 24\nINT {INT, 0}\nhi {STR, \"hi\"} {s32, 300}\nB 2.5 {THIRD, 9}\n\
      Value true kind b=0 i=1 s=2\nGroup true tag second=1 third=-33\nTyped true kind a=INTEGER b=INTEGER\n",
+  );
+}
+
+#[test]
+fn a_one_byte_string_literal_computes_as_its_byte() {
+  // toml-jai's parser and Advent of Code's digit arithmetic (**L§2.6**).
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       s := \"a9z\";\n\
+       b: [2] u8;\n\
+       b[0] = \"\\t\";\n\
+       d := s[1] - \"0\";\n\
+       print(\"% % % % %\\n\", b[0], d, type_of(d), s[0] >= \"a\", \"a\" < s[0]);\n\
+       if s[2] == {\n\
+         case \"z\"; print(\"z\\n\");\n\
+         case; print(\"other\\n\");\n\
+       }\n\
+     }\n",
+    "9 9 u8 true false\nz\n",
   );
 }

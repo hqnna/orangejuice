@@ -595,7 +595,7 @@ fn a_place_overlay_is_another_view_rather_than_more_slots() {
 fn a_designated_array_literal_checks_its_elements() {
   accepts("f :: () { a := s64.[1, 2, 3]; b := string.[\"a\", \"b\"]; }");
   assert_eq!(
-    errors("f :: () { a := s64.[1, 2, \"x\"]; }"),
+    errors("f :: () { a := s64.[1, 2, \"xy\"]; }"),
     vec!["Type mismatch. Type wanted: s64; type given: string.".to_string()]
   );
   // `*u8.[…]` is an array of `*u8`, not the address of an array of `u8`
@@ -947,5 +947,32 @@ fn the_ordinary_spellings_of_all_of_those_are_still_accepted() {
       if c == .GREEN { }
     }
     ",
+  );
+}
+
+#[test]
+fn a_one_byte_string_literal_is_the_byte_where_an_integer_is_wanted() {
+  // The betas after 0.2.009 write `buffer[i] = "\t"`, `c - "0"` and
+  // `c >= "a"` (toml-jai, Advent of Code); a longer literal is still a string
+  // (**L§2.6**).
+  accepts(
+    "f :: (c: u8) -> u8 {\n\
+       b: [2] u8;\n\
+       b[0] = \"\\t\";\n\
+       x: u8 = \"a\";\n\
+       if c >= \"a\" && \"z\" >= c  return c - \"a\" + x;\n\
+       return b[0];\n\
+     }\n",
+  );
+  assert_eq!(
+    errors("f :: () { x: u8 = \"ab\"; }"),
+    vec!["Type mismatch. Type wanted: u8; type given: string.".to_string()]
+  );
+  assert_eq!(
+    errors("f :: (s: string) -> bool { return s >= \"a\"; }"),
+    vec![
+      "Operator '>=' does not work on strings. (Only == and != can be used on strings.)"
+        .to_string()
+    ]
   );
 }

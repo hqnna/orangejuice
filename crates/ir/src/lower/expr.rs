@@ -2013,6 +2013,14 @@ impl Lowering<'_, '_> {
     if types.is_untyped(right) {
       return left;
     }
+    // A one-byte string literal compared with an integer is the byte it
+    // holds (**L§2.6**).
+    if types.underlying(left) == TypeId::STRING && types.integer_kind(right).is_some() {
+      return right;
+    }
+    if types.underlying(right) == TypeId::STRING && types.integer_kind(left).is_some() {
+      return left;
+    }
     if let (Some(left_kind), Some(right_kind)) =
       (types.integer_kind(left), types.integer_kind(right))
     {

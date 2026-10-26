@@ -130,6 +130,19 @@ impl Checker<'_> {
       return Some(EXACT);
     }
 
+    // A one-byte string literal is the byte it holds wherever an integer is
+    // wanted, which is how the betas after 0.2.009 write `buffer[i] = "\t"`
+    // (**L§2.6**).
+    if let Some(byte) = self.character_of(value)
+      && let Some(kind) = self.types().integer_kind(self.types().underlying(target))
+      && self
+        .types()
+        .enum_of(self.types().underlying(target))
+        .is_none()
+      && kind.holds(i128::from(byte))
+    {
+      return Some(LITERAL);
+    }
     if let Some(distance) = self.numeric_conversion(from, target) {
       return Some(distance);
     }
@@ -152,6 +165,18 @@ impl Checker<'_> {
         .map(|distance| distance + POINTER);
     }
     self.as_conversion(from, target, 0)
+  }
+
+  /// The byte a one-byte string literal holds, which is what it stands for
+  /// where an integer is wanted (**L§2.6**).
+  pub(crate) fn character_of(&self, value: &Expr) -> Option<u8> {
+    if self.types().underlying(value.type_id) != TypeId::STRING {
+      return None;
+    }
+    match value.constant.as_ref().map(|constant| &constant.value) {
+      Some(Value::String(text)) if text.len() == 1 => Some(text[0]),
+      _ => None,
+    }
   }
 
   /// Whether a type is, or is built out of, one the front end could not work
