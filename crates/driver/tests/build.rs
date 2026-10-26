@@ -2593,8 +2593,24 @@ fn a_labelled_continue_names_a_for_by_its_iterator() {
 }
 
 #[test]
+fn a_reverse_range_loop_counts_down_without_v2() {
+  // `for < a..b` visits `b` first and `a` last, which is what the reference
+  // has done since 0.2.019 without being asked (**L§6.6**). An unsigned `it`
+  // stops at zero rather than wrapping past it.
+  assert_output(
+    "main :: () {\n  \
+       for < 1..3  put_number(it);\n  \
+       n: u32 = 2;\n  \
+       for < 0..n  put_number(it);\n  \
+       for < 3..1  put_number(99);\n\
+     }\n",
+    "3\n2\n1\n2\n1\n0\n",
+  );
+}
+
+#[test]
 fn a_reverse_range_loop_marked_v2_counts_down() {
-  // `for #v2 < a..b` visits the numbers of `a..b` in reverse (**L§6.5**).
+  // `for #v2 < a..b` visits the numbers of `a..b` in reverse (**L§6.6**).
   assert_output(
     "main :: () {\n  \
        for #v2 < 10..15  put_number(it);\n  \

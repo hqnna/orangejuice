@@ -1797,17 +1797,8 @@ impl Lowering<'_, '_> {
     it_decl: Option<DeclId>,
   ) {
     let source = self.body_source;
-    // `for #v2 < a..b` visits the numbers of `a..b` in reverse (**L§6.5**).
-    // Without `#v2` the reference warns and iterates forwards; orangejuice
-    // reports it instead (`docs/spec.md` §10).
-    if reverse && !payload.for_flags.contains(ForFlags::TEMPORARY_V2) {
-      self.error(
-        source,
-        node,
-        "A reverse 'for' over a range does not iterate backwards; write the range the other way.",
-      );
-      return;
-    }
+    // `for < a..b` visits the numbers of `a..b` from `b` down to `a`, with or
+    // without the `#v2` that used to ask for it (**L§6.6**).
     let scope = self
       .checker
       .scope_for(source, payload.iteration_expression, self.body_scope);
@@ -1900,6 +1891,43 @@ impl Lowering<'_, '_> {
     self.terminate(Terminator::Jump(step));
 
     self.current = step;
+    // Walking down stops once the near end has been visited rather than when
+    // the counter passes it, so that `for < 0..n` over an unsigned `it` does
+    // not wrap around.
+    if reverse {
+      let it_address = self.local_address(it_local);
+      let limit_address = self.local_address(limit_local);
+      let current = Val {
+        id: it_address,
+        type_id: it_type,
+        indirect: true,
+      };
+      let limit = Val {
+        id: limit_address,
+        type_id: it_type,
+        indirect: true,
+      };
+      let decrement = self.new_block();
+      match self.binary_values(
+        source,
+        node,
+        crate::ir::BinaryOp::Equal,
+        current,
+        limit,
+        TypeId::BOOL,
+      ) {
+        Some(done) => {
+          let done = self.scalar(done);
+          self.terminate(Terminator::Branch {
+            condition: done,
+            then_block: exit,
+            else_block: decrement,
+          });
+        }
+        None => self.terminate(Terminator::Jump(decrement)),
+      }
+      self.current = decrement;
+    }
     self.increment(it_local, it_type, if reverse { -1 } else { 1 });
     self.increment(index_local, TypeId::S64, 1);
     self.terminate(Terminator::Jump(head));

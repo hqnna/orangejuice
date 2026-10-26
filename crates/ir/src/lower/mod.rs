@@ -21,8 +21,7 @@ use oj_lexer::Symbol;
 use oj_scope::{AstSource, DeclId, DeclKind, ScopeId};
 use oj_sema::{CallPlan, Checker, Const, Expr, InstanceId, LoopExpansion, ProcedureBody, Value};
 use oj_syntax::ast::{
-  self, DeclarationFlags, ForFlags, IfFlags, LiteralValue, LoopControlType, NodeData, NodeId,
-  OperatorType,
+  self, DeclarationFlags, IfFlags, LiteralValue, LoopControlType, NodeData, NodeId, OperatorType,
 };
 use oj_types::{ArrayKind, IntKind, TypeId, TypeKind};
 
