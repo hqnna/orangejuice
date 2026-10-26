@@ -45,7 +45,7 @@ free    :: POSIX.free;
 CACHE_LINE :: 64;
 
 allocate :: (size: s64) -> *void {
-    if size % CACHE_LINE == 0  return System.aligned_alloc(CACHE_LINE, cast(u64) size);
+    if size > 0 && size % CACHE_LINE == 0  return System.aligned_alloc(CACHE_LINE, cast(u64) size);
     return malloc(cast(u64) size);
 }
 
@@ -54,7 +54,7 @@ allocate :: (size: s64) -> *void {
 allocator_proc :: (mode: Allocator_Mode, requested_size: s64, old_size: s64, old_memory: *void, allocator_data: *void) -> *void {
     if #complete mode == {
         case .ALLOCATE;
-            if requested_size <= 0  return null;
+            if requested_size < 0  return null;
             memory := allocate(requested_size);
             #if TRACK_ALLOCATIONS  if memory  note_allocation(requested_size);
             return memory;

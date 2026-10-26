@@ -311,11 +311,12 @@ runtime_support_default_logger :: (message: string, data: *void, info: Log_Info)
 runtime_support_default_allocator_proc :: (mode: Allocator_Mode, requested_size: s64, old_size: s64, old_memory: *void, allocator_data: *void) -> *void {
     if #complete mode == {
         case .ALLOCATE;
-            if requested_size <= 0  return null;
+            if requested_size < 0  return null;
             // An allocation a whole number of cache lines long starts on one,
             // the way the reference's size-classed heap places it — which is
             // what `New` of a struct with an `#align 64` member counts on.
-            if requested_size % 64 == 0  return Libc.aligned_alloc(64, cast(u64) requested_size);
+            // A zero-sized one is `malloc`'s, which gives it an address.
+            if requested_size > 0 && requested_size % 64 == 0  return Libc.aligned_alloc(64, cast(u64) requested_size);
             return Libc.malloc(cast(u64) requested_size);
 
         case .RESIZE;

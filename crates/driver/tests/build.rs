@@ -7337,3 +7337,15 @@ fn is_alnum_takes_an_underscore_and_is_alpha_does_not() {
     "true false true false\n",
   );
 }
+
+#[test]
+fn a_zero_sized_allocation_has_an_address() {
+  // toml-jai allocates what a `*struct {}` points at and asserts the pointer
+  // is not null.
+  assert_output(
+    "#import \"Basic\";\n\
+     S :: struct {}\n\
+     main :: () { p := alloc(0); q := New(S); print(\"% %\\n\", p != null, q != null); free(p); }\n",
+    "true true\n",
+  );
+}

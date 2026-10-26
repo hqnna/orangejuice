@@ -47,8 +47,11 @@ Runtime_Support :: #import "Runtime_Support";
 
 // ------------------------------------------------------------ allocation ---
 
+// A zero-sized request still reaches the allocator, and the heap answers it
+// with an address of its own: toml-jai allocates the target of a `*struct {}`
+// and checks it is not null.
 alloc :: (size: s64, allocator := context.allocator) -> *void {
-    if size <= 0  return null;
+    if size < 0  return null;
     proc := ifx allocator.proc then allocator.proc else context.allocator.proc;
     data := ifx allocator.proc then allocator.data else context.allocator.data;
     memory := proc(.ALLOCATE, size, 0, null, data);
