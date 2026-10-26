@@ -358,7 +358,17 @@ push_allocator :: (proc: Allocator_Proc, data: *void) #expand {
 temporary_alloc :: (requested_size: s64) -> *void {
     if requested_size <= 0  return null;
     ts := context.temporary_storage;
-    if !ts  return null;
+    // A context declared rather than handed down — `new_context: Context;`
+    // pushed from a `#c_call` callback (The Way to Jai 29.3) — has no storage
+    // yet; it gets some on first use rather than every `tprint` in it coming
+    // back empty. What it takes is not given back when the context is popped.
+    if !ts {
+        heap := Context_Base.default_allocator;
+        ts = cast(*Temporary_Storage) heap.proc(.ALLOCATE, size_of(Temporary_Storage), 0, null, heap.data);
+        if !ts  return null;
+        memset(ts, 0, size_of(Temporary_Storage));
+        context.temporary_storage = ts;
+    }
 
     size := (requested_size + TEMPORARY_ALIGNMENT - 1) & ~(TEMPORARY_ALIGNMENT - 1);
     if ts.current_page_bytes_occupied + size > ts.size {

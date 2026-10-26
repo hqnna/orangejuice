@@ -7557,3 +7557,18 @@ fn random_and_pool_match_the_way_to_jai() {
   );
 }
 
+#[test]
+fn a_declared_context_gets_temporary_storage_on_first_use() {
+  // `new_context: Context;` pushed from a `#c_call` callback (The Way to Jai
+  // 29.3) has no temporary storage; `log` formats with `tprint`, which used
+  // to come back empty there.
+  assert_output(
+    "#import \"Basic\";\n\
+     callback :: (text: *u8) #c_call {\n\
+       c: Context;\n\
+       push_context c { print(\"%\\n\", tprint(\"[%]\", to_string(text))); }\n\
+     }\n\
+     main :: () { callback(\"logged\"); }\n",
+    "[logged]\n",
+  );
+}
