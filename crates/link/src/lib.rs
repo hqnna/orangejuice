@@ -240,8 +240,8 @@ fn library_file(library: &Library) -> Option<String> {
 /// without `pkg-config` on it, both fall back to a plain `-l`.
 ///
 /// A package is not always named the way the library is — `libX11` is
-/// `x11`, `libGL` is `gl`, `libfreetype` is `freetype2` — so the spellings of
-/// [`package_candidates`] are asked in turn.
+/// `x11`, `libGL` is `gl`, `libfreetype` is `freetype2`, `libasound` is
+/// `alsa` — so the spellings of [`package_candidates`] are asked in turn.
 fn pkg_config_flags(name: &str) -> Option<Vec<String>> {
   package_candidates(name)
     .into_iter()
@@ -256,8 +256,17 @@ fn package_candidates(name: &str) -> Vec<String> {
       candidates.push(candidate);
     }
   }
+  // A package named after the project rather than the library.
+  if let Some((_, package)) = PROJECT_PACKAGES
+    .iter()
+    .find(|(library, _)| *library == lower)
+  {
+    candidates.push(package.to_string());
+  }
   candidates
 }
+
+const PROJECT_PACKAGES: &[(&str, &str)] = &[("asound", "alsa")];
 
 fn pkg_config_package_flags(name: &str) -> Option<Vec<String>> {
   let known = Command::new("pkg-config")
@@ -460,6 +469,7 @@ mod tests {
   fn a_library_is_looked_for_under_the_names_its_package_goes_by() {
     assert_eq!(package_candidates("X11"), ["X11", "x11", "x112"]);
     assert_eq!(package_candidates("freetype"), ["freetype", "freetype2"]);
+    assert_eq!(package_candidates("asound"), ["asound", "asound2", "alsa"]);
   }
 
   #[test]
