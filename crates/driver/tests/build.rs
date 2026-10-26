@@ -6252,3 +6252,35 @@ fn new_takes_the_allocator_it_is_given_and_a_flat_pool_reset_can_stamp() {
     "42 true\ncccccccc\n",
   );
 }
+
+#[test]
+fn a_c_call_procedure_type_returning_void_is_called_the_c_way() {
+  // `-> void #c_call` is a C function returning nothing; calling through one
+  // used to hand the callee a return slot it did not expect (**L§7.1**).
+  assert_output(
+    "T :: #type (n: s32, q: *s64) -> void #c_call;\n\
+     impl :: (n: s32, p: *s64) #c_call { p.* = n + 100; }\n\
+     main :: () { p: T = impl; x: s64; p(1, *x); put_number(x); }\n",
+    "101\n",
+  );
+}
+
+#[test]
+fn a_file_scope_using_does_not_hide_an_undeclared_name() {
+  let Some(diagnostics) = diagnostics_of(
+    "S :: struct { f: bool; }\n\
+     using g: S;\n\
+     main :: () { if f put(\"f\"); if begins_with(\"ab\") put(\"x\"); }\n",
+  ) else {
+    return;
+  };
+  assert!(
+    diagnostics.contains("Undeclared identifier 'begins_with'."),
+    "{diagnostics}"
+  );
+  assert!(!diagnostics.contains("'f'"), "{diagnostics}");
+  assert!(
+    !diagnostics.contains("could not generate code"),
+    "{diagnostics}"
+  );
+}

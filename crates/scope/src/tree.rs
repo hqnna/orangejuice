@@ -349,6 +349,29 @@ impl ScopeTree {
     self.with_scope(id, |scope| scope.names.keys().copied().collect())
   }
 
+  /// Whether every construct that could still declare a name on the chain out
+  /// of `scope` is a `using` of a value — the one kind the typechecker can see
+  /// through, and so the one kind after which a miss is a miss.
+  pub fn only_usings_pending(&self, scope: ScopeId) -> bool {
+    let mut current = Some(scope);
+    while let Some(id) = current {
+      let (others, parent) = self.with_scope(id, |scope| {
+        (
+          scope
+            .pending
+            .iter()
+            .any(|provider| *provider != PendingProvider::Using),
+          scope.parent,
+        )
+      });
+      if others {
+        return false;
+      }
+      current = parent;
+    }
+    true
+  }
+
   pub fn has_pending_providers(&self, id: ScopeId) -> bool {
     self.with_scope(id, |scope| scope.has_pending_providers())
   }

@@ -177,6 +177,38 @@ impl Checker<'_> {
     })
   }
 
+  /// Whether every `using`ed value on the chain out of `scope` is a struct the
+  /// checker knows the members of, so that a name none of them has is not a
+  /// member that has yet to appear (**L§6.8**).
+  pub(crate) fn used_values_are_settled(&mut self, scope: ScopeId) -> bool {
+    for id in self.scopes_with_usings(scope) {
+      let used: Vec<oj_scope::UsedValue> = self.program().tree().used_values(id).to_vec();
+      for value in used {
+        let Some(definition) = self.struct_of_used_value(id, &value) else {
+          return false;
+        };
+        let base_type = match self.used_base(&value) {
+          Some(decl) => self.decl_type(decl).value,
+          None => match self.used_expression_base(&value, id) {
+            Some((_, base_type)) => base_type,
+            None => return false,
+          },
+        };
+        if self.undecided_type(base_type) {
+          return false;
+        }
+        if self.is_completing(definition) {
+          return false;
+        }
+        self.complete_struct(definition);
+        if !self.types().struct_info(definition).complete {
+          return false;
+        }
+      }
+    }
+    true
+  }
+
   /// The struct a `using`ed value is, following one pointer.
   fn struct_of_used_value(
     &mut self,

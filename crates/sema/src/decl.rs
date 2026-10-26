@@ -301,6 +301,15 @@ impl Checker<'_> {
       );
       signature.returns.push(type_id);
     }
+    // Across a `#c_call` boundary `-> void` returns nothing, and is the same
+    // type as a header that says nothing (**L§7.1**).
+    if signature.returns == [TypeId::VOID]
+      && signature
+        .flags
+        .contains(oj_types::ProcedureFlags::IS_C_CALL)
+    {
+      signature.returns.clear();
+    }
     // A quick lambda's return type is the one thing in the language that is
     // inferred from a body (**L§7.9**).
     if payload.returns.is_empty()

@@ -553,7 +553,39 @@ impl Checker<'_> {
         return found;
       }
     }
-    caller.unwrap_or(Expr::UNKNOWN)
+    if let Some(caller) = caller {
+      return caller;
+    }
+    self.report_undeclared_past_usings(start, name, here);
+    Expr::UNKNOWN
+  }
+
+  /// A name a `using` of a value kept the scope pass from calling undeclared
+  /// is, once the checker has looked through every such value and found it
+  /// in none of them (**L§6.8**, **L§11.7**).
+  fn report_undeclared_past_usings(
+    &mut self,
+    start: ScopeId,
+    name: Symbol,
+    here: Option<(SourceId, Span)>,
+  ) {
+    let Some((source, span)) = here else {
+      return;
+    };
+    if self.undecided_static_ifs > 0
+      || !self.program().follows_imports()
+      || self.program().is_uninstantiated(start)
+      || self.program().is_in_macro(start)
+      || self.program().is_macro_injected(name)
+      || self.caller_scope().is_some()
+      || self.program().tree().lookup(start, name) != oj_scope::Resolution::Pending
+      || !self.program().tree().only_usings_pending(start)
+      || !self.used_values_are_settled(start)
+    {
+      return;
+    }
+    let text = String::from_utf8_lossy(self.interner().resolve(name)).into_owned();
+    self.report_once(source, span, format!("Undeclared identifier '{text}'."));
   }
 
   /// `#procedure_name()`: the name of the procedure it was written in — or,

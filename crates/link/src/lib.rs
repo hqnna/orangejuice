@@ -260,7 +260,20 @@ fn pkg_config_flags(name: &str) -> Option<Vec<String>> {
     .split_whitespace()
     .map(String::from)
     .collect();
-  (!flags.is_empty()).then_some(flags)
+  (!flags.is_empty()).then(|| with_search_rpaths(flags))
+}
+
+/// A directory `pkg-config` sends the link to is one the program has to find
+/// its library in when it runs, too — under nix it is a store path no loader
+/// searches — so each `-L` brings an rpath with it.
+fn with_search_rpaths(flags: Vec<String>) -> Vec<String> {
+  let rpaths: Vec<String> = flags
+    .iter()
+    .filter_map(|flag| flag.strip_prefix("-L"))
+    .filter(|directory| !directory.is_empty())
+    .map(|directory| format!("-Wl,-rpath,{directory}"))
+    .collect();
+  flags.into_iter().chain(rpaths).collect()
 }
 
 /// Runs the link, or copies the single object out when no linking is asked
@@ -420,6 +433,22 @@ mod tests {
       Some(flags) => assert!(flags.iter().all(|flag| line.arguments.contains(flag))),
       None => assert!(line.arguments.contains(&String::from("-lz"))),
     }
+  }
+
+  #[test]
+  fn a_directory_pkg_config_links_from_is_searched_at_run_time_too() {
+    assert_eq!(
+      with_search_rpaths(vec![
+        String::from("-L/nix/store/x-libX11/lib"),
+        String::from("-lX11")
+      ]),
+      [
+        "-L/nix/store/x-libX11/lib",
+        "-lX11",
+        "-Wl,-rpath,/nix/store/x-libX11/lib"
+      ]
+    );
+    assert_eq!(with_search_rpaths(vec![String::from("-lz")]), ["-lz"]);
   }
 
   #[test]
