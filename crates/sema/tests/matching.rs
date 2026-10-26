@@ -663,6 +663,43 @@ fn a_return_that_fills_too_few_values_is_reported() {
 }
 
 #[test]
+fn a_must_return_value_that_is_dropped_is_reported() {
+  // **L§7.2**: a `#must` value has to be received — not by a call written as
+  // a statement, not by fewer names than the call produces, and not by an
+  // argument slot, which keeps only the first value.
+  let header = "
+    f :: () -> s64 #must { return 1; }
+    g :: () -> s64, bool #must { return 1, true; }
+    h :: (x: s64) {}
+  ";
+  assert_eq!(
+    errors(&format!("{header} main :: () {{ f(); }}\n")),
+    vec!["The return value of 'f' is marked #must, but it is not received here.".to_string()]
+  );
+  let dropped_second =
+    vec!["Return value 2 of 'g' is marked #must, but it is not received here.".to_string()];
+  assert_eq!(
+    errors(&format!("{header} main :: () {{ a := g(); }}\n")),
+    dropped_second
+  );
+  assert_eq!(
+    errors(&format!("{header} main :: () {{ a: s64; a = g(); }}\n")),
+    dropped_second
+  );
+  assert_eq!(
+    errors(&format!("{header} main :: () {{ h(g()); }}\n")),
+    dropped_second
+  );
+  assert_eq!(
+    errors(&format!("{header} main :: () {{ g(); }}\n")),
+    dropped_second
+  );
+  accepts(&format!(
+    "{header} main :: () {{ a := f(); b, c := g(); b, c = g(); h(f()); }}\n"
+  ));
+}
+
+#[test]
 fn a_return_may_leave_out_the_values_that_have_defaults() {
   accepts(
     "

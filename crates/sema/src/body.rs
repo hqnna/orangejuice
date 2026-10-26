@@ -505,6 +505,27 @@ impl Checker<'_> {
       // The operands of an `#asm` block are expressions of the block around
       // it (**L§15**).
       NodeData::Asm(_) => self.check_asm(context, node),
+      // A call written as a statement receives none of its values.
+      NodeData::ProcedureCall(_) => {
+        self.expression_type(scope, source, node);
+        self.check_must_received(scope, source, node, 0);
+      }
+      NodeData::CompoundDeclaration(compound) => {
+        let (names, properties) = (
+          compound.comma_separated_assignment,
+          compound.declaration_properties,
+        );
+        self.expression_type(scope, source, node);
+        let received = match ast.data(names) {
+          NodeData::CommaSeparatedArguments { arguments } => arguments.len(),
+          _ => 1,
+        };
+        if let NodeData::Declaration(declaration) = ast.data(properties)
+          && let Some(expression) = declaration.expression
+        {
+          self.check_must_received(scope, source, expression, received);
+        }
+      }
       // Anything else is an expression statement: typing it is what reports
       // the calls inside it.
       _ => {
@@ -647,11 +668,13 @@ impl Checker<'_> {
     let Some(type_inst) = declaration.type_inst else {
       let value = self.expression_type(scope, source, expression);
       self.record_late_local(node, source, declaration, &value);
+      self.check_must_received(scope, source, expression, 1);
       return;
     };
 
     let target = self.type_from_node(scope, source, type_inst);
     let value = self.expression_type(scope, source, expression);
+    self.check_must_received(scope, source, expression, 1);
     if self.implicit_conversion(&value, target).is_some() {
       return;
     }
@@ -684,6 +707,7 @@ impl Checker<'_> {
     let (scope, source) = (context.scope, context.source);
     let target = self.expression_type(scope, source, left);
     let value = self.expression_type(scope, source, right);
+    self.check_must_received(scope, source, right, 1);
     // A compound assignment goes through the operator, whose result may be
     // wider than the target; only a plain `=` is a straight conversion.
     if operator != OperatorType::ASSIGN {

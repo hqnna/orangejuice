@@ -84,11 +84,16 @@ impl Checker<'_> {
       && let Some(memo) = &self.expression_memo
       && let Some(found) = memo.signatures.get(&key)
     {
-      return Some(found.clone());
+      let found = found.clone();
+      self.check_arguments_received(scope, source, node);
+      return Some(found);
     }
     let resolved = self.at_call_site(scope, source, node, |checker| {
       checker.resolve_call_inner(scope, source, node)
     });
+    if resolved.is_some() {
+      self.check_arguments_received(scope, source, node);
+    }
     let count = self.program().tree().declaration_count();
     if let Some(key) = key
       && let Some(signature) = &resolved
@@ -274,6 +279,98 @@ impl Checker<'_> {
   /// which case nothing can be concluded about the call it was written in.
   fn unresolved_argument(&mut self, type_id: TypeId) -> bool {
     self.mentions_unknown(type_id) || self.mentions_polymorph(type_id)
+  }
+
+  /// A call written as an argument hands on only its first value, so none of
+  /// the others may be one its header marked `#must` (**L§7.2**).
+  fn check_arguments_received(&mut self, scope: ScopeId, source: SourceId, node: NodeId) {
+    if !self.checking_a_body() {
+      return;
+    }
+    let Some(ast) = self.ast(source) else {
+      return;
+    };
+    let NodeData::ProcedureCall(call) = ast.data(node) else {
+      return;
+    };
+    for argument in &call.arguments {
+      if !self.is_spread(source, argument.expression) {
+        let at = self.scope_at(source, argument.expression, scope);
+        self.check_must_received(at, source, argument.expression, 1);
+      }
+    }
+  }
+
+  /// A `#must` return value has to be received (**L§7.2**): a call whose
+  /// first `received` values are all that is kept may not drop one its
+  /// header marked so. Through a value of procedure type there is no header
+  /// to read the marks from, and nothing is checked.
+  pub(crate) fn check_must_received(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    node: NodeId,
+    received: usize,
+  ) {
+    let Some(ast) = self.ast(source) else {
+      return;
+    };
+    let NodeData::ProcedureCall(call) = ast.data(node) else {
+      return;
+    };
+    if call
+      .flags
+      .contains(oj_syntax::ast::CallFlags::RETURNS_PROCEDURE_POINTER_ONLY)
+    {
+      return;
+    }
+    let callee = call.procedure_expression;
+    let Some(signature) = self.resolve_call(scope, source, node) else {
+      return;
+    };
+    let Some((header_source, header)) = signature.header else {
+      return;
+    };
+    let Some(header_ast) = self.ast(header_source) else {
+      return;
+    };
+    let NodeData::ProcedureHeader(header) = header_ast.data(header) else {
+      return;
+    };
+    let count = header.returns.len();
+    let Some(dropped) =
+      header
+        .returns
+        .iter()
+        .enumerate()
+        .skip(received)
+        .find_map(|(index, node)| match header_ast.data(*node) {
+          NodeData::Declaration(declaration)
+            if declaration
+              .flags
+              .contains(oj_syntax::ast::DeclarationFlags::MUST_BE_RECEIVED) =>
+          {
+            Some(index)
+          }
+          _ => None,
+        })
+    else {
+      return;
+    };
+    let name = match header.name {
+      Some(name) => self.interner().resolve_lossy(name).into_owned(),
+      None => self.written_name(source, callee),
+    };
+    let span = ast.node(node).span;
+    let which = match count {
+      1 => String::from("The return value"),
+      _ => format!("Return value {}", dropped + 1),
+    };
+    self.error(
+      source,
+      span,
+      format!("{which} of '{name}' is marked #must, but it is not received here."),
+    );
   }
 
   /// The text a callee was written as, for a diagnostic that has to name it.
