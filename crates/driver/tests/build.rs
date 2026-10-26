@@ -6353,3 +6353,32 @@ fn operator_names_an_overload_set_and_print_shows_overlaid_storage_once() {
     "{2, 2, -0.5}\n{7}\n",
   );
 }
+
+#[test]
+fn a_backticked_return_is_checked_against_the_procedure_the_macro_landed_in() {
+  // `` `return `` leaves the caller, so its value is the caller's return
+  // type rather than the macro's (**L§7.13**, The Way to Jai 26.7B).
+  assert_output(
+    "early :: (n: int) -> int #expand {\n\
+       if n > 1 { `return \"big\\n\"; }\n\
+       return n;\n\
+     }\n\
+     describe :: (n: int) -> string {\n\
+       x := early(n);\n\
+       return \"small\\n\";\n\
+     }\n\
+     main :: () { put(describe(1)); put(describe(5)); }\n",
+    "small\nbig\n",
+  );
+  let Some(diagnostics) = diagnostics_of(
+    "early :: () #expand { `return 3; }\n\
+     describe :: () -> string { early(); return \"x\"; }\n\
+     main :: () { put(describe()); }\n",
+  ) else {
+    return;
+  };
+  assert!(
+    diagnostics.contains("Type wanted: string; type given:"),
+    "{diagnostics}"
+  );
+}

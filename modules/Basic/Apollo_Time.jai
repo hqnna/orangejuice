@@ -46,7 +46,7 @@ Calendar_Time :: struct {
 // ------------------------------------------------------------ conversions ---
 
 ConvertToApollo :: (m: s64, FACTOR: s64) #expand {
-    `return to_s128(m) * to_s128(FACTOR);
+    `return cast(Apollo_Time) (to_s128(m) * to_s128(FACTOR));
 }
 
 seconds_to_apollo :: (m: s64) -> Apollo_Time {

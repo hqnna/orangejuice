@@ -399,7 +399,25 @@ impl Checker<'_> {
         }
       }
       NodeData::Declaration(declaration) => self.check_declaration(context, node, declaration),
-      NodeData::Return { arguments, .. } => self.check_return(context, node, arguments),
+      NodeData::Return { arguments, flags } => {
+        if flags.contains(oj_syntax::ast::ReturnFlags::IS_BACKTICKED) {
+          // `` `return `` in a macro returns from the procedure the macro was
+          // expanded into, so it is checked against that one's returns
+          // (**L§7.13**); with no such procedure in sight there is nothing to
+          // check it against.
+          let arguments = arguments.clone();
+          if let Some(returns) = self.expansion_procedure_returns() {
+            let caller = Context {
+              return_defaults: vec![false; returns.len()],
+              returns,
+              ..context.clone()
+            };
+            self.check_return(&caller, node, &arguments);
+          }
+          return;
+        }
+        self.check_return(context, node, arguments)
+      }
       NodeData::While { condition, block } => {
         let (condition, block) = (*condition, *block);
         self.check_condition(context, condition);
@@ -678,6 +696,23 @@ impl Checker<'_> {
       .ast(source)
       .map_or(Span::at(0), |ast| ast.node(node).span);
     self.report_mismatch(source, span, target.type_id, value.type_id);
+  }
+
+  /// The return types of the procedure the innermost macro expanded into.
+  fn expansion_procedure_returns(&mut self) -> Option<Vec<TypeId>> {
+    let mut current = self.caller_scope();
+    while let Some(id) = current {
+      if let Some((owner, header)) = self.program().procedure_owner(id) {
+        let outer = self.program().tree().parent(id).unwrap_or(id);
+        let type_id = self.procedure_type(owner, header, outer);
+        return self
+          .types()
+          .procedure_of(type_id)
+          .map(|signature| signature.returns.clone());
+      }
+      current = self.program().tree().parent(id);
+    }
+    None
   }
 
   fn check_return(&mut self, context: &Context, node: NodeId, arguments: &[Argument]) {
