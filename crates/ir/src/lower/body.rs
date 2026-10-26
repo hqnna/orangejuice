@@ -1902,10 +1902,12 @@ impl Lowering<'_, '_> {
     self.terminate(Terminator::Jump(step));
 
     self.current = step;
-    // Walking down stops once the near end has been visited rather than when
-    // the counter passes it, so that `for < 0..n` over an unsigned `it` does
-    // not wrap around.
-    if reverse {
+    // The walk stops once the far end has been visited rather than when the
+    // counter passes it, so that `for < 0..n` over an unsigned `it` does not
+    // wrap below zero and `for 0..cast(u8) 255` does not wrap above its
+    // largest value: range loops never overflow (**L§6.6**). A body that moved
+    // `it` past the end stops the same way.
+    {
       let it_address = self.local_address(it_local);
       let limit_address = self.local_address(limit_local);
       let current = Val {
@@ -1918,26 +1920,23 @@ impl Lowering<'_, '_> {
         type_id: it_type,
         indirect: true,
       };
-      let decrement = self.new_block();
-      match self.binary_values(
-        source,
-        node,
-        crate::ir::BinaryOp::Equal,
-        current,
-        limit,
-        TypeId::BOOL,
-      ) {
+      let advance = self.new_block();
+      let finished = match reverse {
+        true => crate::ir::BinaryOp::LessOrEqual,
+        false => crate::ir::BinaryOp::GreaterOrEqual,
+      };
+      match self.binary_values(source, node, finished, current, limit, TypeId::BOOL) {
         Some(done) => {
           let done = self.scalar(done);
           self.terminate(Terminator::Branch {
             condition: done,
             then_block: exit,
-            else_block: decrement,
+            else_block: advance,
           });
         }
-        None => self.terminate(Terminator::Jump(decrement)),
+        None => self.terminate(Terminator::Jump(advance)),
       }
-      self.current = decrement;
+      self.current = advance;
     }
     self.increment(it_local, it_type, if reverse { -1 } else { 1 });
     self.increment(index_local, TypeId::S64, 1);

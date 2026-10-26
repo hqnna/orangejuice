@@ -6923,3 +6923,23 @@ fn a_struct_reached_through_using_as_is_its_base_family() {
     "42 7 [0, 42, 0, 7] 3 10\n",
   );
 }
+
+#[test]
+fn a_range_loop_never_overflows_its_iterator() {
+  // `for i: 0..cast(u8) 255` visits 256 numbers and stops rather than
+  // wrapping back to 0 (**L§6.6**; The Way to Jai 15.3).
+  assert_output(
+    "main :: () {\n\
+       n := 0;\n\
+       for i: 0..cast(u8) 255  n += 1;\n\
+       m := 0;\n\
+       for < i: cast(u8) 0..cast(u8) 3  m += 1;\n\
+       s := 0;\n\
+       for i: 0..10 { s += 1; i += 3; }\n\
+       put_number(n);\n\
+       put_number(m);\n\
+       put_number(s);\n\
+     }\n",
+    "256\n4\n3\n",
+  );
+}
