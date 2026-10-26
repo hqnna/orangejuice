@@ -412,7 +412,24 @@ pub struct Checker<'a> {
   /// The instantiation each polymorphic procedure written as an argument
   /// became (**L§7.8**).
   pub(crate) argument_instances: HashMap<(Option<InstanceId>, SourceId, NodeId), InstanceId>,
+  /// What each expression was typed as, once typechecking is over and the
+  /// back end walks the same trees again asking the same questions
+  /// (`docs/spec.md` §7.1). `None` while the checker is still deciding
+  /// things; the declaration count it was filled at says when the tree grew
+  /// under it and it has to start over.
+  pub(crate) expression_memo: Option<(usize, HashMap<ExpressionKey, Expr>)>,
 }
+
+/// Everything an expression's type can depend on outside the tree itself:
+/// where it is read from, the instantiation it is read under, and the call
+/// being resolved around it, which is where a macro it names expands.
+pub(crate) type ExpressionKey = (
+  ScopeId,
+  SourceId,
+  NodeId,
+  Option<InstanceId>,
+  Option<crate::poly::Expansion>,
+);
 
 /// How deep the checker follows an expression, a statement or a chain of
 /// declarations before it says so rather than recursing further. Generated
@@ -498,6 +515,7 @@ impl<'a> Checker<'a> {
       call_site: None,
       loop_expansions: HashMap::default(),
       argument_instances: HashMap::default(),
+      expression_memo: None,
       units_seen: 0,
       context_size_max: crate::aggregate::DEFAULT_CONTEXT_SIZE,
       // The program's, not the host's: the scope pass has already folded every
@@ -736,6 +754,9 @@ impl<'a> Checker<'a> {
     while let Some(definition) = self.pending_bodies.keys().copied().next() {
       self.complete_struct(definition);
     }
+    // Every declaration has its type now, so what a body's expressions are
+    // typed as is what they will be typed as when the back end asks again.
+    self.remember_expressions(true);
     self.check_bodies();
     self.check_file_runs();
     self.check_instances();

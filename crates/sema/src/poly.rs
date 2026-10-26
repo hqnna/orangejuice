@@ -108,7 +108,7 @@ pub(crate) struct Instance {
 }
 
 /// Where a macro was invoked (**L§7.13**).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Expansion {
   pub source: SourceId,
   pub node: NodeId,

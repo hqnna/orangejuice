@@ -334,6 +334,30 @@ instructions and memoizing the second one measured *slower* than repeating it.
 What is expensive is the *number* of lookups, which is a caching question with
 `#insert` semantics attached (§10) rather than a hot loop to tighten.
 
+That caching question had an easy half. Lowering asks the checker the type
+of every expression it walks, and the checker used to work each one out
+again — a callgrind profile of `wide` put the back end's walk at 44% of the
+whole compile, most of it re-typing. Once every declaration has a type,
+`Checker::check` now remembers what each expression was typed as, keyed by
+the node, the scope it was read from (for a name, the one it was written
+in), the instantiation and the call being resolved around it; under a `#if`
+nobody could decide nothing is remembered, and a tree that grew — an
+`#insert`, a module a `#run` brought in — throws the memory away. A
+procedure call's overload is still resolved again (`call_plan`), which is
+what is left of the 2026 review's B3. Measured the same way, release build:
+
+| | before | after |
+|---|---|---|
+| `wide`, instructions (callgrind, `dump ir`) | 2.97 G | 2.34 G |
+| of which lowering | 1.32 G | 0.63 G |
+| `wide` lower to IR | 124 ms | 94 ms |
+| `wide` typecheck | 66 ms | 81 ms |
+| `wide` / `deep` / `modules`, through the metaprogram | 749 / 375 / 639 ms | 700 / 349 / 626 ms |
+
+The typecheck stage pays for filling the memory, so the win is lowering's
+and the whole build's, about 5%. `crates/ir/tests/lower.rs` lowers a program
+with the memory and without it and asserts the two listings are the same.
+
 ### 7.3 Sweeps over other people's code
 
 `crates/driver/tests/sweep.rs` builds and runs code nobody here wrote, as the

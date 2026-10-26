@@ -367,3 +367,47 @@ fn a_procedure_that_calls_nothing_keeps_no_trace_node() {
     .expect("the records should still be filled");
   assert!(!init.contains("__oj_trace_info$leaf"), "{init}");
 }
+
+#[test]
+fn what_the_checker_remembers_is_what_lowering_would_have_worked_out() {
+  // Once every declaration has its type the checker remembers what each
+  // expression was typed as, and lowering reads that rather than typing the
+  // body again (`docs/spec.md` §7.1). A program lowered with the memory
+  // thrown away first must come out the same.
+  let source = "#import \"Basic\";\n\
+    Point :: struct { x, y: int; }\n\
+    add :: (a: Point, b: Point) -> Point { return .{a.x + b.x, a.y + b.y}; }\n\
+    twice :: (x: $T) -> T { return x + x; }\n\
+    main :: () {\n\
+      p := add(.{1, 2}, .{3, 4});\n\
+      for 0..3 print(\"% % %\\n\", p.x, twice(it), twice(2.5));\n\
+    }\n";
+  let directory = tempfile::tempdir().expect("a temporary directory");
+  let path = directory.path().join("input.jai");
+  std::fs::write(&path, source).expect("the input should be writable");
+  let listing = |forget: bool| {
+    let sources = SourceMap::new();
+    let interner = Interner::new();
+    let options = oj_scope::Options {
+      distribution: Some(oj_testsupport::distribution().to_path_buf()),
+      ..oj_scope::Options::default()
+    };
+    let program = oj_scope::Program::build(&sources, &interner, &path, options);
+    let mut checker = oj_sema::Checker::new(&program);
+    checker.check();
+    if forget {
+      checker.remember_expressions(false);
+    }
+    let lowered = oj_ir::lower(&mut checker);
+    assert!(
+      lowered
+        .diagnostics
+        .iter()
+        .all(|diagnostic| !diagnostic.is_error()),
+      "{:?}",
+      lowered.diagnostics
+    );
+    oj_ir::print_ir(&lowered.program, &interner, None)
+  };
+  assert_eq!(listing(false), listing(true));
+}

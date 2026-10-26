@@ -7,7 +7,7 @@ use oj_syntax::ast::{
 };
 use oj_types::{ArrayKind, FloatKind, TypeId, TypeKind};
 
-use crate::checker::{Checker, Expr};
+use crate::checker::{Checker, Expr, ExpressionKey};
 use crate::constants::{Const, RunBytes, Value};
 
 impl Checker<'_> {
@@ -16,13 +16,65 @@ impl Checker<'_> {
   /// expansion, a polymorph instantiation — comes back as [`Expr::UNKNOWN`]
   /// rather than as an error.
   pub(crate) fn expression_type(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
+    let key = self.memo_key(scope, source, node);
+    if let Some(key) = key
+      && let Some((_, memo)) = &self.expression_memo
+      && let Some(found) = memo.get(&key)
+    {
+      return found.clone();
+    }
     if !self.enter() {
       self.too_deep(Some((source, node)));
       return Expr::UNKNOWN;
     }
     let result = self.expression_type_inner(scope, source, node);
     self.leave();
+    if let Some(key) = key
+      && !result.is_unknown()
+      && let Some((_, memo)) = &mut self.expression_memo
+    {
+      memo.insert(key, result.clone());
+    }
     result
+  }
+
+  /// The key an expression's answer is remembered under, when answers are
+  /// being remembered at all. Under a `#if` nobody could decide the same node
+  /// can mean something else next time; and a tree that has grown since the memo was filled may resolve a name
+  /// differently, so it starts over.
+  fn memo_key(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Option<ExpressionKey> {
+    if self.expression_memo.is_none() || self.undecided_static_ifs > 0 {
+      return None;
+    }
+    let count = self.program().tree().declaration_count();
+    if let Some((seen, memo)) = &mut self.expression_memo
+      && *seen != count
+    {
+      *seen = count;
+      memo.clear();
+    }
+    // A name is looked up from where it was written, whatever scope the
+    // question came with, so two walks that reach it from different blocks
+    // are asking the same thing.
+    let scope = match self.ast(source).map(|ast| ast.data(node)) {
+      Some(NodeData::Ident(_)) => self.scope_at(source, node, scope),
+      _ => scope,
+    };
+    Some((scope, source, node, self.current_instance, self.call_site))
+  }
+
+  /// Turns on remembering what every expression was typed as, for a back end
+  /// that asks the questions typechecking already answered (`docs/spec.md`
+  /// §7.1); off again forgets them. [`Checker::check`] turns it on once
+  /// every declaration has a type.
+  pub fn remember_expressions(&mut self, on: bool) {
+    self.expression_memo = match on {
+      true => Some((
+        self.program().tree().declaration_count(),
+        Default::default(),
+      )),
+      false => None,
+    };
   }
 
   fn expression_type_inner(&mut self, scope: ScopeId, source: SourceId, node: NodeId) -> Expr {
