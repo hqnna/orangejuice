@@ -7199,3 +7199,24 @@ fn a_backticked_return_returns_the_callers_defaults() {
     "false 7 true 1\n",
   );
 }
+
+#[test]
+fn two_specializations_of_a_struct_procedure_are_two_compile_time_symbols() {
+  // Every `#run` of a compilation shares one JIT dylib, so `Table(int, int)`'s
+  // `compare_function` and `Table(string, int)`'s need names of their own
+  // there too (**L§7.8**).
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     both :: () -> int {\n\
+       a: Table(int, int);\n\
+       b: Table(string, int);\n\
+       table_add(*a, 1, 10);\n\
+       table_add(*b, \"x\", 20);\n\
+       return table_find_pointer(*a, 1).* + table_find_pointer(*b, \"x\").*;\n\
+     }\n\
+     SUM :: #run both();\n\
+     main :: () { print(\"%\\n\", SUM); }\n",
+    "30\n",
+  );
+}

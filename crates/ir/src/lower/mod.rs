@@ -981,7 +981,16 @@ impl<'c, 'p> Lowering<'c, 'p> {
     let symbol = match symbol {
       Some(symbol) => symbol,
       None if decl.is_some() && self.entry_decl == decl => self.unique_symbol(PROGRAM_MAIN_SYMBOL),
-      None => self.symbol_for(&name, decl, instance),
+      // A procedure written inside a polymorphic body is one per
+      // specialization of that body, so the specialization is part of its
+      // name too (**L§7.8**).
+      None => {
+        let specialization = match key {
+          ProcKey::Decl(specialization, _) => specialization,
+          _ => None,
+        };
+        self.symbol_for(&name, decl, instance.or(specialization))
+      }
     };
     let (parameters, returns) = match &signature {
       Some(signature) => (signature.arguments.clone(), signature.returns.clone()),
