@@ -7,7 +7,6 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-memmap2.workspace = true
 oj-diag.workspace = true
 
 [dev-dependencies]
