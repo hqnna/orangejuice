@@ -32,6 +32,7 @@ pub fn parse(input: &[u8], source: SourceId, interner: &Interner) -> Parsed {
     diagnostics: lexed.diagnostics,
     allow_switch: false,
     parameter_depth: 0,
+    type_of_declaration: false,
   };
   let root = parser.parse_file();
   Parsed {
@@ -55,6 +56,10 @@ struct Parser<'a> {
   /// Nesting depth of parameter lists: a procedure type written inside one
   /// ends its return list at the comma that separates parameters.
   parameter_depth: usize,
+  /// Set while parsing the type a declaration was written with: a note after
+  /// the body of a `struct`, `union` or `enum` written there is the
+  /// declaration's, not the type's (**L§2.7**).
+  type_of_declaration: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -362,6 +367,14 @@ impl Parser<'_> {
       NodeData::Struct(structure) => structure.notes.push(note),
       NodeData::Enum(enumeration) => enumeration.notes.push(note),
       NodeData::ProcedureHeader(header) => header.notes.push(note),
+      // `using inner: Inner; @note` notes the member the `using` declares
+      // (**L§2.7**): toml-jai marks a `using` union `@serialize:default`.
+      NodeData::Using(using) => {
+        let declared = using.expression;
+        if matches!(self.ast.data(declared), NodeData::Declaration(_)) {
+          self.add_note(declared, note);
+        }
+      }
       _ => {}
     }
   }
@@ -1021,7 +1034,10 @@ impl Parser<'_> {
     } else if self.eat(TokenKind::EQUALS) {
       has_value = true;
     } else {
-      type_inst = Some(self.parse_type()?);
+      self.type_of_declaration = true;
+      let parsed_type = self.parse_type();
+      self.type_of_declaration = false;
+      type_inst = Some(parsed_type?);
 
       // Directives written after a member's type: `x: u8 #align 64;` and
       // `v: s32 #elsewhere libc "environ";` (**L§4.8**).
@@ -2985,6 +3001,8 @@ impl Parser<'_> {
   fn parse_struct(&mut self) -> Option<NodeId> {
     let start = self.span().start;
     let is_union = self.at(TokenKind::KEYWORD_UNION);
+    // What is declared inside the body declares for itself.
+    let owned_by_declaration = std::mem::take(&mut self.type_of_declaration);
     self.bump();
 
     let mut structure = StructNode {
@@ -3120,7 +3138,9 @@ impl Parser<'_> {
     }
 
     let node = self.push(self.span_from(start), NodeData::Struct(Box::new(structure)));
-    self.attach_trailing_notes(node);
+    if !owned_by_declaration {
+      self.attach_trailing_notes(node);
+    }
     Some(node)
   }
 
@@ -3210,6 +3230,7 @@ impl Parser<'_> {
   fn parse_enum(&mut self) -> Option<NodeId> {
     let start = self.span().start;
     let is_flags = self.at(TokenKind::KEYWORD_ENUM_FLAGS);
+    let owned_by_declaration = std::mem::take(&mut self.type_of_declaration);
     self.bump();
 
     let mut enumeration = EnumNode {
@@ -3246,7 +3267,9 @@ impl Parser<'_> {
     }
 
     let node = self.push(self.span_from(start), NodeData::Enum(Box::new(enumeration)));
-    self.attach_trailing_notes(node);
+    if !owned_by_declaration {
+      self.attach_trailing_notes(node);
+    }
     Some(node)
   }
 
@@ -4447,6 +4470,22 @@ mod tests {
       "{source} did not round-trip through {printed}"
     );
     printed
+  }
+
+  #[test]
+  fn a_note_after_a_using_member_is_the_members() {
+    // toml-jai writes `using scared: union … { … } @serialize:default` and
+    // reads the note off the member (**L§2.7**).
+    let source =
+      "S :: struct {\n  using inner: struct { x: s64; } @keep\n  using other: T; @also\n}\n";
+    let (parsed, _) = parsed(source);
+    let noted = (0..parsed.ast.len())
+      .filter(|index| {
+        matches!(parsed.ast.data(NodeId(*index as u32)), NodeData::Declaration(declaration) if !declaration.notes.is_empty())
+      })
+      .count();
+    assert_eq!(noted, 2);
+    printed(source);
   }
 
   fn errors(source: &str) -> Vec<String> {

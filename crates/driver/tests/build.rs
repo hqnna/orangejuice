@@ -7415,3 +7415,21 @@ fn a_variant_of_a_number_formats_as_the_number() {
     "4.304672e+05 101010\n",
   );
 }
+
+#[test]
+fn a_note_after_a_members_inline_type_is_the_members() {
+  // toml-jai marks `using scared: union mytag: … { … } @serialize:default`
+  // and reads the note off `Type_Info_Struct_Member.notes` (**L§2.7**).
+  assert_output(
+    "#import \"Basic\";\n\
+     Guy :: struct {\n\
+       using scared: union mytag: enum { A; B; } = .B {\n\
+         .A,, a: s64;\n\
+         .B,, b: string;\n\
+       } @serialize:default\n\
+       inner: struct { x: s64; } @plain\n\
+     }\n\
+     main :: () { for type_info(Guy).members if it.notes print(\"% %\\n\", it.name, it.notes); }\n",
+    "scared [\"serialize:default\"]\ninner [\"plain\"]\n",
+  );
+}
