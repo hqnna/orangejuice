@@ -6878,3 +6878,19 @@ fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
     "42 7 3 7\n",
   );
 }
+
+#[test]
+fn the_compiler_module_names_completion_the_way_c_does() {
+  // `Message_Complete.error_code` is NONE / COMPILATION_FAILED /
+  // COMPILER_SHUTDOWN and `compiler_custom_link_command_is_complete` takes the
+  // workspace alone (**C§3.2**, **C§3.3**), which is what Focus's build
+  // script is written against.
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Compiler\";\n\
+     main :: () {\n\
+       print(\"% % %\\n\", cast(int) Error_Code.COMPILATION_FAILED, cast(int) Error_Code.COMPILER_SHUTDOWN, type_of(compiler_custom_link_command_is_complete));\n\
+     }\n",
+    "1 2 procedure (s64)\n",
+  );
+}

@@ -100,12 +100,11 @@ Message_Phase :: struct {
     user_libraries:                  [] string;
 }
 
+// What a workspace ended with (**C§3.2**).
 Error_Code :: enum u8 {
-    NONE                  :: 0;
-    COMPILE_TIME_ERRORS   :: 1;
-    ARGUMENT_ERRORS       :: 2;
-    SOURCE_FILE_NOT_FOUND :: 3;
-    UNDEFINED             :: 4;
+    NONE               :: 0;
+    COMPILATION_FAILED :: 1;
+    COMPILER_SHUTDOWN  :: 2;
 }
 
 Message_Complete :: struct {
@@ -1380,7 +1379,7 @@ provide_import :: (w: Workspace, message: *Message_Failed_Import, type: Provided
 developer_debug :: (x: *void) #compiler;
 
 compiler_add_library_search_directory :: (path: string) #compiler;
-compiler_custom_link_command_is_complete :: (w: Workspace, success: bool) #compiler;
+compiler_custom_link_command_is_complete :: (w: Workspace) #compiler;
 
 add_global_data  :: (data: [] u8, segment: Data_Segment_Index, user_segment: *Data_Segment = null, w: Workspace = -1) -> [] u8 #compiler;
 add_data_segment :: (section_name: string, characteristics := Data_Segment_Characteristics.READ | .WRITE, alignment: s32 = 16, w: Workspace = -1) -> (segment: *Data_Segment, actual_segment_will_be_created: bool) #compiler;
