@@ -7309,3 +7309,20 @@ fn an_any_literal_fills_the_pair_an_any_is() {
     "true 5 5\n",
   );
 }
+
+#[test]
+fn memcmp_answers_with_the_sign_of_the_difference() {
+  // Preload's `memcmp` is an `s16`, and glibc's returns an `int` it may build
+  // by subtracting bytes packed into a word, whose low sixteen bits can all be
+  // zero when the bytes differ. toml-jai's lexer took `"D"` for three quotes
+  // that way (**L§17**).
+  assert_output(
+    "#import \"Basic\";\n\
+     main :: () {\n\
+       a := \"\\\"D\\\"\";\n\
+       b := \"\\\"\\\"\\\"\";\n\
+       print(\"% % % %\\n\", a == b, memcmp(a.data, b.data, 3), memcmp(b.data, a.data, 3), memcmp(a.data, a.data, 3));\n\
+     }\n",
+    "false 1 -1 0\n",
+  );
+}

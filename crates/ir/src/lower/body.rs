@@ -49,6 +49,10 @@ impl Lowering<'_, '_> {
   pub(super) fn lower_procedure(&mut self, id: ProcId, key: ProcKey) {
     self.start_procedure();
     self.current_procedure = Some(id);
+    if self.memcmp_wrapper == Some(id) {
+      self.lower_memcmp(id);
+      return;
+    }
     // An instantiated body is walked with its own constants bound, so that the
     // questions the lowering asks get the specialization's answers, not the
     // header's (**L§7.8**).
@@ -2519,6 +2523,60 @@ impl Lowering<'_, '_> {
     let address = self.value(pointer);
     self.default_initialize(address, type_id);
     self.terminate(Terminator::Return(Vec::new()));
+    let procedure = &mut self.procedures[id.0 as usize];
+    procedure.locals = std::mem::take(&mut self.locals);
+    procedure.blocks = std::mem::take(&mut self.blocks);
+    procedure.value_types = std::mem::take(&mut self.value_types);
+    procedure.entry = BlockId(0);
+  }
+
+  /// Preload's `memcmp` returns an `s16`, and C's returns an `int` whose low
+  /// sixteen bits may all be zero when the bytes differ: glibc compares two or
+  /// three bytes by subtracting them packed into a word, so `"D"` against
+  /// three quotes differs by `0x110000`. The intrinsic answers with the sign of C's
+  /// result instead (**L§17**).
+  fn lower_memcmp(&mut self, id: ProcId) {
+    let abi = self.procedures[id.0 as usize].abi.clone();
+    let mut arguments = Vec::new();
+    for parameter in &abi.parameters {
+      let value = self.value(parameter.type_id);
+      if parameter.kind == ParameterKind::Value {
+        arguments.push(value);
+      }
+    }
+    let c_memcmp = self.c_memcmp_id();
+    let difference = self.value(TypeId::S32);
+    self.emit(Inst::Call {
+      dest: Some(difference),
+      callee: Callee::Direct(c_memcmp),
+      signature: self.procedures[c_memcmp.0 as usize].type_id,
+      arguments,
+    });
+    let zero = self.constant(Constant::Int(0), TypeId::S32);
+    let zero = self.scalar(zero);
+    for (operator, answer) in [(BinaryOp::Less, -1), (BinaryOp::Greater, 1)] {
+      let condition = self.value(TypeId::BOOL);
+      self.emit(Inst::Binary {
+        dest: condition,
+        operator,
+        left: difference,
+        right: zero,
+      });
+      let (yes, no) = (self.new_block(), self.new_block());
+      self.terminate(Terminator::Branch {
+        condition,
+        then_block: yes,
+        else_block: no,
+      });
+      self.current = yes;
+      let value = self.constant(Constant::Int(answer), TypeId::S16);
+      let value = self.scalar(value);
+      self.terminate(Terminator::Return(vec![value]));
+      self.current = no;
+    }
+    let value = self.constant(Constant::Int(0), TypeId::S16);
+    let value = self.scalar(value);
+    self.terminate(Terminator::Return(vec![value]));
     let procedure = &mut self.procedures[id.0 as usize];
     procedure.locals = std::mem::take(&mut self.locals);
     procedure.blocks = std::mem::take(&mut self.blocks);

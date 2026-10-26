@@ -311,6 +311,10 @@ struct Lowering<'c, 'p> {
   /// generated initializer writes into it.
   trace_infos: Vec<trace::TraceInfo>,
   trace_init: Option<ProcId>,
+  /// Preload's `memcmp`, given a body that narrows C's answer to its sign,
+  /// and the C procedure that body calls.
+  memcmp_wrapper: Option<ProcId>,
+  c_memcmp: Option<ProcId>,
   /// The generated procedure every node is linked in by, reserved the first
   /// time a procedure keeps one.
   trace_push: Option<ProcId>,
@@ -376,6 +380,8 @@ impl<'c, 'p> Lowering<'c, 'p> {
       trace_types: None,
       trace_infos: Vec::new(),
       trace_init: None,
+      memcmp_wrapper: None,
+      c_memcmp: None,
       trace_push: None,
       trace_frame: None,
       current_loc: None,
@@ -843,6 +849,38 @@ impl<'c, 'p> Lowering<'c, 'p> {
     self.declare_procedure(key, Some(decl), type_id, None)
   }
 
+  /// C's own `memcmp`, which returns an `int`.
+  fn c_memcmp_id(&mut self) -> ProcId {
+    if let Some(id) = self.c_memcmp {
+      return id;
+    }
+    let id = ProcId(self.procedures.len() as u32);
+    self.c_memcmp = Some(id);
+    let arguments = vec![TypeId::VOID_POINTER, TypeId::VOID_POINTER, TypeId::S64];
+    let mut signature = oj_types::ProcedureType::new(arguments.clone(), vec![TypeId::S32]);
+    signature.flags =
+      oj_types::ProcedureFlags::IS_C_CALL | oj_types::ProcedureFlags::HAS_NO_CONTEXT;
+    let type_id = self.checker.types_table_mut().procedure(signature);
+    let flags = ProcedureFlags::FOREIGN | ProcedureFlags::C_CALL | ProcedureFlags::NO_CONTEXT;
+    let abi = self.abi_of(type_id, flags);
+    self.procedures.push(Procedure {
+      symbol: String::from("memcmp"),
+      name: String::from("memcmp"),
+      type_id,
+      parameters: arguments,
+      returns: vec![TypeId::S32],
+      flags,
+      library: None,
+      abi,
+      locals: Vec::new(),
+      blocks: Vec::new(),
+      value_types: Vec::new(),
+      entry: BlockId(0),
+      location: None,
+    });
+    id
+  }
+
   /// The procedure `initializer_of(T)` names, written out once per type
   /// (**L§17**).
   fn initializer_id(&mut self, type_id: TypeId) -> ProcId {
@@ -969,6 +1007,17 @@ impl<'c, 'p> Lowering<'c, 'p> {
         symbol = Some(String::from_utf8_lossy(foreign).into_owned());
       } else if flags.contains(ProcedureFlags::FOREIGN) && symbol.is_none() {
         symbol = Some(name.clone());
+      }
+      // Preload's `memcmp` is the one intrinsic whose answer C gives in a
+      // wider type than it declares, so it gets a body that narrows it.
+      if name == "memcmp"
+        && body.block.is_none()
+        && body.library.is_none()
+        && body.foreign_name.is_none()
+      {
+        flags = ProcedureFlags::COMPILER_GENERATED | ProcedureFlags::NO_CONTEXT;
+        symbol = Some(self.symbol_for("__oj_memcmp", decl, None));
+        self.memcmp_wrapper = Some(id);
       }
       library = body.library.map(|name| self.text(name));
       if let (Some(library), Some(decl)) = (&library, decl) {
