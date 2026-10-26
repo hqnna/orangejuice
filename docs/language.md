@@ -377,7 +377,7 @@ Rules:
 
 ### 4.6 The discard identifier `_`
 
-`_` is always declared. It may appear as a target in declarations and assignments (`_, name := path_decomp(s);`, `a, _, _, d = f();`) and as the name of a declaration. Evaluating `_` as an rvalue is an error. `__` (two underscores) is an ordinary identifier.
+`_` is always declared. It may appear as a target in declarations and assignments (`_, name := path_decomp(s);`, `a, _, _, d = f();`) and as the name of a declaration. A declaration of `_` declares nothing — every `_` still names the discard identifier, so `_, a := f(); _, b := g();` is two discards rather than two `_`s, and `_, b = f();` drops the first value. Evaluating `_` as an rvalue is an error. `__` (two underscores) is an ordinary identifier.
 
 ### 4.7 Global variables
 

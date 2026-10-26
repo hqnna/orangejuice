@@ -6909,6 +6909,26 @@ fn a_poked_name_fills_a_placeholder_and_joins_an_overload_set() {
 }
 
 #[test]
+fn the_discard_identifier_receives_and_drops_a_value() {
+  // `_` may stand in declarations and in assignments (**L§4.6**): two
+  // declarations of it are not an overload set, and assigning to it drops
+  // the value.
+  assert_output(
+    "#import \"Basic\";\n\
+     f :: () -> int, int { return 1, 2; }\n\
+     main :: () {\n\
+       _, a := f();\n\
+       _, b := f();\n\
+       c: int;\n\
+       _, c = f();\n\
+       a, _ = f();\n\
+       print(\"% % %\\n\", a, b, c);\n\
+     }\n",
+    "1 2 2\n",
+  );
+}
+
+#[test]
 fn one_code_inserted_into_several_scopes_is_typed_in_each() {
   // `#insert,scope() code` resolves the code's names where it is inserted,
   // so the same snippet under four different `T`s is four programs

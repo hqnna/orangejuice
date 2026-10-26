@@ -737,6 +737,11 @@ impl Lowering<'_, '_> {
         oj_syntax::ast::CommaModifier::None => is_declaration,
       };
       if !declares {
+        // `a, _ = f();` drops what `_` would have received (**L§4.6**).
+        if self.is_discard(source, *name) {
+          places.push(None);
+          continue;
+        }
         let scope = self.checker.scope_for(source, *name, self.body_scope);
         places.push(
           self
@@ -846,6 +851,13 @@ impl Lowering<'_, '_> {
       if let Some(value) = computed[index] {
         self.store(address, value);
       }
+    }
+  }
+
+  fn is_discard(&self, source: SourceId, node: NodeId) -> bool {
+    match self.checker.tree_of(source).map(|ast| ast.data(node)) {
+      Some(NodeData::Ident(ident)) => self.checker.interner().resolve(ident.name) == b"_",
+      _ => false,
     }
   }
 

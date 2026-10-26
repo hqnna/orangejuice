@@ -418,7 +418,13 @@ impl ScopeTree {
     {
       let mut scopes = self.scopes.borrow_mut();
       let scope = &mut scopes[scope.0 as usize];
-      scope.names.entry(name).or_default().push(id);
+      // A `_` a declaration names is discarded rather than declared: the
+      // name always means the discard identifier (**L§4.6**).
+      let discarded = self.discard.get() == Some(name)
+        && self.declarations.borrow()[id.0 as usize].kind != DeclKind::Builtin;
+      if !discarded {
+        scope.names.entry(name).or_default().push(id);
+      }
       scope.declarations.push(id);
     }
 
