@@ -1376,6 +1376,12 @@ impl Parser<'_> {
       self.eat(TokenKind::KEYWORD_THEN);
       Some(self.parse_branch_value()?)
     };
+    // `#ifx c then a; else b;` (The Way to Jai 26.5): a `;` between the
+    // branches of a static one. A plain `ifx` keeps the `;`, since an `if`
+    // statement around it may be what the `else` belongs to.
+    if is_static && self.at(TokenKind::SEMICOLON) && self.kind_at(1) == TokenKind::KEYWORD_ELSE {
+      self.bump();
+    }
     let else_block = if self.eat(TokenKind::KEYWORD_ELSE) {
       Some(self.parse_branch_value()?)
     } else {
@@ -4386,6 +4392,14 @@ mod tests {
         .contains("#overlay (x) c: [2] f64 = ---;")
     );
     assert!(printed("S :: struct { #as using base: Base; }").contains("using #as base: Base;"));
+  }
+
+  #[test]
+  fn a_static_ifx_may_end_its_then_branch_with_a_semicolon() {
+    assert_eq!(
+      printed("f :: () { x := #ifx A then 1; else 2; }"),
+      printed("f :: () { x := #ifx A then 1 else 2; }")
+    );
   }
 
   #[test]

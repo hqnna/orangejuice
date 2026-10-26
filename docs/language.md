@@ -648,6 +648,8 @@ x := ifx renderer.sample_count == renderer.max_sample_count
 
 An `ifx` used as an expression is not followed by its own semicolon (it is part of the enclosing statement). `return ifx ...;` is fine. Branches of `void`/zero-sized type are allowed. `ifx` with an unknown-enum branch resolves against the other branch, and so does one written `null`, `xx e`, or an undesignated `.{…}`/`.[…]` — none of which names a type of its own (§5.10 downward flow). Exported as `Code_If` with `if_flags.IS_IFX`.
 
+`#ifx cond then a; else b;` — a `;` between the branches of a *static* `#ifx` — is what The Way to Jai 26.5 (written against 0.2.024) writes; orangejuice accepts it as `#ifx cond then a else b;`. A plain `ifx` does not take the `;`, since `if c  v = ifx a then 1; else w();` gives the `else` to the `if`. Not measured against a reference.
+
 ### 5.14 Compile-time query expressions
 
 | Expression | Value |
