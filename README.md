@@ -1,10 +1,17 @@
 # orangejuice
 
 A cleanroom implementation of Jonathan Blow's language Jai. Built entirely from
-the ground up in Rust and made to be compatible with Jai Beta v0.2.009. Aiming
-to be a drop-in replacement with quality of life improvements, such as system
-LLVM, LLD, and pkg-config support, with compile-time code execution using the
-LLVM ORC JIT engine.
+the ground up in Rust and updated to match the most recent Jai beta as closely
+as possible. Aiming to be a drop-in replacement with quality of life
+improvements, such as system LLVM, LLD, and pkg-config support, with
+compile-time code execution using the LLVM ORC JIT engine.
+
+Its baseline is Jai Beta v0.2.009, which is what the language and compiler
+specifications in `docs/` were measured against. Where code written for the
+newer betas needs something else, orangejuice follows what that code and its
+documentation show — The Way to Jai, Focus, Jails, toml-jai and the other
+projects its sweeps build — and marks each such behavior *provisional* until it
+can be measured against a newer compiler (`TODO.md` lists them).
 
 It is a standalone distribution, not just a compiler. The `modules` directory is
 a cleanroom implementation of Jai's standard library, minus a bunch of modules
