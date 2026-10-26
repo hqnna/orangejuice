@@ -317,6 +317,16 @@ impl Checker<'_> {
         let members = array.members.clone();
         match self.fold_array_literal(scope, source, element, &members) {
           Some(bytes) => Expr::constant(Const::new(type_id, Value::Bytes(bytes))),
+          // A `Type.[…]` has no bytes the front end can lay down, since a
+          // `Type` is an address only the back end has; its elements are still
+          // constants, which is what lets one be a polymorphic struct's
+          // argument (**L§5.11**, **L§8.5**).
+          None if self.types().underlying(element) == TypeId::TYPE => {
+            match self.constant_elements(scope, source, element, &members) {
+              Some(elements) => Expr::constant(Const::new(type_id, Value::Array(elements))),
+              None => Expr::value(type_id),
+            }
+          }
           None => Expr::value(type_id),
         }
       }
@@ -450,6 +460,23 @@ impl Checker<'_> {
       }
     }
     Some(bytes.into_boxed_slice())
+  }
+
+  /// Every member of an array literal as a constant of the element type, or
+  /// `None` as soon as one is not.
+  fn constant_elements(
+    &mut self,
+    scope: ScopeId,
+    source: SourceId,
+    element: TypeId,
+    members: &[NodeId],
+  ) -> Option<Box<[Const]>> {
+    let mut elements = Vec::with_capacity(members.len());
+    for member in members {
+      let value = self.expression_type(scope, source, *member).constant?;
+      elements.push(Const::new(element, value.value));
+    }
+    Some(elements.into_boxed_slice())
   }
 
   /// The storage of an array literal all of whose members fold. `None` as soon

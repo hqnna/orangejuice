@@ -6780,3 +6780,18 @@ fn a_bake_of_a_polymorphic_struct_is_the_family_with_arguments_given() {
     "5 2 5 1 true\n",
   );
 }
+
+#[test]
+fn an_array_of_types_is_a_constant_a_struct_can_take() {
+  assert_output(
+    "#import \"Basic\";\n\
+     Holder :: struct (types: [] Type) { n: int; }\n\
+     TYPES :: Type.[int, float];\n\
+     main :: () {\n\
+       h: Holder(TYPES);\n\
+       local := Type.[u8, string];\n\
+       print(\"% % %\\n\", h.types, local, TYPES[1]);\n\
+     }\n",
+    "[s64, float32] [u8, string] float32\n",
+  );
+}
