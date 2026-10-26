@@ -6795,3 +6795,16 @@ fn an_array_of_types_is_a_constant_a_struct_can_take() {
     "[s64, float32] [u8, string] float32\n",
   );
 }
+
+#[test]
+fn new_of_an_over_aligned_struct_is_aligned() {
+  assert_output(
+    "#import \"Basic\";\n\
+     Object :: struct { member: int #align 64; }\n\
+     main :: () {\n\
+       object := New(Object);\n\
+       print(\"%\\n\", cast(int) object % 64);\n\
+     }\n",
+    "0\n",
+  );
+}

@@ -33,13 +33,29 @@ malloc  :: POSIX.malloc;
 realloc :: POSIX.realloc;
 free    :: POSIX.free;
 
+#if OS == .MACOS {
+    System :: #import "Darwin";
+} else {
+    System :: #import "Linux";
+}
+
+// An allocation whose size is a whole number of cache lines starts on one,
+// the way the reference's size-classed heap places it — which is what `New`
+// of a struct with an `#align 64` member counts on. `malloc` promises only 16.
+CACHE_LINE :: 64;
+
+allocate :: (size: s64) -> *void {
+    if size % CACHE_LINE == 0  return System.aligned_alloc(CACHE_LINE, cast(u64) size);
+    return malloc(cast(u64) size);
+}
+
 // @Volatile: `Runtime_Support` names this as the context's starting allocator,
 // so the signature is the one **L§10.4** fixes.
 allocator_proc :: (mode: Allocator_Mode, requested_size: s64, old_size: s64, old_memory: *void, allocator_data: *void) -> *void {
     if #complete mode == {
         case .ALLOCATE;
             if requested_size <= 0  return null;
-            memory := malloc(cast(u64) requested_size);
+            memory := allocate(requested_size);
             #if TRACK_ALLOCATIONS  if memory  note_allocation(requested_size);
             return memory;
 
