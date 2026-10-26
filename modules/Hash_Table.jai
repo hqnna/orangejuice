@@ -26,8 +26,6 @@ Table :: struct (Key_Type: Type, Value_Type: Type,
                  LOAD_FACTOR_PERCENT: u32 = 70,
                  REFILL_REMOVED := true
                 ) {
-    SIZE_MIN :: 32;
-
     // Valid items.
     count: int;
 
@@ -45,6 +43,11 @@ Table :: struct (Key_Type: Type, Value_Type: Type,
     }
 
     entries: [] Entry;
+
+    // Declared after the data so that the members a program reads by index
+    // through `Type_Info_Struct` sit where it expects: toml-jai walks a table
+    // as `members[5]`, `entries`, of `Entry`'s `hash, key, value`.
+    SIZE_MIN :: 32;
 
     #if given_hash_function {
         hash_function :: given_hash_function;

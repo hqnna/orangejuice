@@ -260,6 +260,15 @@ impl TypeTable {
     // here; the rest belong to a metaprogram's view of the program.
     let status = u32::from(!info.complete);
     self.write_field_u32(checker, record, at, "status_flags", status);
+    // A baked struct points at the family it was baked from, which is what
+    // tells two specializations of one family apart from everything else:
+    // toml-jai asks `polymorph_source_struct == type_info(Table(u8, u8))
+    // .polymorph_source_struct` (**L§17**).
+    if let Some(family) = info.polymorph_source {
+      let family = checker.types().struct_type(family);
+      let target = self.offset_of(checker, family);
+      self.write_field_pointer(checker, record, at, "polymorph_source_struct", target);
+    }
     let notes = checker.struct_notes(definition);
     if !notes.is_empty() {
       let notes = self.string_array(&notes);

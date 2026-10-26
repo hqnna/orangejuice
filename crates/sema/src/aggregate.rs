@@ -299,8 +299,23 @@ impl Checker<'_> {
         }
       }
       NodeData::If(payload) => {
-        let branches = [payload.then_block, payload.else_block];
-        for branch in branches.into_iter().flatten() {
+        let payload = payload.clone();
+        // The scope tree keeps both branches of a `#if` that reads a baked
+        // struct's parameters, since only an instantiation can decide it;
+        // under one, only the branch it takes has members — `Table` declares
+        // `hash_function` in each branch of `#if given_hash_function`
+        // (**L§6.10**, **L§8.5**).
+        let decided = match self.current_instance {
+          Some(_) => self.static_branch(state.scope, state.source, &payload),
+          None => None,
+        };
+        let branches = decided.unwrap_or_else(|| {
+          [payload.then_block, payload.else_block]
+            .into_iter()
+            .flatten()
+            .collect()
+        });
+        for branch in branches {
           self.struct_statements(state, branch);
         }
       }

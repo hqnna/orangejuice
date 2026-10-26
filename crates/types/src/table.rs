@@ -55,6 +55,8 @@ pub struct Types {
   kinds: Vec<TypeKind>,
   interned: HashMap<TypeKind, TypeId>,
   structs: Vec<StructInfo>,
+  /// The type each struct definition is, by definition.
+  struct_types: Vec<TypeId>,
   enums: Vec<EnumInfo>,
   variants: Vec<VariantInfo>,
   polymorphs: Vec<PolymorphInfo>,
@@ -73,6 +75,7 @@ impl Types {
       kinds: Vec::new(),
       interned: HashMap::default(),
       structs: Vec::new(),
+      struct_types: Vec::new(),
       enums: Vec::new(),
       variants: Vec::new(),
       polymorphs: Vec::new(),
@@ -186,7 +189,15 @@ impl Types {
   pub fn new_struct(&mut self, info: StructInfo) -> (StructId, TypeId) {
     let id = StructId(self.structs.len() as u32);
     self.structs.push(info);
-    (id, self.push(TypeKind::Struct(id)))
+    let type_id = self.push(TypeKind::Struct(id));
+    self.struct_types.push(type_id);
+    (id, type_id)
+  }
+
+  /// The type a struct definition is: what `polymorph_source_struct` points a
+  /// baked struct's record at (**L§17**).
+  pub fn struct_type(&self, id: StructId) -> TypeId {
+    self.struct_types[id.0 as usize]
   }
 
   pub fn new_enum(&mut self, info: EnumInfo) -> (EnumId, TypeId) {

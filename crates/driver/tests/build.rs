@@ -7468,3 +7468,23 @@ fn a_macro_argument_is_read_where_it_was_written() {
   );
 }
 
+#[test]
+fn a_baked_struct_lists_the_branch_its_parameters_chose() {
+  // `Table` declares `hash_function` in each branch of
+  // `#if given_hash_function`; a specialization lists the one it took, and
+  // its record points back at the family (**L§6.10**, **L§8.5**, **L§17**).
+  assert_output(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     S :: struct { x: int; }\n\
+     main :: () {\n\
+       info := type_info(Table(string, u8));\n\
+       hashes := 0;\n\
+       for info.members if it.name == \"hash_function\" hashes += 1;\n\
+       other := type_info(Table(u8, u8));\n\
+       print(\"% % % % %\\n\", hashes, info.members[5].name, info.polymorph_source_struct == other.polymorph_source_struct, info.polymorph_source_struct.name, type_info(S).polymorph_source_struct == null);\n\
+     }\n",
+    "1 entries true Table true\n",
+  );
+}
+
