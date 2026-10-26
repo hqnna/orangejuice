@@ -417,6 +417,13 @@ pub struct Checker<'a> {
   /// The `#modify` blocks being run right now, which is what makes one that
   /// reaches its own header stop instead of looping (**L§7.8**).
   pub(crate) modify_in_flight: HashSet<InstanceId>,
+  /// The `#modify` decisions being made right now, by what they decide. A
+  /// block whose compile-time program reaches the very specialization it is
+  /// deciding is answered as solved rather than run again inside itself.
+  pub(crate) modify_keys_in_flight: HashSet<crate::modify::ModifyKey>,
+  /// How many quick lambdas' return types are being inferred before anything
+  /// bound their parameters; a `#modify` reached from one is not run.
+  pub(crate) guessing_quick_returns: u32,
   /// The call being resolved right now, which is where a macro expands
   /// (**L§7.13**). Overload resolution reaches down through operators too, so
   /// this is a single piece of state rather than a parameter of every step.
@@ -542,6 +549,8 @@ impl<'a> Checker<'a> {
       pending_instances: Vec::new(),
       checked_instances: HashSet::default(),
       modify_in_flight: HashSet::default(),
+      modify_keys_in_flight: HashSet::default(),
+      guessing_quick_returns: 0,
       call_site: None,
       loop_expansions: HashMap::default(),
       argument_instances: HashMap::default(),

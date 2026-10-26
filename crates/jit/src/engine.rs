@@ -269,6 +269,20 @@ impl Engine {
     };
     let mut lowered = oj_ir::lower_modify(checker, &modify);
     if lowered.has_errors() {
+      // What the block reaches only through the program it compiles into — the
+      // `#Context`'s initializer and everything that pulls in — may be code
+      // whose types are still being worked out because deciding this very
+      // block is what they wait on. The program's own lowering reports those
+      // if they are real; here they only mean the block could not be run, and
+      // a candidate whose block could not run is left as it was solved.
+      let within = |diagnostic: &Diagnostic| {
+        diagnostic.source == request.source
+          && diagnostic.span.start >= request.span.start
+          && diagnostic.span.end <= request.span.end
+      };
+      if !lowered.diagnostics.iter().any(within) {
+        return Err(String::new());
+      }
       for diagnostic in lowered.diagnostics {
         checker.push_diagnostic(diagnostic);
       }

@@ -311,12 +311,22 @@ impl Checker<'_> {
       signature.returns.clear();
     }
     // A quick lambda's return type is the one thing in the language that is
-    // inferred from a body (**L§7.9**).
-    if payload.returns.is_empty()
-      && flags.contains(ProcedureFlags::QUICK)
-      && let Some(inferred) = self.quick_return_type(source, header, outer)
-    {
-      signature.returns.push(inferred);
+    // inferred from a body (**L§7.9**). Before an instantiation binds its
+    // parameters that is a guess made against `$T`s nobody has named, so a
+    // `#modify` the body's calls reach is not run for it (**L§7.8**): running
+    // one builds a `#Context`, which may be the very type being laid out when
+    // a struct in it declares the lambda.
+    if payload.returns.is_empty() && flags.contains(ProcedureFlags::QUICK) {
+      let guessing = signature
+        .arguments
+        .iter()
+        .any(|type_id| self.mentions_polymorph(*type_id));
+      self.guessing_quick_returns += u32::from(guessing);
+      let inferred = self.quick_return_type(source, header, outer);
+      self.guessing_quick_returns -= u32::from(guessing);
+      if let Some(inferred) = inferred {
+        signature.returns.push(inferred);
+      }
     }
 
     self.types_mut().procedure(signature)

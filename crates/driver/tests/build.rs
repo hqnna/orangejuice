@@ -7488,3 +7488,24 @@ fn a_baked_struct_lists_the_branch_its_parameters_chose() {
   );
 }
 
+#[test]
+fn a_modify_reached_while_the_context_is_laid_out_does_not_need_it() {
+  // A struct in the `#Context` declares a quick lambda over a procedure with a
+  // `#modify`. Inferring the lambda's return type before anything binds its
+  // parameter does not run the block, and a block whose program reaches code
+  // still waiting on it is left as solved rather than reported (**L§7.8**,
+  // **L§10.2**).
+  assert_output(
+    "#import \"Basic\";\n\
+     my_hash :: (x: $T) -> u32 #modify { return true; } { return cast,trunc(u32) x; }\n\
+     Tab :: struct (K: Type) { k: K; f :: x => my_hash(x); }\n\
+     lookup :: (t: *Tab, key: t.K) -> u32 { return t.f(key); }\n\
+     use_it :: () -> u32 { t: Tab(s32); return lookup(*t, 3) + lookup(*context.tabs, 4); }\n\
+     C :: struct { tab: Tab(s64); hook := use_it; }\n\
+     #add_context tabs: Tab(s64);\n\
+     #add_context c: C;\n\
+     X :: #run use_it();\n\
+     main :: () { print(\"% %\\n\", X, context.c.hook()); }\n",
+    "7 7\n",
+  );
+}

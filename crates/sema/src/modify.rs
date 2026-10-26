@@ -120,7 +120,11 @@ impl Checker<'_> {
     bindings: Vec<(DeclId, Const)>,
   ) -> Option<Vec<(DeclId, Const)>> {
     let blocks = self.modify_blocks(source, header);
-    if blocks.is_empty() || self.compile_time.is_none() || bindings.is_empty() {
+    if blocks.is_empty()
+      || self.compile_time.is_none()
+      || bindings.is_empty()
+      || self.guessing_quick_returns > 0
+    {
       return Some(bindings);
     }
 
@@ -144,9 +148,15 @@ impl Checker<'_> {
       }
       return decided;
     }
+    // The block may be reached again while its own program is being built —
+    // that program can need the specialization it is deciding.
+    if !self.modify_keys_in_flight.insert(key.clone()) {
+      return Some(bindings);
+    }
     let rejections = self.modify_rejections.len();
     let (decided, settled) =
       self.run_modify_uncached(source, header, constants, arguments, outer_scope, bindings);
+    self.modify_keys_in_flight.remove(&key);
     // A block that answered by way of the re-entrancy guard has not really
     // spoken yet, so its answer is not one to remember.
     if settled {
