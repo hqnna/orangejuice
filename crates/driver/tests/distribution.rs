@@ -191,6 +191,44 @@ fn a_default_reads_the_context_the_call_runs_with() {
 }
 
 #[test]
+fn a_reset_table_gives_its_storage_back_so_a_pool_behind_it_can_be_released() {
+  // `table_reset` frees the way `array_reset` does, which is what a language
+  // server relies on when it resets a file's declaration table and releases
+  // the pool the table was allocated from before parsing the file again.
+  // Keeping the storage there left the table writing into blocks the next
+  // parse was handed, and jails crashed on a declaration that was not there.
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     #import \"Hash_Table\";\n\
+     #import \"Pool\";\n\
+     main :: () {\n  \
+       pool: Pool;\n  \
+       set_allocators(*pool, context.default_allocator);\n  \
+       t: Table(int, *int);\n  \
+       for round: 0..2 {\n    \
+         table_reset(*t);\n    \
+         release(*pool);\n    \
+         push_allocator(.{pool_allocator_proc, *pool});\n    \
+         for 1..10 {\n      \
+           value := New(int);\n      \
+           value.* = it * 10 + round;\n      \
+           table_add(*t, it, value);\n    \
+         }\n    \
+         for 1..2000 { filler := New(int); filler.* = -1; }\n    \
+         sum := 0;\n    \
+         for t  sum += it.*;\n    \
+         print(\"% % %\\n\", t.count, sum, t.allocator.data == *pool);\n  \
+       }\n  \
+       table_reset(*t);\n  \
+       print(\"% %\\n\", t.count, t.allocated);\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(output, "10 550 true\n10 560 true\n10 570 true\n0 0\n");
+}
+
+#[test]
 fn program_print_writes_a_tree_back_out_as_source() {
   // `print_expression` is what a metaprogram shows the code it was handed
   // with (**C§5.3**): what it writes parses back to the same tree.

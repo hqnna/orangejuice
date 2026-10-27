@@ -109,17 +109,21 @@ deinit :: (table: *Table) {
     table.allocated = 0;
 }
 
-// Empties the table without giving its memory back.
-table_reset :: (using table: *Table) {
+// Empties the table and gives its storage back, the way `array_reset` does
+// for an array: the next `table_add` allocates afresh, from the allocator the
+// table remembers. That is what makes it safe to reset a table whose storage
+// came from a pool and then release the pool, which is how a parser that
+// rebuilds its tree on every edit uses one.
+table_reset :: (table: *Table) {
+    deinit(table);
+}
+
+// Empties the table but keeps its storage for whatever is added next, the way
+// `array_reset_keeping_memory` does for an array.
+table_reset_keeping_memory :: (using table: *Table) {
     for * entries  it.hash = NEVER_OCCUPIED_HASH;
     count = 0;
     slots_filled = 0;
-}
-
-// The same as `table_reset`, under the name that says what it keeps: the
-// entries go, the storage stays for whatever is added next.
-table_reset_keeping_memory :: (table: *Table) {
-    table_reset(table);
 }
 
 // Storage for at least `slots_to_allocate` slots — a power of two, and never

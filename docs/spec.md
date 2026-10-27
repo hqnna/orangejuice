@@ -938,8 +938,12 @@ beside it.
   table_find(*t, key)`. 0.2.009 had them the other way round; of the 101 call
   sites in the sweep, 97 destructure the newer order. `table_resize(table,
   slots)` grows (or initializes) a table keeping what is in it, and
-  `table_reset_keeping_memory` is `table_reset` under the name that says what
-  it keeps. `resize` stays, since `expand` and `init` are written in it.
+  `table_reset_keeping_memory` empties a table and keeps its storage, the way
+  `array_reset_keeping_memory` does, which is why `table_reset` — like
+  `array_reset` — gives the storage back: jails resets a file's declaration
+  table and then releases the `Pool` it was allocated from, and a reset that
+  kept the storage left the table writing into blocks the next parse was
+  handed. `resize` stays, since `expand` and `init` are written in it.
 - **Basic's program parameters** (`MEMORY_DEBUGGER`, `ENABLE_ASSERT`), the
   memory debugger behind the first, `string_to_float64_new` and
   `get_stack_trace_strings` (**L§10.4**, **L§11.3**).
