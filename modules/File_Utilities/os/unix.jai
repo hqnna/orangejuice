@@ -71,7 +71,10 @@ visit_files :: (dir_name: string, recursive: bool, user_data: $T, proc: (info: *
                 info.is_directory = false;
             }
 
-            info.short_name = name;
+            // `name` is the `dirent`'s, which the next `readdir` reuses and
+            // `closedir` frees; the tail of `full_name` lives in temporary
+            // storage, as long as a visitor that keeps it can expect.
+            info.short_name = slice(full_name, full_name.count - name.count, name.count);
             info.full_name  = full_name;
             info.descend_into_directory = false;
             info.is_symlink = entry.d_type == .LNK;

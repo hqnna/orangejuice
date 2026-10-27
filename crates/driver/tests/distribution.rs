@@ -1071,3 +1071,40 @@ fn print_appends_to_a_builder_when_that_is_what_it_was_given() {
   };
   assert_eq!(output, "<42> and more\n");
 }
+
+#[test]
+fn a_visited_name_outlives_the_walk() {
+  // jails keeps `info.short_name` for the module list it answers `#import "`
+  // with. It pointed into the `dirent` buffer `readdir` refills and
+  // `closedir` frees, so a directory bigger than one buffer's worth of
+  // entries came back with names that were someone else's, and jails crashed
+  // writing them out. It is the tail of `full_name` now, which lives as long
+  // as temporary storage does.
+  let entries = tempfile::tempdir().expect("a temporary directory");
+  for index in 0..3000 {
+    std::fs::write(entries.path().join(format!("entry_{index:05}.jai")), "")
+      .expect("the entry should be writable");
+  }
+  let program = format!(
+    "#import \"Basic\";\n\
+     #import \"File_Utilities\";\n\
+     #import \"String\";\n\
+     main :: () {{\n  \
+       Seen :: struct {{ short: [..] string; full: [..] string; }}\n  \
+       seen: Seen;\n  \
+       visit :: (info: *File_Visit_Info, seen: *Seen) {{\n    \
+         array_add(*seen.short, info.short_name);\n    \
+         array_add(*seen.full, info.full_name);\n  \
+       }}\n  \
+       visit_files(\"{}\", false, *seen, visit);\n  \
+       agree := 0;\n  \
+       for seen.short  if ends_with(seen.full[it_index], tprint(\"/%\", it)) && begins_with(it, \"entry_\")  agree += 1;\n  \
+       print(\"% %\\n\", seen.short.count, agree);\n\
+     }}\n",
+    entries.path().display()
+  );
+  let Some(output) = build_and_run(&program) else {
+    return;
+  };
+  assert_eq!(output, "3000 3000\n");
+}
