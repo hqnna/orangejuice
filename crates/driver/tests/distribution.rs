@@ -168,6 +168,29 @@ fn a_hash_table_resizes_and_resets_the_newer_way() {
 }
 
 #[test]
+fn a_default_reads_the_context_the_call_runs_with() {
+  // `free(p,, allocator = pool)` reaches `free :: (memory, allocator :=
+  // context.allocator)`: the written arguments are evaluated before the
+  // context changes, the defaults filling in the rest after (**L§5.10**).
+  // Evaluating the default in the caller's context handed a pool's pointer
+  // to the heap's `free`.
+  let Some(output) = build_and_run(
+    "#import \"Basic\";\n\
+     seen :: (written: *void, allocator := context.allocator) -> bool {\n  \
+       return written == allocator.data && allocator.data == context.allocator.data;\n\
+     }\n\
+     main :: () {\n  \
+       x: int;\n  \
+       mine := Allocator.{context.allocator.proc, *x};\n  \
+       print(\"% %\\n\", seen(*x,, allocator = mine), seen(context.allocator.data));\n\
+     }\n",
+  ) else {
+    return;
+  };
+  assert_eq!(output, "true true\n");
+}
+
+#[test]
 fn program_print_writes_a_tree_back_out_as_source() {
   // `print_expression` is what a metaprogram shows the code it was handed
   // with (**C§5.3**): what it writes parses back to the same tree.

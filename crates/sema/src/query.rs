@@ -32,6 +32,11 @@ pub struct PlannedArgument {
   /// whatever the call site happens to be inside (**L§7.4**, **L§7.8**). An
   /// argument the caller wrote belongs to the call site, and carries `None`.
   pub instance: Option<InstanceId>,
+  /// Whether the header's default stands in for an argument the caller left
+  /// out. A default is evaluated in the context the call runs with, so
+  /// `free(p,, allocator = pool)` gives `allocator := context.allocator` the
+  /// pool (**L§5.10**).
+  pub is_default: bool,
 }
 
 /// A call site with its callee decided and its arguments put in parameter
@@ -655,6 +660,7 @@ impl Checker<'_> {
         node: argument.expression,
         target,
         instance: None,
+        is_default: false,
       };
       match Some(index) == vararg_slot {
         true => extra.push(planned),
@@ -684,6 +690,7 @@ impl Checker<'_> {
             node: default,
             target: parameter.type_id,
             instance: signature.instance,
+            is_default: true,
           });
         }
       }

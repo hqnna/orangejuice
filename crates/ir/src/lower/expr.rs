@@ -2839,7 +2839,15 @@ impl Lowering<'_, '_> {
               None => {
                 let argument = *plan.arguments.get(given)?;
                 given += 1;
-                self.planned_argument(argument, parameter.type_id)?
+                let outer = self.context_value;
+                if argument.is_default
+                  && let Some(pushed) = pushed
+                {
+                  self.context_value = Some(pushed);
+                }
+                let value = self.planned_argument(argument, parameter.type_id);
+                self.context_value = outer;
+                value?
               }
             },
           };
